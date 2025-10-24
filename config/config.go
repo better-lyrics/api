@@ -28,6 +28,17 @@ type Config struct {
 		ClientSecret                       string `envconfig:"CLIENT_SECRET" default:""`
 		OauthTokenUrl                      string `envconfig:"OAUTH_TOKEN_URL" default:""`
 		OauthTokenKey                      string `envconfig:"OAUTH_TOKEN_KEY" default:""`
+		// TTML API Configuration
+		TTMLAuthType            string `envconfig:"TTML_AUTH_TYPE" default:"android"`
+		TTMLAndroidToken        string `envconfig:"TTML_ANDROID_TOKEN" default:""`
+		TTMLAndroidDSID         string `envconfig:"TTML_ANDROID_DSID" default:""`
+		TTMLAndroidUserAgent    string `envconfig:"TTML_ANDROID_USER_AGENT" default:""`
+		TTMLAndroidCookie       string `envconfig:"TTML_ANDROID_COOKIE" default:""`
+		TTMLStorefront          string `envconfig:"TTML_STOREFRONT" default:"us"`
+		TTMLWebToken            string `envconfig:"TTML_WEB_TOKEN" default:""`
+		TTMLBaseURL             string `envconfig:"TTML_BASE_URL" default:""`
+		TTMLSearchPath          string `envconfig:"TTML_SEARCH_PATH" default:""`
+		TTMLLyricsPath          string `envconfig:"TTML_LYRICS_PATH" default:""`
 	}
 
 	FeatureFlags struct {
