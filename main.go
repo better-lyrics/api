@@ -11,7 +11,6 @@ import (
 	"os"
 	"sync"
 	"time"
-  "net/url"
 
 	"golang.org/x/time/rate"
 
@@ -170,8 +169,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	// Check cache first
 	query := songName + " " + artistName
-  escapedQuery := url.QueryEscape(query)
-	cacheKey := fmt.Sprintf("ttml_lyrics:%s", escapedQuery)
+	cacheKey := fmt.Sprintf("ttml_lyrics:%s", query)
 
 	if cachedLyrics, ok := getCache(cacheKey); ok {
 		log.Info("[Cache:Lyrics] Found cached TTML lyrics")
