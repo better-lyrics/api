@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"lyrics-api-go/config"
 	"lyrics-api-go/middleware"
-	"lyrics-api-go/services"
+	"lyrics-api-go/services/ttml"
 	"lyrics-api-go/utils"
 	"net/http"
 	"os"
@@ -182,20 +182,29 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			"lyrics":        cachedData["lyrics"],
 			"isRtlLanguage": cachedData["isRtlLanguage"],
 			"language":      cachedData["language"],
+			"type":          cachedData["type"],
 		})
 		return
 	}
 
 	// Fetch from TTML API
-	lyrics, isRtlLanguage, language, err := services.FetchTTMLLyrics(songName, artistName)
+	lyrics, isRtlLanguage, language, timingType, rawTTML, err := ttml.FetchTTMLLyrics(songName, artistName)
 	if err != nil {
 		log.Errorf("Error fetching TTML lyrics: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+
+		response := map[string]interface{}{
 			"error":  err.Error(),
 			"source": "TTML",
-		})
+		}
+
+		// Include raw TTML for debugging if parsing failed
+		if rawTTML != "" {
+			response["rawTTML"] = rawTTML
+		}
+
+		json.NewEncoder(w).Encode(response)
 		return
 	}
 
@@ -216,6 +225,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		"lyrics":        lyrics,
 		"isRtlLanguage": isRtlLanguage,
 		"language":      language,
+		"type":          timingType,
 	})
 	if err != nil {
 		log.Errorf("[Cache:Lyrics] Failed to marshal cache value: %v", err)
@@ -230,10 +240,11 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		"lyrics":        lyrics,
 		"isRtlLanguage": isRtlLanguage,
 		"language":      language,
+		"type":          timingType,
 	})
 }
 
-// Old Spotify functions removed - now using services.FetchTTMLLyrics from services/ttml.go
+// Old Spotify functions removed - now using ttml.FetchTTMLLyrics from services/ttml/
 
 func getCacheDump(w http.ResponseWriter, r *http.Request) {
 	// Check if the request is authorized by checking the access token
