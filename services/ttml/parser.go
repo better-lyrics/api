@@ -52,7 +52,7 @@ func parseTTMLTime(timeStr string) (int64, error) {
 	return int64(totalSeconds * 1000), nil
 }
 
-// Parse TTML directly to Lines (handles word-level TTML from Apple Music)
+// Parse TTML directly to Lines (handles word-level TTML)
 // Returns: lines, timingType, error
 func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 	log.Debugf("[TTML Parser] Starting to parse TTML content (length: %d bytes)", len(ttmlContent))
@@ -75,7 +75,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 
 	var lines []Line
 
-	// Apple Music returns either word-level or line-level TTML
+	// TTML is either word-level or line-level
 	// Iterate through all div sections (Verse, Chorus, etc.)
 	for divIdx, div := range ttml.Body.Divs {
 		log.Debugf("[TTML Parser] Processing div %d (songPart: %s) with %d paragraphs", divIdx, div.SongPart, len(div.Paragraphs))
