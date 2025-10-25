@@ -29,14 +29,10 @@ type Line struct {
 // =============================================================================
 
 type MusicAccount struct {
-	NameID           string
-	AuthType         string
-	AndroidAuthToken string
-	AndroidDSID      string
-	AndroidUserAgent string
-	AndroidCookie    string
-	Storefront       string
-	MusicAuthToken   string
+	NameID         string
+	BearerToken    string
+	MediaUserToken string
+	Storefront     string
 }
 
 type AccountManager struct {

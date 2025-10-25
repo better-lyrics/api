@@ -27,22 +27,14 @@ func makeAPIRequest(urlStr string, retries int) (*http.Response, error) {
 		return nil, err
 	}
 
-	// Set headers based on auth type
-	if account.AuthType == "android" {
-		req.Header.Set("Authorization", "Bearer "+account.AndroidAuthToken)
-		req.Header.Set("x-dsid", account.AndroidDSID)
-		req.Header.Set("User-Agent", account.AndroidUserAgent)
-		req.Header.Set("Cookie", account.AndroidCookie)
-		// Don't set Accept-Encoding manually - let Go's http.Client handle compression automatically
-	} else {
-		// Web auth type
-		req.Header.Set("Authorization", "Bearer "+account.AndroidAuthToken)
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-		req.Header.Set("Origin", "https://music.apple.com")
-		req.Header.Set("Referer", "https://music.apple.com")
-		if account.MusicAuthToken != "" {
-			req.Header.Set("media-user-token", account.MusicAuthToken)
-		}
+	// Set headers for web auth
+	log.Debugf("BearerToken length: %d, MediaUserToken length: %d", len(account.BearerToken), len(account.MediaUserToken))
+	req.Header.Set("Authorization", "Bearer "+account.BearerToken)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Origin", "https://music.apple.com")
+	req.Header.Set("Referer", "https://music.apple.com")
+	if account.MediaUserToken != "" {
+		req.Header.Set("media-user-token", account.MediaUserToken)
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}

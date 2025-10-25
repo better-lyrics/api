@@ -44,7 +44,7 @@ type CacheDumpResponse struct {
 func init() {
 	log.SetFormatter(&log.JSONFormatter{})
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.InfoLevel) // Set to InfoLevel (change to DebugLevel for detailed logs)
+	log.SetLevel(log.DebugLevel) // Set to DebugLevel for detailed logs
 
 	err := godotenv.Load()
 	if err != nil {

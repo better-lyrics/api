@@ -10,16 +10,17 @@ var accountManager *AccountManager
 
 func initAccountManager() {
 	conf := config.Get()
+	log.Debugf("Initializing account manager - BearerToken length: %d, MediaUserToken length: %d, Storefront: %s",
+		len(conf.Configuration.TTMLBearerToken),
+		len(conf.Configuration.TTMLMediaUserToken),
+		conf.Configuration.TTMLStorefront)
+
 	accounts := []MusicAccount{
 		{
-			NameID:           "Primary",
-			AuthType:         conf.Configuration.TTMLAuthType,
-			AndroidAuthToken: conf.Configuration.TTMLAndroidToken,
-			AndroidDSID:      conf.Configuration.TTMLAndroidDSID,
-			AndroidUserAgent: conf.Configuration.TTMLAndroidUserAgent,
-			AndroidCookie:    conf.Configuration.TTMLAndroidCookie,
-			Storefront:       conf.Configuration.TTMLStorefront,
-			MusicAuthToken:   conf.Configuration.TTMLWebToken,
+			NameID:         "Primary",
+			BearerToken:    conf.Configuration.TTMLBearerToken,
+			MediaUserToken: conf.Configuration.TTMLMediaUserToken,
+			Storefront:     conf.Configuration.TTMLStorefront,
 		},
 	}
 
