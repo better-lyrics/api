@@ -24,8 +24,8 @@ import (
 var conf = config.Get()
 
 var (
-	cache         sync.Map
-	inFlightReqs  sync.Map // Tracks in-flight requests to prevent cache stampede
+	cache        sync.Map
+	inFlightReqs sync.Map
 )
 
 type CacheEntry struct {
@@ -41,14 +41,12 @@ type CacheDumpResponse struct {
 	Cache        CacheDump
 }
 
-// InFlightRequest tracks a request that is currently being processed
 type InFlightRequest struct {
 	wg     sync.WaitGroup
 	result *LyricsResult
 	err    error
 }
 
-// LyricsResult holds the result of a lyrics fetch
 type LyricsResult struct {
 	Lyrics        []ttml.Line
 	IsRtlLanguage bool
@@ -59,7 +57,7 @@ type LyricsResult struct {
 func init() {
 	log.SetFormatter(&log.JSONFormatter{})
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.InfoLevel) // Set to InfoLevel (change to DebugLevel for detailed logs)
+	log.SetLevel(log.InfoLevel)
 
 	err := godotenv.Load()
 	if err != nil {
@@ -68,10 +66,7 @@ func init() {
 }
 
 func main() {
-	// start goroutine to invalidate cache
 	go invalidateCache()
-
-	// start token expiration monitor if configured
 	go startTokenMonitor()
 
 	router := mux.NewRouter()
@@ -97,18 +92,12 @@ func main() {
 
 	limiter := middleware.NewIPRateLimiter(rate.Limit(conf.Configuration.RateLimitPerSecond), conf.Configuration.RateLimitBurstLimit)
 
-	// logging middleware
-
 	loggedRouter := middleware.LoggingMiddleware(router)
-	// chain cors middleware
 	corsHandler := c.Handler(loggedRouter)
-
-	//chain rate limiter
 	handler := limitMiddleware(corsHandler, limiter)
 
 	log.Infof("Server listening on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))
-
 }
 
 func isRTLLanguage(langCode string) bool {
@@ -138,7 +127,6 @@ func getCache(key string) (string, bool) {
 		return "", false
 	}
 	if conf.FeatureFlags.CacheCompression {
-		// Decompress the value before returning
 		decompressedValue, err := utils.DecompressString(cacheEntry.Value)
 		if err != nil {
 			log.Errorf("Error decompressing cache value: %v", err)
@@ -183,7 +171,6 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check cache first
 	query := songName + " " + artistName + " " + albumName
 	cacheKey := fmt.Sprintf("ttml_lyrics:%s", query)
 
@@ -203,16 +190,13 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if there's an in-flight request for this query
 	inFlight, loaded := inFlightReqs.LoadOrStore(cacheKey, &InFlightRequest{})
 	req := inFlight.(*InFlightRequest)
 
 	if loaded {
-		// Another request is already fetching this, wait for it
 		log.Info("[Cache:Lyrics] Waiting for in-flight request to complete")
 		req.wg.Wait()
 
-		// Use the result from the in-flight request
 		if req.err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -235,20 +219,16 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// This is the first request, fetch the data
 	req.wg.Add(1)
 	defer func() {
 		req.wg.Done()
-		// Clean up in-flight request after a short delay to allow waiting goroutines to get the result
 		time.AfterFunc(1*time.Second, func() {
 			inFlightReqs.Delete(cacheKey)
 		})
 	}()
 
-	// Fetch from TTML API
 	lyrics, isRtlLanguage, language, timingType, rawTTML, err := ttml.FetchTTMLLyrics(songName, artistName, albumName)
 
-	// Store result in in-flight request
 	req.err = err
 	if err == nil {
 		req.result = &LyricsResult{
@@ -268,7 +248,6 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			"source": "TTML",
 		}
 
-		// Include raw TTML for debugging if parsing failed
 		if rawTTML != "" {
 			response["rawTTML"] = rawTTML
 		}
@@ -288,7 +267,6 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cache the lyrics
 	log.Infof("[Cache:Lyrics] Caching TTML lyrics for: %s", query)
 	cacheValue, err := json.Marshal(map[string]interface{}{
 		"lyrics":        lyrics,
@@ -316,7 +294,6 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 func testNotifications(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Set up notifiers
 	notifiers := setupNotifiers()
 
 	if len(notifiers) == 0 {
@@ -332,7 +309,6 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get token expiration details
 	var tokenInfo string
 	var tokenDetails map[string]interface{}
 
@@ -377,7 +353,6 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Send test notification
 	subject := "🧪 Test: TTML Token Monitor"
 	message := fmt.Sprintf(
 		"🧪 TTML TOKEN MONITOR - TEST NOTIFICATION\n\n"+
@@ -441,7 +416,6 @@ func getNotifierTypeName(n notifier.Notifier) string {
 }
 
 func getCacheDump(w http.ResponseWriter, r *http.Request) {
-	// Check if the request is authorized by checking the access token
 	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -479,7 +453,6 @@ func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.
 	})
 }
 
-// goroutine to invalidate cache every 1 hour based on expiration times and delete keys
 func invalidateCache() {
 	log.Infof("[Cache:Invalidation] Starting cache invalidation goroutine")
 	for {
@@ -495,15 +468,12 @@ func invalidateCache() {
 	}
 }
 
-// startTokenMonitor starts the token expiration monitor if notifiers are configured
 func startTokenMonitor() {
-	// Check if bearer token is configured
 	if conf.Configuration.TTMLBearerToken == "" {
 		log.Warn("[Token Monitor] TTML_BEARER_TOKEN not set, token monitoring disabled")
 		return
 	}
 
-	// Set up notifiers
 	notifiers := setupNotifiers()
 
 	if len(notifiers) == 0 {
@@ -514,24 +484,20 @@ func startTokenMonitor() {
 
 	log.Infof("[Token Monitor] Starting with %d notifier(s) configured", len(notifiers))
 
-	// Create and run monitor
 	monitor := notifier.NewTokenMonitor(notifier.MonitorConfig{
 		BearerToken:      conf.Configuration.TTMLBearerToken,
-		WarningThreshold: 7,  // Start warning 7 days before expiration
-		ReminderInterval: 24, // Remind every 24 hours
+		WarningThreshold: 7,
+		ReminderInterval: 24,
 		StateFile:        "/tmp/ttml-pager.state",
 		Notifiers:        notifiers,
 	})
 
-	// Run monitor (checks every 6 hours)
 	monitor.Run(6 * time.Hour)
 }
 
-// setupNotifiers creates notifier instances based on environment variables
 func setupNotifiers() []notifier.Notifier {
 	var notifiers []notifier.Notifier
 
-	// Email notifier
 	if smtpHost := os.Getenv("NOTIFIER_SMTP_HOST"); smtpHost != "" {
 		emailNotifier := &notifier.EmailNotifier{
 			SMTPHost:     smtpHost,
@@ -545,7 +511,6 @@ func setupNotifiers() []notifier.Notifier {
 		log.Info("[Token Monitor] Email notifier enabled")
 	}
 
-	// Telegram notifier
 	if botToken := os.Getenv("NOTIFIER_TELEGRAM_BOT_TOKEN"); botToken != "" {
 		telegramNotifier := &notifier.TelegramNotifier{
 			BotToken: botToken,
@@ -555,7 +520,6 @@ func setupNotifiers() []notifier.Notifier {
 		log.Info("[Token Monitor] Telegram notifier enabled")
 	}
 
-	// Ntfy.sh notifier
 	if topic := os.Getenv("NOTIFIER_NTFY_TOPIC"); topic != "" {
 		ntfyNotifier := &notifier.NtfyNotifier{
 			Topic:  topic,
@@ -568,7 +532,6 @@ func setupNotifiers() []notifier.Notifier {
 	return notifiers
 }
 
-// getEnvOrDefault returns environment variable value or default if not set
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

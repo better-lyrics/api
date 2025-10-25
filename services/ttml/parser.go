@@ -10,10 +10,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// =============================================================================
-// TTML PARSING FUNCTIONS
-// =============================================================================
-
 // parseTTMLTime parses TTML timestamp to milliseconds
 func parseTTMLTime(timeStr string) (int64, error) {
 	// Format: "0:00:12.34" or "12.34" or "12"
@@ -63,14 +59,12 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 		return nil, "", fmt.Errorf("failed to parse TTML XML: %v", err)
 	}
 
-	// Detect timing type from the TTML root element
 	timingType := strings.ToLower(ttml.Timing)
 	if timingType == "" {
 		timingType = "line" // Default to line if not specified
 	}
 	log.Debugf("[TTML Parser] Timing type: %s", timingType)
 
-	// Build agent map from metadata
 	agentMap := make(map[string]string)
 	for _, agent := range ttml.Head.Metadata.Agents {
 		agentMap[agent.ID] = agent.Type
@@ -82,23 +76,18 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 
 	var lines []Line
 
-	// TTML is either word-level or line-level
-	// Iterate through all div sections (Verse, Chorus, etc.)
 	for divIdx, div := range ttml.Body.Divs {
 		log.Debugf("[TTML Parser] Processing div %d (songPart: %s) with %d paragraphs", divIdx, div.SongPart, len(div.Paragraphs))
 
 		for i, para := range div.Paragraphs {
 			log.Debugf("[TTML Parser]   Processing paragraph %d: begin=%s, end=%s, spans=%d", i, para.Begin, para.End, len(para.Spans))
 
-			// Check if this is word-level (with spans) or line-level (no spans)
 			if len(para.Spans) > 0 {
-				// Word-level TTML with <span> elements
 				var syllables []Syllable
 				var fullText string
 				var earliestTime int64 = -1
 				var latestEndTime int64 = 0
 
-				// Process each span (word) in the paragraph
 				for j, span := range para.Spans {
 					wordText := strings.TrimSpace(span.Text)
 					if wordText == "" {
@@ -117,7 +106,6 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 						continue
 					}
 
-					// Track earliest and latest times
 					if earliestTime == -1 || startMs < earliestTime {
 						earliestTime = startMs
 					}
@@ -128,7 +116,6 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					// Check if this is a background vocal
 					isBackground := span.Role == "x-bg"
 
-					// Create syllable with timing information
 					syllable := Syllable{
 						Text:         wordText,
 						StartTime:    strconv.FormatInt(startMs, 10),
@@ -137,7 +124,6 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					}
 					syllables = append(syllables, syllable)
 
-					// Build full text
 					if j > 0 {
 						fullText += " "
 					}
@@ -153,7 +139,6 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 
 				duration := latestEndTime - earliestTime
 
-				// Get agent information from paragraph
 				agent := para.Agent
 				if agent != "" {
 					if agentType, ok := agentMap[agent]; ok {
@@ -173,8 +158,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 				log.Debugf("[TTML Parser]   Created line %d: startMs=%s, endMs=%s, words='%s', syllables=%d, agent=%s", i, line.StartTimeMs, line.EndTimeMs, line.Words, len(line.Syllables), agent)
 				lines = append(lines, line)
 			} else {
-				// Line-level TTML without spans - extract text directly from paragraph
-				// Extract text from the paragraph (strip XML tags)
+				// Line-level TTML without spans
 				re := regexp.MustCompile(`<[^>]+>`)
 				lineText := re.ReplaceAllString(para.Text, "")
 				lineText = strings.TrimSpace(lineText)
@@ -198,7 +182,6 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 
 				durationMs := endMs - startMs
 
-				// Get agent information from paragraph
 				agent := para.Agent
 				if agent != "" {
 					if agentType, ok := agentMap[agent]; ok {

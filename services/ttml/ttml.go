@@ -18,12 +18,10 @@ func FetchTTMLLyrics(songName, artistName, albumName string) ([]Line, bool, stri
 		storefront = "us"
 	}
 
-	// Validate input
 	if songName == "" && artistName == "" {
 		return nil, false, "", "", "", fmt.Errorf("song name and artist name cannot both be empty")
 	}
 
-	// Search for track
 	query := songName + " " + artistName
 	if albumName != "" {
 		query += " " + albumName
@@ -41,7 +39,6 @@ func FetchTTMLLyrics(songName, artistName, albumName string) ([]Line, bool, stri
 
 	log.Infof("Found track: %s by %s (ID: %s)", track.Attributes.Name, track.Attributes.ArtistName, track.ID)
 
-	// Fetch TTML lyrics
 	ttml, err := fetchLyricsTTML(track.ID, storefront)
 	if err != nil {
 		return nil, false, "", "", "", fmt.Errorf("failed to fetch TTML: %v", err)
@@ -51,7 +48,6 @@ func FetchTTMLLyrics(songName, artistName, albumName string) ([]Line, bool, stri
 		return nil, false, "", "", "", fmt.Errorf("TTML content is empty")
 	}
 
-	// Parse TTML directly to lines
 	lines, timingType, err := parseTTMLToLines(ttml)
 	if err != nil {
 		// Return raw TTML for debugging parsing errors
@@ -63,7 +59,6 @@ func FetchTTMLLyrics(songName, artistName, albumName string) ([]Line, bool, stri
 		return nil, false, "", timingType, ttml, fmt.Errorf("no lines extracted from TTML")
 	}
 
-	// Try to detect language from TTML
 	language := detectLanguageFromTTML(ttml)
 	if language == "" {
 		language = "en" // Default to English
