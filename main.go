@@ -24,7 +24,8 @@ import (
 var conf = config.Get()
 
 var (
-	cache sync.Map
+	cache         sync.Map
+	inFlightReqs  sync.Map // Tracks in-flight requests to prevent cache stampede
 )
 
 type CacheEntry struct {
@@ -38,6 +39,21 @@ type CacheDumpResponse struct {
 	NumberOfKeys int
 	SizeInKB     int
 	Cache        CacheDump
+}
+
+// InFlightRequest tracks a request that is currently being processed
+type InFlightRequest struct {
+	wg     sync.WaitGroup
+	result *LyricsResult
+	err    error
+}
+
+// LyricsResult holds the result of a lyrics fetch
+type LyricsResult struct {
+	Lyrics        []ttml.Line
+	IsRtlLanguage bool
+	Language      string
+	TimingType    string
 }
 
 func init() {
@@ -187,8 +203,61 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if there's an in-flight request for this query
+	inFlight, loaded := inFlightReqs.LoadOrStore(cacheKey, &InFlightRequest{})
+	req := inFlight.(*InFlightRequest)
+
+	if loaded {
+		// Another request is already fetching this, wait for it
+		log.Info("[Cache:Lyrics] Waiting for in-flight request to complete")
+		req.wg.Wait()
+
+		// Use the result from the in-flight request
+		if req.err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":  req.err.Error(),
+				"source": "TTML",
+			})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":         nil,
+			"source":        "TTML",
+			"lyrics":        req.result.Lyrics,
+			"isRtlLanguage": req.result.IsRtlLanguage,
+			"language":      req.result.Language,
+			"type":          req.result.TimingType,
+		})
+		return
+	}
+
+	// This is the first request, fetch the data
+	req.wg.Add(1)
+	defer func() {
+		req.wg.Done()
+		// Clean up in-flight request after a short delay to allow waiting goroutines to get the result
+		time.AfterFunc(1*time.Second, func() {
+			inFlightReqs.Delete(cacheKey)
+		})
+	}()
+
 	// Fetch from TTML API
 	lyrics, isRtlLanguage, language, timingType, rawTTML, err := ttml.FetchTTMLLyrics(songName, artistName, albumName)
+
+	// Store result in in-flight request
+	req.err = err
+	if err == nil {
+		req.result = &LyricsResult{
+			Lyrics:        lyrics,
+			IsRtlLanguage: isRtlLanguage,
+			Language:      language,
+			TimingType:    timingType,
+		}
+	}
 	if err != nil {
 		log.Errorf("Error fetching TTML lyrics: %v", err)
 		w.Header().Set("Content-Type", "application/json")
