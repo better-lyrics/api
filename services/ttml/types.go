@@ -8,10 +8,10 @@ import "encoding/xml"
 
 // Syllable represents a single word/syllable with timing information
 type Syllable struct {
-	Text      string `json:"text"`
-	StartTime string `json:"startTimeMs"`
-	Duration  string `json:"durationMs"`
-	EndTime   string `json:"endTimeMs"`
+	Text         string `json:"text"`
+	StartTime    string `json:"startTimeMs"`
+	EndTime      string `json:"endTimeMs"`
+	IsBackground bool   `json:"isBackground"`
 }
 
 // Line represents a lyrics line with timing information
@@ -21,6 +21,7 @@ type Line struct {
 	Words       string     `json:"words"`
 	Syllables   []Syllable `json:"syllables"`
 	EndTimeMs   string     `json:"endTimeMs"`
+	Agent       string     `json:"agent,omitempty"`
 }
 
 // =============================================================================
@@ -83,9 +84,23 @@ type LyricsResponse struct {
 // =============================================================================
 
 type TTML struct {
-	XMLName xml.Name `xml:"tt"`
-	Timing  string   `xml:"timing,attr"`
-	Body    TTMLBody `xml:"body"`
+	XMLName  xml.Name   `xml:"tt"`
+	Timing   string     `xml:"timing,attr"`
+	Head     TTMLHead   `xml:"head"`
+	Body     TTMLBody   `xml:"body"`
+}
+
+type TTMLHead struct {
+	Metadata TTMLMetadata `xml:"metadata"`
+}
+
+type TTMLMetadata struct {
+	Agents []TTMLAgent `xml:"agent"`
+}
+
+type TTMLAgent struct {
+	ID   string `xml:"id,attr"`
+	Type string `xml:"type,attr"`
 }
 
 type TTMLBody struct {
@@ -109,5 +124,6 @@ type TTMLParagraph struct {
 type TTMLSpan struct {
 	Begin string `xml:"begin,attr"`
 	End   string `xml:"end,attr"`
+	Role  string `xml:"role,attr"`
 	Text  string `xml:",chardata"`
 }

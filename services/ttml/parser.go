@@ -70,6 +70,13 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 	}
 	log.Debugf("[TTML Parser] Timing type: %s", timingType)
 
+	// Build agent map from metadata
+	agentMap := make(map[string]string)
+	for _, agent := range ttml.Head.Metadata.Agents {
+		agentMap[agent.ID] = agent.Type
+	}
+	log.Debugf("[TTML Parser] Found %d agents in metadata", len(agentMap))
+
 	log.Debugf("[TTML Parser] Successfully parsed XML structure")
 	log.Debugf("[TTML Parser] Number of div sections found: %d", len(ttml.Body.Divs))
 
@@ -110,8 +117,6 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 						continue
 					}
 
-					durationMs := endMs - startMs
-
 					// Track earliest and latest times
 					if earliestTime == -1 || startMs < earliestTime {
 						earliestTime = startMs
@@ -120,12 +125,15 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 						latestEndTime = endMs
 					}
 
+					// Check if this is a background vocal
+					isBackground := span.Role == "x-bg"
+
 					// Create syllable with timing information
 					syllable := Syllable{
-						Text:      wordText,
-						StartTime: strconv.FormatInt(startMs, 10),
-						EndTime:   strconv.FormatInt(endMs, 10),
-						Duration:  strconv.FormatInt(durationMs, 10),
+						Text:         wordText,
+						StartTime:    strconv.FormatInt(startMs, 10),
+						EndTime:      strconv.FormatInt(endMs, 10),
+						IsBackground: isBackground,
 					}
 					syllables = append(syllables, syllable)
 
@@ -135,7 +143,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					}
 					fullText += wordText
 
-					log.Debugf("[TTML Parser]   Span %d: '%s' [%s - %s]", j, wordText, span.Begin, span.End)
+					log.Debugf("[TTML Parser]   Span %d: '%s' [%s - %s] role='%s' bg=%v", j, wordText, span.Begin, span.End, span.Role, isBackground)
 				}
 
 				if len(syllables) == 0 {
@@ -145,15 +153,24 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 
 				duration := latestEndTime - earliestTime
 
+				// Get agent information from paragraph
+				agent := para.Agent
+				if agent != "" {
+					if agentType, ok := agentMap[agent]; ok {
+						agent = agentType + ":" + para.Agent
+					}
+				}
+
 				line := Line{
 					StartTimeMs: strconv.FormatInt(earliestTime, 10),
 					EndTimeMs:   strconv.FormatInt(latestEndTime, 10),
 					DurationMs:  strconv.FormatInt(duration, 10),
 					Words:       fullText,
 					Syllables:   syllables,
+					Agent:       agent,
 				}
 
-				log.Debugf("[TTML Parser]   Created line %d: startMs=%s, endMs=%s, words='%s', syllables=%d", i, line.StartTimeMs, line.EndTimeMs, line.Words, len(line.Syllables))
+				log.Debugf("[TTML Parser]   Created line %d: startMs=%s, endMs=%s, words='%s', syllables=%d, agent=%s", i, line.StartTimeMs, line.EndTimeMs, line.Words, len(line.Syllables), agent)
 				lines = append(lines, line)
 			} else {
 				// Line-level TTML without spans - extract text directly from paragraph
@@ -181,12 +198,19 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 
 				durationMs := endMs - startMs
 
+				// Get agent information from paragraph
+				agent := para.Agent
+				if agent != "" {
+					if agentType, ok := agentMap[agent]; ok {
+						agent = agentType + ":" + para.Agent
+					}
+				}
+
 				// For line-level, create a single syllable for the entire line
 				syllable := Syllable{
 					Text:      lineText,
 					StartTime: strconv.FormatInt(startMs, 10),
 					EndTime:   strconv.FormatInt(endMs, 10),
-					Duration:  strconv.FormatInt(durationMs, 10),
 				}
 
 				line := Line{
@@ -195,9 +219,10 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					DurationMs:  strconv.FormatInt(durationMs, 10),
 					Words:       lineText,
 					Syllables:   []Syllable{syllable},
+					Agent:       agent,
 				}
 
-				log.Debugf("[TTML Parser]   Created line-level line %d: startMs=%s, endMs=%s, words='%s'", i, line.StartTimeMs, line.EndTimeMs, line.Words)
+				log.Debugf("[TTML Parser]   Created line-level line %d: startMs=%s, endMs=%s, words='%s', agent=%s", i, line.StartTimeMs, line.EndTimeMs, line.Words, agent)
 				lines = append(lines, line)
 			}
 		}

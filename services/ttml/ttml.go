@@ -8,7 +8,7 @@ import (
 
 // FetchTTMLLyrics is the main function to fetch TTML API lyrics
 // Returns: lyrics, isRTL, language, timingType, rawTTML (only on parsing errors), error
-func FetchTTMLLyrics(songName, artistName string) ([]Line, bool, string, string, string, error) {
+func FetchTTMLLyrics(songName, artistName, albumName string) ([]Line, bool, string, string, string, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
@@ -25,6 +25,9 @@ func FetchTTMLLyrics(songName, artistName string) ([]Line, bool, string, string,
 
 	// Search for track
 	query := songName + " " + artistName
+	if albumName != "" {
+		query += " " + albumName
+	}
 	log.Infof("Searching TTML API for: %s", query)
 
 	track, err := searchTrack(query, storefront)

@@ -161,6 +161,7 @@ func setCache(key, value string, duration time.Duration) {
 func getLyrics(w http.ResponseWriter, r *http.Request) {
 	songName := r.URL.Query().Get("s") + r.URL.Query().Get("song") + r.URL.Query().Get("songName")
 	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist") + r.URL.Query().Get("artistName")
+	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album") + r.URL.Query().Get("albumName")
 
 	if songName == "" && artistName == "" {
 		http.Error(w, "Song name or artist name not provided", http.StatusUnprocessableEntity)
@@ -168,7 +169,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check cache first
-	query := songName + " " + artistName
+	query := songName + " " + artistName + " " + albumName
 	cacheKey := fmt.Sprintf("ttml_lyrics:%s", query)
 
 	if cachedLyrics, ok := getCache(cacheKey); ok {
@@ -188,7 +189,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch from TTML API
-	lyrics, isRtlLanguage, language, timingType, rawTTML, err := ttml.FetchTTMLLyrics(songName, artistName)
+	lyrics, isRtlLanguage, language, timingType, rawTTML, err := ttml.FetchTTMLLyrics(songName, artistName, albumName)
 	if err != nil {
 		log.Errorf("Error fetching TTML lyrics: %v", err)
 		w.Header().Set("Content-Type", "application/json")
