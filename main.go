@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"lyrics-api-go/config"
 	"lyrics-api-go/middleware"
+	"lyrics-api-go/services/notifier"
 	"lyrics-api-go/services/ttml"
 	"lyrics-api-go/utils"
 	"net/http"
@@ -25,8 +26,6 @@ var conf = config.Get()
 var (
 	cache sync.Map
 )
-
-// Old Spotify configuration variables and types removed - now using TTML service
 
 type CacheEntry struct {
 	Value      string
@@ -56,9 +55,13 @@ func main() {
 	// start goroutine to invalidate cache
 	go invalidateCache()
 
+	// start token expiration monitor if configured
+	go startTokenMonitor()
+
 	router := mux.NewRouter()
 	router.HandleFunc("/getLyrics", getLyrics)
 	router.HandleFunc("/cache", getCacheDump)
+	router.HandleFunc("/test-notifications", testNotifications)
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -108,8 +111,6 @@ func isRTLLanguage(langCode string) bool {
 	return rtlLanguages[langCode]
 }
 
-// Old Spotify HTTP request functions removed
-
 func getCache(key string) (string, bool) {
 	entry, ok := cache.Load(key)
 	if !ok {
@@ -155,8 +156,6 @@ func setCache(key, value string, duration time.Duration) {
 
 	cache.Store(key, cacheEntry)
 }
-
-// Old Spotify OAuth functions removed
 
 func getLyrics(w http.ResponseWriter, r *http.Request) {
 	songName := r.URL.Query().Get("s") + r.URL.Query().Get("song") + r.URL.Query().Get("songName")
@@ -245,7 +244,132 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Old Spotify functions removed - now using ttml.FetchTTMLLyrics from services/ttml/
+func testNotifications(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Set up notifiers
+	notifiers := setupNotifiers()
+
+	if len(notifiers) == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "No notifiers configured. Please configure at least one notifier in your .env file.",
+			"help": map[string]string{
+				"telegram": "Set NOTIFIER_TELEGRAM_BOT_TOKEN and NOTIFIER_TELEGRAM_CHAT_ID",
+				"email":    "Set NOTIFIER_SMTP_HOST, NOTIFIER_SMTP_USERNAME, NOTIFIER_SMTP_PASSWORD, etc.",
+				"ntfy":     "Set NOTIFIER_NTFY_TOPIC",
+			},
+		})
+		return
+	}
+
+	// Get token expiration details
+	var tokenInfo string
+	var tokenDetails map[string]interface{}
+
+	if conf.Configuration.TTMLBearerToken != "" {
+		expirationDate, err := notifier.GetExpirationDate(conf.Configuration.TTMLBearerToken)
+		if err != nil {
+			tokenInfo = fmt.Sprintf("Error reading token expiration: %v", err)
+			tokenDetails = map[string]interface{}{
+				"error": err.Error(),
+			}
+		} else {
+			now := time.Now()
+			daysUntilExpiration := int(time.Until(expirationDate).Hours() / 24)
+			warningDate := expirationDate.AddDate(0, 0, -7)
+
+			tokenInfo = fmt.Sprintf(
+				"Current date:         %s\n"+
+				"Token expires:        %s\n"+
+				"Days remaining:       %d days\n"+
+				"Warning threshold:    7 days before expiration\n"+
+				"First notification:   %s\n"+
+				"Reminder frequency:   Daily until updated",
+				now.Format("2006-01-02 15:04:05"),
+				expirationDate.Format("2006-01-02 15:04:05"),
+				daysUntilExpiration,
+				warningDate.Format("2006-01-02 15:04:05"),
+			)
+
+			tokenDetails = map[string]interface{}{
+				"current_date":          now.Format("2006-01-02 15:04:05"),
+				"token_expires":         expirationDate.Format("2006-01-02 15:04:05"),
+				"days_until_expiration": daysUntilExpiration,
+				"first_notification":    warningDate.Format("2006-01-02 15:04:05"),
+				"notification_frequency": "Daily",
+			}
+		}
+	} else {
+		tokenInfo = "Status:               Not configured\n" +
+			"TTML_BEARER_TOKEN:    Missing from .env file"
+		tokenDetails = map[string]interface{}{
+			"configured": false,
+		}
+	}
+
+	// Send test notification
+	subject := "🧪 Test: TTML Token Monitor"
+	message := fmt.Sprintf(
+		"🧪 TTML TOKEN MONITOR - TEST NOTIFICATION\n\n"+
+		"✅ Status: Your notification setup is working correctly.\n\n"+
+		"📊 Token Information:\n\n"+
+		"%s\n\n"+
+		"You will receive similar notifications when your\n"+
+		"token is approaching expiration.",
+		tokenInfo,
+	)
+
+	results := make(map[string]interface{})
+	successCount := 0
+	failCount := 0
+
+	for _, n := range notifiers {
+		notifierType := getNotifierTypeName(n)
+		if err := n.Send(subject, message); err != nil {
+			results[notifierType] = map[string]string{
+				"status": "failed",
+				"error":  err.Error(),
+			}
+			failCount++
+			log.Errorf("[Test Notifications] %s failed: %v", notifierType, err)
+		} else {
+			results[notifierType] = map[string]string{
+				"status": "success",
+			}
+			successCount++
+			log.Infof("[Test Notifications] %s sent successfully", notifierType)
+		}
+	}
+
+	response := map[string]interface{}{
+		"message":      "Test notifications sent",
+		"total":        len(notifiers),
+		"successful":   successCount,
+		"failed":       failCount,
+		"results":      results,
+		"token_info":   tokenDetails,
+	}
+
+	if failCount > 0 {
+		w.WriteHeader(http.StatusPartialContent)
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+func getNotifierTypeName(n notifier.Notifier) string {
+	switch n.(type) {
+	case *notifier.EmailNotifier:
+		return "email"
+	case *notifier.TelegramNotifier:
+		return "telegram"
+	case *notifier.NtfyNotifier:
+		return "ntfy"
+	default:
+		return "unknown"
+	}
+}
 
 func getCacheDump(w http.ResponseWriter, r *http.Request) {
 	// Check if the request is authorized by checking the access token
@@ -300,4 +424,85 @@ func invalidateCache() {
 			return true
 		})
 	}
+}
+
+// startTokenMonitor starts the token expiration monitor if notifiers are configured
+func startTokenMonitor() {
+	// Check if bearer token is configured
+	if conf.Configuration.TTMLBearerToken == "" {
+		log.Warn("[Token Monitor] TTML_BEARER_TOKEN not set, token monitoring disabled")
+		return
+	}
+
+	// Set up notifiers
+	notifiers := setupNotifiers()
+
+	if len(notifiers) == 0 {
+		log.Info("[Token Monitor] No notifiers configured, token monitoring disabled")
+		log.Info("[Token Monitor] To enable notifications, configure at least one notifier (Email, Telegram, or Ntfy.sh)")
+		return
+	}
+
+	log.Infof("[Token Monitor] Starting with %d notifier(s) configured", len(notifiers))
+
+	// Create and run monitor
+	monitor := notifier.NewTokenMonitor(notifier.MonitorConfig{
+		BearerToken:      conf.Configuration.TTMLBearerToken,
+		WarningThreshold: 7,  // Start warning 7 days before expiration
+		ReminderInterval: 24, // Remind every 24 hours
+		StateFile:        "/tmp/ttml-pager.state",
+		Notifiers:        notifiers,
+	})
+
+	// Run monitor (checks every 6 hours)
+	monitor.Run(6 * time.Hour)
+}
+
+// setupNotifiers creates notifier instances based on environment variables
+func setupNotifiers() []notifier.Notifier {
+	var notifiers []notifier.Notifier
+
+	// Email notifier
+	if smtpHost := os.Getenv("NOTIFIER_SMTP_HOST"); smtpHost != "" {
+		emailNotifier := &notifier.EmailNotifier{
+			SMTPHost:     smtpHost,
+			SMTPPort:     getEnvOrDefault("NOTIFIER_SMTP_PORT", "587"),
+			SMTPUsername: os.Getenv("NOTIFIER_SMTP_USERNAME"),
+			SMTPPassword: os.Getenv("NOTIFIER_SMTP_PASSWORD"),
+			FromEmail:    os.Getenv("NOTIFIER_FROM_EMAIL"),
+			ToEmail:      os.Getenv("NOTIFIER_TO_EMAIL"),
+		}
+		notifiers = append(notifiers, emailNotifier)
+		log.Info("[Token Monitor] Email notifier enabled")
+	}
+
+	// Telegram notifier
+	if botToken := os.Getenv("NOTIFIER_TELEGRAM_BOT_TOKEN"); botToken != "" {
+		telegramNotifier := &notifier.TelegramNotifier{
+			BotToken: botToken,
+			ChatID:   os.Getenv("NOTIFIER_TELEGRAM_CHAT_ID"),
+		}
+		notifiers = append(notifiers, telegramNotifier)
+		log.Info("[Token Monitor] Telegram notifier enabled")
+	}
+
+	// Ntfy.sh notifier
+	if topic := os.Getenv("NOTIFIER_NTFY_TOPIC"); topic != "" {
+		ntfyNotifier := &notifier.NtfyNotifier{
+			Topic:  topic,
+			Server: getEnvOrDefault("NOTIFIER_NTFY_SERVER", "https://ntfy.sh"),
+		}
+		notifiers = append(notifiers, ntfyNotifier)
+		log.Info("[Token Monitor] Ntfy.sh notifier enabled")
+	}
+
+	return notifiers
+}
+
+// getEnvOrDefault returns environment variable value or default if not set
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
