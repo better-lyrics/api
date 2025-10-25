@@ -10,11 +10,6 @@ var accountManager *AccountManager
 
 func initAccountManager() {
 	conf := config.Get()
-	log.Debugf("Initializing account manager - BearerToken length: %d, MediaUserToken length: %d, Storefront: %s",
-		len(conf.Configuration.TTMLBearerToken),
-		len(conf.Configuration.TTMLMediaUserToken),
-		conf.Configuration.TTMLStorefront)
-
 	accounts := []MusicAccount{
 		{
 			NameID:         "Primary",

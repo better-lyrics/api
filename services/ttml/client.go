@@ -28,7 +28,6 @@ func makeAPIRequest(urlStr string, retries int) (*http.Response, error) {
 	}
 
 	// Set headers for web auth
-	log.Debugf("BearerToken length: %d, MediaUserToken length: %d", len(account.BearerToken), len(account.MediaUserToken))
 	req.Header.Set("Authorization", "Bearer "+account.BearerToken)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	req.Header.Set("Origin", "https://music.apple.com")
