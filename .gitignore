@@ -25,6 +25,8 @@ go.work.sum
 .env
 .idea/
 
+# Cache database
+cache.db
 
 lyrics-api-go
 test.xml

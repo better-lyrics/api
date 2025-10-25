@@ -137,6 +137,11 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					continue
 				}
 
+				// Add spaces to all syllables except the last one
+				for k := 0; k < len(syllables)-1; k++ {
+					syllables[k].Text += " "
+				}
+
 				duration := latestEndTime - earliestTime
 
 				agent := para.Agent

@@ -3,11 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"lyrics-api-go/cache"
 	"lyrics-api-go/config"
 	"lyrics-api-go/middleware"
 	"lyrics-api-go/services/notifier"
 	"lyrics-api-go/services/ttml"
-	"lyrics-api-go/utils"
 	"net/http"
 	"os"
 	"sync"
@@ -24,16 +24,11 @@ import (
 var conf = config.Get()
 
 var (
-	cache        sync.Map
-	inFlightReqs sync.Map
+	persistentCache *cache.PersistentCache
+	inFlightReqs    sync.Map
 )
 
-type CacheEntry struct {
-	Value      string
-	Expiration int64
-}
-
-type CacheDump map[string]CacheEntry
+type CacheDump map[string]cache.CacheEntry
 
 type CacheDumpResponse struct {
 	NumberOfKeys int
@@ -66,12 +61,21 @@ func init() {
 }
 
 func main() {
-	go invalidateCache()
+	// Initialize persistent cache
+	var err error
+	cachePath := getEnvOrDefault("CACHE_DB_PATH", "./cache.db")
+	persistentCache, err = cache.NewPersistentCache(cachePath, conf.FeatureFlags.CacheCompression)
+	if err != nil {
+		log.Fatalf("Failed to initialize cache: %v", err)
+	}
+	defer persistentCache.Close()
+
 	go startTokenMonitor()
 
 	router := mux.NewRouter()
 	router.HandleFunc("/getLyrics", getLyrics)
 	router.HandleFunc("/cache", getCacheDump)
+	router.HandleFunc("/cache/clear", clearCache)
 	router.HandleFunc("/test-notifications", testNotifications)
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -117,48 +121,13 @@ func isRTLLanguage(langCode string) bool {
 }
 
 func getCache(key string) (string, bool) {
-	entry, ok := cache.Load(key)
-	if !ok {
-		return "", false
-	}
-	cacheEntry := entry.(CacheEntry)
-	if time.Now().UnixNano() > cacheEntry.Expiration {
-		cache.Delete(key)
-		return "", false
-	}
-	if conf.FeatureFlags.CacheCompression {
-		decompressedValue, err := utils.DecompressString(cacheEntry.Value)
-		if err != nil {
-			log.Errorf("Error decompressing cache value: %v", err)
-			return "", false
-		}
-		return decompressedValue, true
-	} else {
-		return cacheEntry.Value, true
-	}
+	return persistentCache.Get(key)
 }
 
-func setCache(key, value string, duration time.Duration) {
-	var cacheEntry CacheEntry
-
-	if conf.FeatureFlags.CacheCompression {
-		compressedValue, err := utils.CompressString(value)
-		if err != nil {
-			log.Errorf("Error compressing cache value: %v", err)
-			return
-		}
-		cacheEntry = CacheEntry{
-			Value:      compressedValue,
-			Expiration: time.Now().Add(duration).UnixNano(),
-		}
-	} else {
-		cacheEntry = CacheEntry{
-			Value:      value,
-			Expiration: time.Now().Add(duration).UnixNano(),
-		}
+func setCache(key, value string) {
+	if err := persistentCache.Set(key, value); err != nil {
+		log.Errorf("Error setting cache value: %v", err)
 	}
-
-	cache.Store(key, cacheEntry)
 }
 
 func getLyrics(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +246,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Errorf("[Cache:Lyrics] Failed to marshal cache value: %v", err)
 	} else {
-		setCache(cacheKey, string(cacheValue), time.Duration(conf.Configuration.LyricsCacheTTLInSeconds)*time.Second)
+		setCache(cacheKey, string(cacheValue))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -292,6 +261,11 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func testNotifications(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 
 	notifiers := setupNotifiers()
@@ -326,11 +300,11 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 
 			tokenInfo = fmt.Sprintf(
 				"Current date:         %s\n"+
-				"Token expires:        %s\n"+
-				"Days remaining:       %d days\n"+
-				"Warning threshold:    7 days before expiration\n"+
-				"First notification:   %s\n"+
-				"Reminder frequency:   Daily until updated",
+					"Token expires:        %s\n"+
+					"Days remaining:       %d days\n"+
+					"Warning threshold:    7 days before expiration\n"+
+					"First notification:   %s\n"+
+					"Reminder frequency:   Daily until updated",
 				now.Format("2006-01-02 15:04:05"),
 				expirationDate.Format("2006-01-02 15:04:05"),
 				daysUntilExpiration,
@@ -338,10 +312,10 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 			)
 
 			tokenDetails = map[string]interface{}{
-				"current_date":          now.Format("2006-01-02 15:04:05"),
-				"token_expires":         expirationDate.Format("2006-01-02 15:04:05"),
-				"days_until_expiration": daysUntilExpiration,
-				"first_notification":    warningDate.Format("2006-01-02 15:04:05"),
+				"current_date":           now.Format("2006-01-02 15:04:05"),
+				"token_expires":          expirationDate.Format("2006-01-02 15:04:05"),
+				"days_until_expiration":  daysUntilExpiration,
+				"first_notification":     warningDate.Format("2006-01-02 15:04:05"),
 				"notification_frequency": "Daily",
 			}
 		}
@@ -356,11 +330,11 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 	subject := "🧪 Test: TTML Token Monitor"
 	message := fmt.Sprintf(
 		"🧪 TTML TOKEN MONITOR - TEST NOTIFICATION\n\n"+
-		"✅ Status: Your notification setup is working correctly.\n\n"+
-		"📊 Token Information:\n\n"+
-		"%s\n\n"+
-		"You will receive similar notifications when your\n"+
-		"token is approaching expiration.",
+			"✅ Status: Your notification setup is working correctly.\n\n"+
+			"📊 Token Information:\n\n"+
+			"%s\n\n"+
+			"You will receive similar notifications when your\n"+
+			"token is approaching expiration.",
 		tokenInfo,
 	)
 
@@ -387,12 +361,12 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"message":      "Test notifications sent",
-		"total":        len(notifiers),
-		"successful":   successCount,
-		"failed":       failCount,
-		"results":      results,
-		"token_info":   tokenDetails,
+		"message":    "Test notifications sent",
+		"total":      len(notifiers),
+		"successful": successCount,
+		"failed":     failCount,
+		"results":    results,
+		"token_info": tokenDetails,
 	}
 
 	if failCount > 0 {
@@ -420,25 +394,49 @@ func getCacheDump(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+
 	cacheDump := CacheDump{}
-	cacheDumpResponse := CacheDumpResponse{}
-	cache.Range(func(key, value interface{}) bool {
+	persistentCache.Range(func(key string, entry cache.CacheEntry) bool {
 		if key == "accessToken" {
 			return true
 		}
-		cacheDump[key.(string)] = value.(CacheEntry)
+		cacheDump[key] = entry
 		return true
 	})
-	cacheDumpResponse.Cache = cacheDump
-	cacheDumpResponse.NumberOfKeys = len(cacheDump)
-	size := 0
-	for key, value := range cacheDump {
-		size += len(key) + len(value.Value) + 8
+
+	numKeys, sizeInKB := persistentCache.Stats()
+
+	cacheDumpResponse := CacheDumpResponse{
+		NumberOfKeys: numKeys,
+		SizeInKB:     sizeInKB,
+		Cache:        cacheDump,
 	}
-	cacheDumpResponse.SizeInKB = size / 1024
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cacheDumpResponse)
+}
+
+func clearCache(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if err := persistentCache.Clear(); err != nil {
+		log.Errorf("[Cache:Clear] Failed to clear cache: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": fmt.Sprintf("Failed to clear cache: %v", err),
+		})
+		return
+	}
+
+	log.Info("[Cache:Clear] Cache cleared successfully")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Cache cleared successfully",
+	})
 }
 
 func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.Handler {
@@ -451,21 +449,6 @@ func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-func invalidateCache() {
-	log.Infof("[Cache:Invalidation] Starting cache invalidation goroutine")
-	for {
-		time.Sleep(time.Duration(conf.Configuration.CacheInvalidationIntervalInSeconds) * time.Second)
-		cache.Range(func(key, value interface{}) bool {
-			cacheEntry := value.(CacheEntry)
-			if time.Now().UnixNano() > cacheEntry.Expiration {
-				cache.Delete(key)
-				fmt.Printf("\033[31m[Cache:Invalidation] Deleted key: %s\033[0m\n", key)
-			}
-			return true
-		})
-	}
 }
 
 func startTokenMonitor() {
