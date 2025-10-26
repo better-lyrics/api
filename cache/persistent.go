@@ -31,8 +31,23 @@ type CacheEntry struct {
 func NewPersistentCache(dbPath string, compressionEnabled bool) (*PersistentCache, error) {
 	// Create directory if it doesn't exist (needed for Railway volumes)
 	dir := filepath.Dir(dbPath)
+
+	// Check if directory exists
+	if info, err := os.Stat(dir); err == nil {
+		log.Infof("[Cache:Init] Directory %s exists (IsDir: %v)", dir, info.IsDir())
+	} else {
+		log.Infof("[Cache:Init] Directory %s does not exist, creating...", dir)
+	}
+
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create cache directory: %v", err)
+	}
+
+	// Check if database file already exists
+	if info, err := os.Stat(dbPath); err == nil {
+		log.Infof("[Cache:Init] Found existing database file at: %s (size: %d bytes)", dbPath, info.Size())
+	} else {
+		log.Infof("[Cache:Init] Creating new database file at: %s", dbPath)
 	}
 
 	db, err := bolt.Open(dbPath, 0600, nil)

@@ -1,3 +1,0 @@
-# Mount a persistent volume for the cache database
-[[volumes]]
-mount = "/data"
