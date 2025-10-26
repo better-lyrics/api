@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"lyrics-api-go/utils"
+	"os"
+	"path/filepath"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
@@ -27,6 +29,12 @@ type CacheEntry struct {
 
 // NewPersistentCache creates a new persistent cache
 func NewPersistentCache(dbPath string, compressionEnabled bool) (*PersistentCache, error) {
+	// Create directory if it doesn't exist (needed for Railway volumes)
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create cache directory: %v", err)
+	}
+
 	db, err := bolt.Open(dbPath, 0600, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open cache database: %v", err)
