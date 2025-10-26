@@ -17,6 +17,8 @@ This repository contains the source code for the official Better Lyrics API - pr
   - [Installation](#installation)
   - [Usage](#usage)
   - [API Endpoints](#api-endpoints)
+  - [Deployment](#deployment)
+    - [Railway](#railway)
   - [Contributing](#contributing)
   - [License](#license)
 
@@ -37,6 +39,26 @@ Once the server is running, you can access the API endpoints to retrieve lyrics 
 ## API Endpoints
 
 - `GET /getLyrics?a={artist}&s={song}`: Retrieves the lyrics for the specified artist and song.
+
+## Deployment
+
+### Railway
+
+This project includes a `railway.toml` configuration for easy deployment on Railway with persistent cache storage.
+
+**Setup Steps:**
+
+1. Create a new project on [Railway](https://railway.app)
+2. Connect your GitHub repository
+3. Railway will automatically detect the `railway.toml` and create a volume at `/data`
+4. Set the following environment variable in Railway:
+   ```
+   CACHE_DB_PATH=/data/cache.db
+   ```
+5. Configure all other required environment variables from `.env.example`
+6. Deploy!
+
+**Important:** The volume mount at `/data` ensures your cache database persists across deployments. Without this, the cache will be wiped on every build.
 
 ## Contributing
 
