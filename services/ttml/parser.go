@@ -59,7 +59,11 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 		return nil, "", fmt.Errorf("failed to parse TTML XML: %v", err)
 	}
 
+	// Check both timing attributes (regular and itunes namespace)
 	timingType := strings.ToLower(ttml.Timing)
+	if timingType == "" {
+		timingType = strings.ToLower(ttml.ITunesTiming)
+	}
 	if timingType == "" {
 		timingType = "line" // Default to line if not specified
 	}
@@ -76,6 +80,41 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 
 	var lines []Line
 
+	// Handle unsynced lyrics (timing="none")
+	if timingType == "none" {
+		log.Debugf("[TTML Parser] Processing unsynced lyrics")
+		for divIdx, div := range ttml.Body.Divs {
+			log.Debugf("[TTML Parser] Processing div %d with %d paragraphs", divIdx, len(div.Paragraphs))
+
+			for i, para := range div.Paragraphs {
+				// Remove HTML tags from paragraph text
+				re := regexp.MustCompile(`<[^>]+>`)
+				lineText := re.ReplaceAllString(para.Text, "")
+				lineText = strings.TrimSpace(lineText)
+
+				if lineText == "" {
+					log.Debugf("[TTML Parser] Skipping empty paragraph %d", i)
+					continue
+				}
+
+				// Create a line with no timing information
+				line := Line{
+					StartTimeMs: "0",
+					EndTimeMs:   "0",
+					DurationMs:  "0",
+					Words:       lineText,
+					Syllables:   []Syllable{}, // Empty for unsynced lyrics
+				}
+
+				log.Debugf("[TTML Parser] Created unsynced line %d: '%s'", i, lineText)
+				lines = append(lines, line)
+			}
+		}
+		log.Infof("[TTML Parser] Successfully extracted %d unsynced lines from TTML", len(lines))
+		return lines, timingType, nil
+	}
+
+	// Handle synced lyrics (word-level or line-level)
 	for divIdx, div := range ttml.Body.Divs {
 		log.Debugf("[TTML Parser] Processing div %d (songPart: %s) with %d paragraphs", divIdx, div.SongPart, len(div.Paragraphs))
 
@@ -194,19 +233,12 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					}
 				}
 
-				// For line-level, create a single syllable for the entire line
-				syllable := Syllable{
-					Text:      lineText,
-					StartTime: strconv.FormatInt(startMs, 10),
-					EndTime:   strconv.FormatInt(endMs, 10),
-				}
-
 				line := Line{
 					StartTimeMs: strconv.FormatInt(startMs, 10),
 					EndTimeMs:   strconv.FormatInt(endMs, 10),
 					DurationMs:  strconv.FormatInt(durationMs, 10),
 					Words:       lineText,
-					Syllables:   []Syllable{syllable},
+					Syllables:   []Syllable{}, // Empty for line-level lyrics
 					Agent:       agent,
 				}
 
