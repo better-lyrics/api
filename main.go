@@ -38,15 +38,8 @@ type CacheDumpResponse struct {
 
 type InFlightRequest struct {
 	wg     sync.WaitGroup
-	result *LyricsResult
+	result string
 	err    error
-}
-
-type LyricsResult struct {
-	Lyrics        []ttml.Line
-	IsRtlLanguage bool
-	Language      string
-	TimingType    string
 }
 
 func init() {
@@ -104,22 +97,6 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
-func isRTLLanguage(langCode string) bool {
-	rtlLanguages := map[string]bool{
-		"ar": true, // Arabic
-		"fa": true, // Persian (Farsi)
-		"he": true, // Hebrew
-		"ur": true, // Urdu
-		"ps": true, // Pashto
-		"sd": true, // Sindhi
-		"ug": true, // Uyghur
-		"yi": true, // Yiddish
-		"ku": true, // Kurdish (some dialects)
-		"dv": true, // Divehi (Maldivian)
-	}
-	return rtlLanguages[langCode]
-}
-
 func getCache(key string) (string, bool) {
 	return persistentCache.Get(key)
 }
@@ -143,18 +120,11 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	query := songName + " " + artistName + " " + albumName
 	cacheKey := fmt.Sprintf("ttml_lyrics:%s", query)
 
-	if cachedLyrics, ok := getCache(cacheKey); ok {
-		log.Info("[Cache:Lyrics] Found cached TTML lyrics")
+	if cachedTTML, ok := getCache(cacheKey); ok {
+		log.Info("[Cache:Lyrics] Found cached TTML")
 		w.Header().Set("Content-Type", "application/json")
-		var cachedData map[string]interface{}
-		json.Unmarshal([]byte(cachedLyrics), &cachedData)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":         nil,
-			"source":        "TTML",
-			"lyrics":        cachedData["lyrics"],
-			"isRtlLanguage": cachedData["isRtlLanguage"],
-			"language":      cachedData["language"],
-			"type":          cachedData["type"],
+			"ttml": cachedTTML,
 		})
 		return
 	}
@@ -170,20 +140,14 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"error":  req.err.Error(),
-				"source": "TTML",
+				"error": req.err.Error(),
 			})
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":         nil,
-			"source":        "TTML",
-			"lyrics":        req.result.Lyrics,
-			"isRtlLanguage": req.result.IsRtlLanguage,
-			"language":      req.result.Language,
-			"type":          req.result.TimingType,
+			"ttml": req.result,
 		})
 		return
 	}
@@ -196,67 +160,39 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		})
 	}()
 
-	lyrics, isRtlLanguage, language, timingType, rawTTML, err := ttml.FetchTTMLLyrics(songName, artistName, albumName)
+	ttmlString, err := ttml.FetchTTMLLyrics(songName, artistName, albumName)
 
 	req.err = err
 	if err == nil {
-		req.result = &LyricsResult{
-			Lyrics:        lyrics,
-			IsRtlLanguage: isRtlLanguage,
-			Language:      language,
-			TimingType:    timingType,
-		}
+		req.result = ttmlString
 	}
+
 	if err != nil {
-		log.Errorf("Error fetching TTML lyrics: %v", err)
+		log.Errorf("Error fetching TTML: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-
-		response := map[string]interface{}{
-			"error":  err.Error(),
-			"source": "TTML",
-		}
-
-		if rawTTML != "" {
-			response["rawTTML"] = rawTTML
-		}
-
-		json.NewEncoder(w).Encode(response)
-		return
-	}
-
-	if lyrics == nil || len(lyrics) == 0 {
-		log.Warnf("No lyrics found for: %s", query)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":  "Lyrics not available for this track",
-			"source": "TTML",
+			"error": err.Error(),
 		})
 		return
 	}
 
-	log.Infof("[Cache:Lyrics] Caching TTML lyrics for: %s", query)
-	cacheValue, err := json.Marshal(map[string]interface{}{
-		"lyrics":        lyrics,
-		"isRtlLanguage": isRtlLanguage,
-		"language":      language,
-		"type":          timingType,
-	})
-	if err != nil {
-		log.Errorf("[Cache:Lyrics] Failed to marshal cache value: %v", err)
-	} else {
-		setCache(cacheKey, string(cacheValue))
+	if ttmlString == "" {
+		log.Warnf("No TTML found for: %s", query)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "Lyrics not available for this track",
+		})
+		return
 	}
+
+	log.Infof("[Cache:Lyrics] Caching TTML for: %s", query)
+	setCache(cacheKey, ttmlString)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error":         nil,
-		"source":        "TTML",
-		"lyrics":        lyrics,
-		"isRtlLanguage": isRtlLanguage,
-		"language":      language,
-		"type":          timingType,
+		"ttml": ttmlString,
 	})
 }
 

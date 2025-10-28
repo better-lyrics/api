@@ -7,8 +7,8 @@ import (
 )
 
 // FetchTTMLLyrics is the main function to fetch TTML API lyrics
-// Returns: lyrics, isRTL, language, timingType, rawTTML (only on parsing errors), error
-func FetchTTMLLyrics(songName, artistName, albumName string) ([]Line, bool, string, string, string, error) {
+// Returns: raw TTML string, error
+func FetchTTMLLyrics(songName, artistName, albumName string) (string, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
@@ -19,7 +19,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string) ([]Line, bool, stri
 	}
 
 	if songName == "" && artistName == "" {
-		return nil, false, "", "", "", fmt.Errorf("song name and artist name cannot both be empty")
+		return "", fmt.Errorf("song name and artist name cannot both be empty")
 	}
 
 	query := songName + " " + artistName
@@ -30,42 +30,25 @@ func FetchTTMLLyrics(songName, artistName, albumName string) ([]Line, bool, stri
 
 	track, err := searchTrack(query, storefront)
 	if err != nil {
-		return nil, false, "", "", "", fmt.Errorf("search failed: %v", err)
+		return "", fmt.Errorf("search failed: %v", err)
 	}
 
 	if track == nil {
-		return nil, false, "", "", "", fmt.Errorf("no track found for query: %s", query)
+		return "", fmt.Errorf("no track found for query: %s", query)
 	}
 
 	log.Infof("Found track: %s by %s (ID: %s)", track.Attributes.Name, track.Attributes.ArtistName, track.ID)
 
 	ttml, err := fetchLyricsTTML(track.ID, storefront)
 	if err != nil {
-		return nil, false, "", "", "", fmt.Errorf("failed to fetch TTML: %v", err)
+		return "", fmt.Errorf("failed to fetch TTML: %v", err)
 	}
 
 	if ttml == "" {
-		return nil, false, "", "", "", fmt.Errorf("TTML content is empty")
+		return "", fmt.Errorf("TTML content is empty")
 	}
 
-	lines, timingType, err := parseTTMLToLines(ttml)
-	if err != nil {
-		// Return raw TTML for debugging parsing errors
-		return nil, false, "", "", ttml, fmt.Errorf("failed to parse TTML: %v", err)
-	}
+	log.Infof("Successfully fetched TTML from API")
 
-	if len(lines) == 0 {
-		// Return raw TTML for debugging when no lines extracted
-		return nil, false, "", timingType, ttml, fmt.Errorf("no lines extracted from TTML")
-	}
-
-	language := detectLanguageFromTTML(ttml)
-	if language == "" {
-		language = "en" // Default to English
-	}
-	isRTL := IsRTLLanguage(language)
-
-	log.Infof("Successfully parsed %d lines from TTML API", len(lines))
-
-	return lines, isRTL, language, timingType, "", nil
+	return ttml, nil
 }
