@@ -122,14 +122,102 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 			log.Debugf("[TTML Parser]   Processing paragraph %d: begin=%s, end=%s, spans=%d", i, para.Begin, para.End, len(para.Spans))
 
 			if len(para.Spans) > 0 {
+				// Extract full paragraph text (with HTML tags removed)
+				re := regexp.MustCompile(`<[^>]+>`)
+				fullText := re.ReplaceAllString(para.Text, "")
+				fullText = strings.TrimSpace(fullText)
+
 				var syllables []Syllable
-				var fullText string
 				var earliestTime int64 = -1
 				var latestEndTime int64 = 0
+				var wordsIndex int = 0
 
 				for j, span := range para.Spans {
-					wordText := strings.TrimSpace(span.Text)
-					if wordText == "" {
+					// Check if this span has nested spans (background vocals structure)
+					if len(span.NestedSpans) > 0 && span.Role == "x-bg" {
+						// Process nested spans with background flag
+						for k, nestedSpan := range span.NestedSpans {
+							syllableText := strings.TrimSpace(nestedSpan.Text)
+							if syllableText == "" {
+								continue
+							}
+
+							startMs, err := parseTTMLTime(nestedSpan.Begin)
+							if err != nil {
+								log.Warnf("[TTML Parser] Failed to parse nested span start time %s: %v", nestedSpan.Begin, err)
+								continue
+							}
+
+							endMs, err := parseTTMLTime(nestedSpan.End)
+							if err != nil {
+								log.Warnf("[TTML Parser] Failed to parse nested span end time %s: %v", nestedSpan.End, err)
+								continue
+							}
+
+							if earliestTime == -1 || startMs < earliestTime {
+								earliestTime = startMs
+							}
+							if endMs > latestEndTime {
+								latestEndTime = endMs
+							}
+
+							// Find where this syllable appears in the full text
+							nextWordIndex := strings.Index(fullText[wordsIndex:], syllableText)
+							if nextWordIndex < 0 {
+								log.Errorf("[TTML Parser] Error parsing timings in paragraph %d, span %d, nested %d: syllable '%s' not found in remaining text starting at index %d", i, j, k, syllableText, wordsIndex)
+								break
+							}
+							nextWordIndex += wordsIndex // Convert relative index to absolute
+
+							// If there's gap text before this syllable, add it as zero-duration
+							if nextWordIndex-wordsIndex > 0 {
+								extraText := fullText[wordsIndex:nextWordIndex]
+								log.Debugf("[TTML Parser]   Found gap text: '%s'", extraText)
+
+								// Use timing and background status from first syllable or current if first
+								var gapStartTime int64
+								var gapIsBackground bool
+								if len(syllables) > 0 {
+									// Use the start time and background status of the FIRST syllable
+									firstStartMs, _ := strconv.ParseInt(syllables[0].StartTime, 10, 64)
+									gapStartTime = firstStartMs
+									gapIsBackground = syllables[0].IsBackground
+								} else {
+									// First syllable, use current syllable's start time and true for background
+									gapStartTime = startMs
+									gapIsBackground = true
+								}
+
+								gapSyllable := Syllable{
+									Text:         extraText,
+									StartTime:    strconv.FormatInt(gapStartTime, 10),
+									EndTime:      strconv.FormatInt(gapStartTime, 10), // Zero duration
+									IsBackground: gapIsBackground,
+								}
+								syllables = append(syllables, gapSyllable)
+								wordsIndex = nextWordIndex
+							} else {
+								log.Debugf("[TTML Parser]   No gap text before syllable")
+							}
+
+							// Add the actual syllable with background flag
+							syllable := Syllable{
+								Text:         syllableText,
+								StartTime:    strconv.FormatInt(startMs, 10),
+								EndTime:      strconv.FormatInt(endMs, 10),
+								IsBackground: true, // Background vocal
+							}
+							syllables = append(syllables, syllable)
+							wordsIndex += len(syllableText)
+
+							log.Debugf("[TTML Parser]   Nested span %d.%d: '%s' [%s - %s] bg=true", j, k, syllableText, nestedSpan.Begin, nestedSpan.End)
+						}
+						continue
+					}
+
+					// Regular span processing (non-background)
+					syllableText := strings.TrimSpace(span.Text)
+					if syllableText == "" {
 						continue
 					}
 
@@ -152,33 +240,64 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 						latestEndTime = endMs
 					}
 
-					// Check if this is a background vocal
+					// Check if this is a background vocal (legacy format)
 					isBackground := span.Role == "x-bg"
 
+					// Find where this syllable appears in the full text
+					nextWordIndex := strings.Index(fullText[wordsIndex:], syllableText)
+					if nextWordIndex < 0 {
+						log.Errorf("[TTML Parser] Error parsing timings in paragraph %d, span %d: syllable '%s' not found in remaining text starting at index %d", i, j, syllableText, wordsIndex)
+						break
+					}
+					nextWordIndex += wordsIndex // Convert relative index to absolute
+
+					// If there's gap text before this syllable, add it as zero-duration
+					if nextWordIndex-wordsIndex > 0 {
+						extraText := fullText[wordsIndex:nextWordIndex]
+						log.Debugf("[TTML Parser]   Found gap text: '%s'", extraText)
+
+						// Use timing and background status from first syllable or current if first
+						var gapStartTime int64
+						var gapIsBackground bool
+						if len(syllables) > 0 {
+							// Use the start time and background status of the FIRST syllable
+							firstStartMs, _ := strconv.ParseInt(syllables[0].StartTime, 10, 64)
+							gapStartTime = firstStartMs
+							gapIsBackground = syllables[0].IsBackground
+						} else {
+							// First syllable, use current syllable's start time and false for background
+							gapStartTime = startMs
+							gapIsBackground = false
+						}
+
+						gapSyllable := Syllable{
+							Text:         extraText,
+							StartTime:    strconv.FormatInt(gapStartTime, 10),
+							EndTime:      strconv.FormatInt(gapStartTime, 10), // Zero duration
+							IsBackground: gapIsBackground,
+						}
+						syllables = append(syllables, gapSyllable)
+						wordsIndex = nextWordIndex
+					} else {
+						log.Debugf("[TTML Parser]   No gap text before syllable")
+					}
+
+					// Add the actual syllable
 					syllable := Syllable{
-						Text:         wordText,
+						Text:         syllableText,
 						StartTime:    strconv.FormatInt(startMs, 10),
 						EndTime:      strconv.FormatInt(endMs, 10),
 						IsBackground: isBackground,
 					}
 					syllables = append(syllables, syllable)
+					wordsIndex += len(syllableText)
 
-					if j > 0 {
-						fullText += " "
-					}
-					fullText += wordText
-
-					log.Debugf("[TTML Parser]   Span %d: '%s' [%s - %s] role='%s' bg=%v", j, wordText, span.Begin, span.End, span.Role, isBackground)
+					log.Debugf("[TTML Parser]   Span %d: '%s' [%s - %s] role='%s' bg=%v", j, syllableText, span.Begin, span.End, span.Role, isBackground)
 				}
 
 				if len(syllables) == 0 {
 					log.Warnf("[TTML Parser] Skipping paragraph %d - no valid syllables extracted", i)
 					continue
-				}
-
-				// Add spaces to all syllables except the last one
-				for k := 0; k < len(syllables)-1; k++ {
-					syllables[k].Text += " "
 				}
 
 				duration := latestEndTime - earliestTime

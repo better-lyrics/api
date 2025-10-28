@@ -119,8 +119,9 @@ type TTMLParagraph struct {
 }
 
 type TTMLSpan struct {
-	Begin string `xml:"begin,attr"`
-	End   string `xml:"end,attr"`
-	Role  string `xml:"role,attr"`
-	Text  string `xml:",chardata"`
+	Begin       string     `xml:"begin,attr"`
+	End         string     `xml:"end,attr"`
+	Role        string     `xml:"role,attr"`
+	Text        string     `xml:",chardata"`
+	NestedSpans []TTMLSpan `xml:"span"` // For background vocals with nested structure
 }
