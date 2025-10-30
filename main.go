@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"lyrics-api-go/cache"
@@ -19,6 +20,13 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rs/cors"
 	log "github.com/sirupsen/logrus"
+)
+
+type contextKey string
+
+const (
+	cacheOnlyModeKey contextKey = "cacheOnlyMode"
+	rateLimitTypeKey contextKey = "rateLimitType"
 )
 
 var conf = config.Get()
@@ -57,7 +65,8 @@ func main() {
 	// Initialize persistent cache
 	var err error
 	cachePath := getEnvOrDefault("CACHE_DB_PATH", "./cache.db")
-	persistentCache, err = cache.NewPersistentCache(cachePath, conf.FeatureFlags.CacheCompression)
+	backupPath := getEnvOrDefault("CACHE_BACKUP_PATH", "./backups")
+	persistentCache, err = cache.NewPersistentCache(cachePath, backupPath, conf.FeatureFlags.CacheCompression)
 	if err != nil {
 		log.Fatalf("Failed to initialize cache: %v", err)
 	}
@@ -68,6 +77,7 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/getLyrics", getLyrics)
 	router.HandleFunc("/cache", getCacheDump)
+	router.HandleFunc("/cache/backup", backupCache)
 	router.HandleFunc("/cache/clear", clearCache)
 	router.HandleFunc("/test-notifications", testNotifications)
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +97,12 @@ func main() {
 		AllowCredentials: true,
 	})
 
-	limiter := middleware.NewIPRateLimiter(rate.Limit(conf.Configuration.RateLimitPerSecond), conf.Configuration.RateLimitBurstLimit)
+	limiter := middleware.NewIPRateLimiter(
+		rate.Limit(conf.Configuration.RateLimitPerSecond),
+		conf.Configuration.RateLimitBurstLimit,
+		rate.Limit(conf.Configuration.CachedRateLimitPerSecond),
+		conf.Configuration.CachedRateLimitBurstLimit,
+	)
 
 	loggedRouter := middleware.LoggingMiddleware(router)
 	corsHandler := c.Handler(loggedRouter)
@@ -120,11 +135,35 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	query := songName + " " + artistName + " " + albumName
 	cacheKey := fmt.Sprintf("ttml_lyrics:%s", query)
 
+	// Check if we're in cache-only mode (rate limit tier 2)
+	cacheOnlyMode, _ := r.Context().Value(cacheOnlyModeKey).(bool)
+	rateLimitType, _ := r.Context().Value(rateLimitTypeKey).(string)
+
+	// Check cache first
 	if cachedTTML, ok := getCache(cacheKey); ok {
 		log.Info("[Cache:Lyrics] Found cached TTML")
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache-Status", "HIT")
+		if rateLimitType != "" {
+			w.Header().Set("X-RateLimit-Type", rateLimitType)
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ttml": cachedTTML,
+		})
+		return
+	}
+
+	// If in cache-only mode and no cache found, return 429
+	if cacheOnlyMode {
+		log.Warnf("[Cache:Lyrics] Cache-only mode but no cache found for: %s", query)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache-Status", "MISS")
+		w.Header().Set("X-RateLimit-Type", "cached")
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "Rate limit exceeded. This request requires cached data, but no cache is available for this query.",
+			"message": "Please try again later or reduce your request rate.",
 		})
 		return
 	}
@@ -138,6 +177,10 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 		if req.err != nil {
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Status", "MISS")
+			if rateLimitType != "" {
+				w.Header().Set("X-RateLimit-Type", rateLimitType)
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"error": req.err.Error(),
@@ -146,6 +189,10 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache-Status", "HIT")
+		if rateLimitType != "" {
+			w.Header().Set("X-RateLimit-Type", rateLimitType)
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ttml": req.result,
 		})
@@ -170,6 +217,10 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Errorf("Error fetching TTML: %v", err)
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache-Status", "MISS")
+		if rateLimitType != "" {
+			w.Header().Set("X-RateLimit-Type", rateLimitType)
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": err.Error(),
@@ -180,6 +231,10 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	if ttmlString == "" {
 		log.Warnf("No TTML found for: %s", query)
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache-Status", "MISS")
+		if rateLimitType != "" {
+			w.Header().Set("X-RateLimit-Type", rateLimitType)
+		}
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": "Lyrics not available for this track",
@@ -191,6 +246,10 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	setCache(cacheKey, ttmlString)
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Cache-Status", "MISS")
+	if rateLimitType != "" {
+		w.Header().Set("X-RateLimit-Type", rateLimitType)
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ttml": ttmlString,
 	})
@@ -352,38 +411,93 @@ func getCacheDump(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(cacheDumpResponse)
 }
 
+func backupCache(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	backupPath, err := persistentCache.Backup()
+	if err != nil {
+		log.Errorf("[Cache:Backup] Failed to create backup: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": fmt.Sprintf("Failed to create backup: %v", err),
+		})
+		return
+	}
+
+	log.Infof("[Cache:Backup] Backup created successfully at: %s", backupPath)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":     "Backup created successfully",
+		"backup_path": backupPath,
+	})
+}
+
 func clearCache(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	if err := persistentCache.Clear(); err != nil {
-		log.Errorf("[Cache:Clear] Failed to clear cache: %v", err)
+	backupPath, err := persistentCache.BackupAndClear()
+	if err != nil {
+		log.Errorf("[Cache:Clear] Failed to backup and clear cache: %v", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error": fmt.Sprintf("Failed to clear cache: %v", err),
+			"error": fmt.Sprintf("Failed to backup and clear cache: %v", err),
 		})
 		return
 	}
 
-	log.Info("[Cache:Clear] Cache cleared successfully")
+	log.Infof("[Cache:Clear] Cache cleared successfully, backup at: %s", backupPath)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "Cache cleared successfully",
+		"message":     "Cache cleared successfully",
+		"backup_path": backupPath,
 	})
 }
 
 func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		limiter := limiter.GetLimiter(r.RemoteAddr)
-		if !limiter.Allow() {
-			http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+		limiters := limiter.GetLimiter(r.RemoteAddr)
+
+		// Try normal tier first
+		if limiters.Normal.Allow() {
+			// Normal tier allows this request
+			remainingNormal := limiters.GetNormalTokens()
+			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limiter.GetNormalLimit()))
+			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remainingNormal))
+			w.Header().Set("X-RateLimit-Type", "normal")
+			ctx := context.WithValue(r.Context(), rateLimitTypeKey, "normal")
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		// Normal tier exceeded, try cached tier
+		if limiters.Cached.Allow() {
+			// Cached tier allows, but only for cached responses
+			remainingCached := limiters.GetCachedTokens()
+			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limiter.GetCachedLimit()))
+			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remainingCached))
+			w.Header().Set("X-RateLimit-Type", "cached")
+			log.Debugf("[RateLimit] IP %s exceeded normal tier, using cached tier", r.RemoteAddr)
+			ctx := context.WithValue(r.Context(), cacheOnlyModeKey, true)
+			ctx = context.WithValue(ctx, rateLimitTypeKey, "cached")
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		// Both tiers exceeded
+		log.Warnf("[RateLimit] IP %s exceeded both rate limit tiers", r.RemoteAddr)
+		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limiter.GetCachedLimit()))
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Type", "exceeded")
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
 	})
 }
 

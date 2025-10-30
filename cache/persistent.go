@@ -3,10 +3,12 @@ package cache
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"lyrics-api-go/utils"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	bolt "go.etcd.io/bbolt"
@@ -16,9 +18,10 @@ const bucketName = "cache"
 
 // PersistentCache wraps BoltDB with an in-memory cache for fast access
 type PersistentCache struct {
-	db                *bolt.DB
-	memCache          sync.Map
-	dbPath            string
+	db                 *bolt.DB
+	memCache           sync.Map
+	dbPath             string
+	backupPath         string
 	compressionEnabled bool
 }
 
@@ -28,7 +31,7 @@ type CacheEntry struct {
 }
 
 // NewPersistentCache creates a new persistent cache
-func NewPersistentCache(dbPath string, compressionEnabled bool) (*PersistentCache, error) {
+func NewPersistentCache(dbPath string, backupPath string, compressionEnabled bool) (*PersistentCache, error) {
 	// Create directory if it doesn't exist (needed for Railway volumes)
 	dir := filepath.Dir(dbPath)
 
@@ -42,6 +45,12 @@ func NewPersistentCache(dbPath string, compressionEnabled bool) (*PersistentCach
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create cache directory: %v", err)
 	}
+
+	// Create backup directory
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create backup directory: %v", err)
+	}
+	log.Infof("[Cache:Init] Backup directory set to: %s", backupPath)
 
 	// Check if database file already exists
 	if info, err := os.Stat(dbPath); err == nil {
@@ -66,8 +75,9 @@ func NewPersistentCache(dbPath string, compressionEnabled bool) (*PersistentCach
 	}
 
 	pc := &PersistentCache{
-		db:                db,
-		dbPath:            dbPath,
+		db:                 db,
+		dbPath:             dbPath,
+		backupPath:         backupPath,
 		compressionEnabled: compressionEnabled,
 	}
 
@@ -258,6 +268,93 @@ func (pc *PersistentCache) Stats() (numKeys int, sizeInKB int) {
 	})
 	sizeInKB = sizeInKB / 1024
 	return
+}
+
+// Backup creates a backup of the cache database file
+// Returns the backup file path
+func (pc *PersistentCache) Backup() (string, error) {
+	// Generate backup filename with timestamp
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	backupFileName := fmt.Sprintf("cache_backup_%s.db", timestamp)
+	backupFilePath := filepath.Join(pc.backupPath, backupFileName)
+
+	log.Infof("[Cache:Backup] Creating backup at: %s", backupFilePath)
+
+	// Close the database temporarily to ensure all data is flushed
+	if err := pc.db.Close(); err != nil {
+		return "", fmt.Errorf("failed to close database for backup: %v", err)
+	}
+
+	// Copy the database file to backup location
+	if err := copyFile(pc.dbPath, backupFilePath); err != nil {
+		// Try to reopen the database even if backup failed
+		pc.reopenDatabase()
+		return "", fmt.Errorf("failed to copy database file: %v", err)
+	}
+
+	// Reopen the database
+	if err := pc.reopenDatabase(); err != nil {
+		return "", fmt.Errorf("failed to reopen database after backup: %v", err)
+	}
+
+	log.Infof("[Cache:Backup] Backup created successfully: %s", backupFilePath)
+	return backupFilePath, nil
+}
+
+// BackupAndClear creates a backup of the cache and then clears it
+func (pc *PersistentCache) BackupAndClear() (string, error) {
+	// Create backup first
+	backupPath, err := pc.Backup()
+	if err != nil {
+		return "", fmt.Errorf("failed to create backup: %v", err)
+	}
+
+	// Clear the cache
+	if err := pc.Clear(); err != nil {
+		return backupPath, fmt.Errorf("backup created but failed to clear cache: %v", err)
+	}
+
+	log.Infof("[Cache:Clear] Cache cleared successfully (backup: %s)", backupPath)
+	return backupPath, nil
+}
+
+// reopenDatabase reopens the database connection
+func (pc *PersistentCache) reopenDatabase() error {
+	db, err := bolt.Open(pc.dbPath, 0600, nil)
+	if err != nil {
+		return fmt.Errorf("failed to reopen database: %v", err)
+	}
+	pc.db = db
+
+	// Reload memory cache
+	if err := pc.loadToMemory(); err != nil {
+		log.Warnf("[Cache] Failed to reload cache to memory: %v", err)
+	}
+
+	return nil
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	if err != nil {
+		return err
+	}
+
+	// Sync to ensure data is written to disk
+	return destFile.Sync()
 }
 
 // Close closes the database connection
