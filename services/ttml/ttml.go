@@ -34,7 +34,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		log.Infof("Searching TTML API for: %s", query)
 	}
 
-	track, err := searchTrack(query, storefront, durationMs)
+	track, err := searchTrack(query, storefront, songName, artistName, albumName, durationMs)
 	if err != nil {
 		return "", fmt.Errorf("search failed: %v", err)
 	}

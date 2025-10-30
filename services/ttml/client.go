@@ -5,12 +5,148 @@ import (
 	"fmt"
 	"io/ioutil"
 	"lyrics-api-go/config"
+	"math"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 )
+
+// =============================================================================
+// STRING SIMILARITY & SCORING
+// =============================================================================
+
+// normalizeString normalizes a string for comparison
+func normalizeString(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// stringSimilarity calculates similarity between two strings (0.0 to 1.0)
+// Uses a combination of exact match, contains, and character overlap
+func stringSimilarity(s1, s2 string) float64 {
+	if s1 == "" || s2 == "" {
+		return 0.0
+	}
+
+	n1 := normalizeString(s1)
+	n2 := normalizeString(s2)
+
+	// Exact match
+	if n1 == n2 {
+		return 1.0
+	}
+
+	// One contains the other
+	if strings.Contains(n1, n2) || strings.Contains(n2, n1) {
+		shorter := len(n1)
+		if len(n2) < shorter {
+			shorter = len(n2)
+		}
+		longer := len(n1)
+		if len(n2) > longer {
+			longer = len(n2)
+		}
+		return 0.7 + (0.3 * float64(shorter) / float64(longer))
+	}
+
+	// Calculate character overlap ratio
+	chars1 := make(map[rune]int)
+	chars2 := make(map[rune]int)
+
+	for _, c := range n1 {
+		chars1[c]++
+	}
+	for _, c := range n2 {
+		chars2[c]++
+	}
+
+	overlap := 0
+	for c, count1 := range chars1 {
+		if count2, exists := chars2[c]; exists {
+			if count1 < count2 {
+				overlap += count1
+			} else {
+				overlap += count2
+			}
+		}
+	}
+
+	totalChars := len(n1) + len(n2)
+	if totalChars == 0 {
+		return 0.0
+	}
+
+	return float64(overlap*2) / float64(totalChars)
+}
+
+// durationScore calculates score based on duration difference (0.0 to 1.0)
+// Closer durations get higher scores
+func durationScore(trackDurationMs, targetDurationMs int) float64 {
+	if targetDurationMs <= 0 {
+		return 0.0 // No score if no target duration provided
+	}
+
+	diff := float64(trackDurationMs - targetDurationMs)
+	if diff < 0 {
+		diff = -diff
+	}
+
+	// Use exponential decay: score decreases as difference increases
+	// A 5-second difference gives ~0.8 score, 10 seconds gives ~0.6, 30 seconds gives ~0.2
+	score := math.Exp(-diff / 20000.0) // 20000ms = 20 seconds half-life
+	return score
+}
+
+// TrackScore represents the scoring breakdown for a track
+type TrackScore struct {
+	Track         *Track
+	TotalScore    float64
+	DurationScore float64
+	NameScore     float64
+	ArtistScore   float64
+	AlbumScore    float64
+}
+
+// scoreTrack calculates a weighted score for a track based on multiple factors
+func scoreTrack(track *Track, targetSongName, targetArtistName, targetAlbumName string, targetDurationMs int) TrackScore {
+	// Weights for each factor (must sum to 1.0)
+	const (
+		durationWeight = 0.20 // 20% weight for duration match
+		nameWeight     = 0.40 // 40% weight for song name match
+		artistWeight   = 0.30 // 30% weight for artist name match
+		albumWeight    = 0.10 // 10% weight for album name match
+	)
+
+	score := TrackScore{Track: track}
+
+	// Calculate individual scores
+	score.DurationScore = durationScore(track.Attributes.DurationInMillis, targetDurationMs)
+	score.NameScore = stringSimilarity(track.Attributes.Name, targetSongName)
+	score.ArtistScore = stringSimilarity(track.Attributes.ArtistName, targetArtistName)
+	score.AlbumScore = stringSimilarity(track.Attributes.AlbumName, targetAlbumName)
+
+	// Calculate weighted total score
+	// Only include duration in score if target duration was provided
+	if targetDurationMs > 0 {
+		score.TotalScore = (score.DurationScore * durationWeight) +
+			(score.NameScore * nameWeight) +
+			(score.ArtistScore * artistWeight) +
+			(score.AlbumScore * albumWeight)
+	} else {
+		// Redistribute duration weight to other factors when no duration provided
+		adjustedNameWeight := nameWeight + (durationWeight * 0.5)
+		adjustedArtistWeight := artistWeight + (durationWeight * 0.35)
+		adjustedAlbumWeight := albumWeight + (durationWeight * 0.15)
+
+		score.TotalScore = (score.NameScore * adjustedNameWeight) +
+			(score.ArtistScore * adjustedArtistWeight) +
+			(score.AlbumScore * adjustedAlbumWeight)
+	}
+
+	return score
+}
 
 // =============================================================================
 // HTTP REQUEST HANDLING
@@ -64,7 +200,7 @@ func makeAPIRequest(urlStr string, retries int) (*http.Response, error) {
 // API FUNCTIONS
 // =============================================================================
 
-func searchTrack(query string, storefront string, durationMs int) (*Track, error) {
+func searchTrack(query string, storefront string, songName, artistName, albumName string, durationMs int) (*Track, error) {
 	if query == "" {
 		return nil, fmt.Errorf("empty search query")
 	}
@@ -106,34 +242,42 @@ func searchTrack(query string, storefront string, durationMs int) (*Track, error
 
 	tracks := searchResp.Results.Songs.Data
 
-	// If duration provided, find the track with closest duration
-	if durationMs > 0 {
-		var bestTrack *Track
-		minDiff := -1
+	// If we have any matching criteria (duration, name, artist, album), use scoring system
+	if durationMs > 0 || songName != "" || artistName != "" || albumName != "" {
+		var bestScore TrackScore
+		bestScore.TotalScore = -1
 
 		for i := range tracks {
 			track := &tracks[i]
-			diff := track.Attributes.DurationInMillis - durationMs
-			if diff < 0 {
-				diff = -diff
-			}
+			score := scoreTrack(track, songName, artistName, albumName, durationMs)
 
-			if minDiff == -1 || diff < minDiff {
-				minDiff = diff
-				bestTrack = track
-			}
+			// Log detailed scoring for debugging
+			log.Debugf("[Track Score] %s - %s | Total: %.3f (Name: %.3f, Artist: %.3f, Album: %.3f, Duration: %.3f) | Duration: %dms",
+				track.Attributes.Name,
+				track.Attributes.ArtistName,
+				score.TotalScore,
+				score.NameScore,
+				score.ArtistScore,
+				score.AlbumScore,
+				score.DurationScore,
+				track.Attributes.DurationInMillis)
 
-			log.Debugf("[Track Match] %s - %s: %dms (diff: %dms)",
-				track.Attributes.Name, track.Attributes.ArtistName,
-				track.Attributes.DurationInMillis, diff)
+			if score.TotalScore > bestScore.TotalScore {
+				bestScore = score
+			}
 		}
 
-		if bestTrack != nil {
-			return bestTrack, nil
+		if bestScore.Track != nil {
+			log.Infof("[Best Match] %s - %s (Score: %.3f)",
+				bestScore.Track.Attributes.Name,
+				bestScore.Track.Attributes.ArtistName,
+				bestScore.TotalScore)
+			return bestScore.Track, nil
 		}
 	}
 
-	// Return the first (best) match when no duration filter
+	// Fallback: return the first (best) match from API
+	log.Debugf("[Fallback] Using first search result")
 	return &tracks[0], nil
 }
 

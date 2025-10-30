@@ -83,7 +83,14 @@ func main() {
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"help": "Use /getLyrics to get the lyrics of a song. Provide the song name and artist name as query parameters. Example: /getLyrics?s=Shape%20of%20You&a=Ed%20Sheeran",
+			"help": "Use /getLyrics to get the lyrics of a song. Provide the song name and artist name as query parameters. Example: /getLyrics?s=Shape%20of%20You&a=Ed%20Sheeran&d=234",
+			"parameters": map[string]string{
+				"s, song, songName":       "Song name (required)",
+				"a, artist, artistName":   "Artist name (required)",
+				"al, album, albumName":    "Album name (optional, improves matching)",
+				"d, duration":             "Duration in seconds (optional, improves matching)",
+			},
+			"notes": "The API uses a weighted scoring system to find the best match based on song name, artist, album, and duration. Providing more parameters improves accuracy.",
 		})
 	})
 
