@@ -64,7 +64,7 @@ func makeAPIRequest(urlStr string, retries int) (*http.Response, error) {
 // API FUNCTIONS
 // =============================================================================
 
-func searchTrack(query string, storefront string) (*Track, error) {
+func searchTrack(query string, storefront string, durationMs int) (*Track, error) {
 	if query == "" {
 		return nil, fmt.Errorf("empty search query")
 	}
@@ -104,8 +104,37 @@ func searchTrack(query string, storefront string) (*Track, error) {
 		return nil, fmt.Errorf("no tracks found for query: %s", query)
 	}
 
-	// Return the first (best) match
-	return &searchResp.Results.Songs.Data[0], nil
+	tracks := searchResp.Results.Songs.Data
+
+	// If duration provided, find the track with closest duration
+	if durationMs > 0 {
+		var bestTrack *Track
+		minDiff := -1
+
+		for i := range tracks {
+			track := &tracks[i]
+			diff := track.Attributes.DurationInMillis - durationMs
+			if diff < 0 {
+				diff = -diff
+			}
+
+			if minDiff == -1 || diff < minDiff {
+				minDiff = diff
+				bestTrack = track
+			}
+
+			log.Debugf("[Track Match] %s - %s: %dms (diff: %dms)",
+				track.Attributes.Name, track.Attributes.ArtistName,
+				track.Attributes.DurationInMillis, diff)
+		}
+
+		if bestTrack != nil {
+			return bestTrack, nil
+		}
+	}
+
+	// Return the first (best) match when no duration filter
+	return &tracks[0], nil
 }
 
 func fetchLyricsTTML(trackID string, storefront string) (string, error) {

@@ -7,8 +7,9 @@ import (
 )
 
 // FetchTTMLLyrics is the main function to fetch TTML API lyrics
+// durationMs is optional (0 means no duration filter), used to find closest matching track by duration
 // Returns: raw TTML string, error
-func FetchTTMLLyrics(songName, artistName, albumName string) (string, error) {
+func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (string, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
@@ -26,9 +27,14 @@ func FetchTTMLLyrics(songName, artistName, albumName string) (string, error) {
 	if albumName != "" {
 		query += " " + albumName
 	}
-	log.Infof("Searching TTML API for: %s", query)
 
-	track, err := searchTrack(query, storefront)
+	if durationMs > 0 {
+		log.Infof("Searching TTML API for: %s (duration: %dms)", query, durationMs)
+	} else {
+		log.Infof("Searching TTML API for: %s", query)
+	}
+
+	track, err := searchTrack(query, storefront, durationMs)
 	if err != nil {
 		return "", fmt.Errorf("search failed: %v", err)
 	}
@@ -37,7 +43,17 @@ func FetchTTMLLyrics(songName, artistName, albumName string) (string, error) {
 		return "", fmt.Errorf("no track found for query: %s", query)
 	}
 
-	log.Infof("Found track: %s by %s (ID: %s)", track.Attributes.Name, track.Attributes.ArtistName, track.ID)
+	if durationMs > 0 {
+		durationDiff := track.Attributes.DurationInMillis - durationMs
+		if durationDiff < 0 {
+			durationDiff = -durationDiff
+		}
+		log.Infof("Found track: %s by %s (ID: %s, duration: %dms, diff: %dms)",
+			track.Attributes.Name, track.Attributes.ArtistName, track.ID,
+			track.Attributes.DurationInMillis, durationDiff)
+	} else {
+		log.Infof("Found track: %s by %s (ID: %s)", track.Attributes.Name, track.Attributes.ArtistName, track.ID)
+	}
 
 	ttml, err := fetchLyricsTTML(track.ID, storefront)
 	if err != nil {

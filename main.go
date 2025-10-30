@@ -126,6 +126,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	songName := r.URL.Query().Get("s") + r.URL.Query().Get("song") + r.URL.Query().Get("songName")
 	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist") + r.URL.Query().Get("artistName")
 	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album") + r.URL.Query().Get("albumName")
+	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
 
 	if songName == "" && artistName == "" {
 		http.Error(w, "Song name or artist name not provided", http.StatusUnprocessableEntity)
@@ -133,6 +134,10 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := songName + " " + artistName + " " + albumName
+	// Include duration in cache key if provided
+	if durationStr != "" {
+		query = query + " " + durationStr + "s"
+	}
 	cacheKey := fmt.Sprintf("ttml_lyrics:%s", query)
 
 	// Check if we're in cache-only mode (rate limit tier 2)
@@ -207,7 +212,14 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		})
 	}()
 
-	ttmlString, err := ttml.FetchTTMLLyrics(songName, artistName, albumName)
+	// Parse duration from seconds to milliseconds
+	var durationMs int
+	if durationStr != "" {
+		fmt.Sscanf(durationStr, "%d", &durationMs)
+		durationMs = durationMs * 1000 // Convert seconds to milliseconds
+	}
+
+	ttmlString, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
 
 	req.err = err
 	if err == nil {
