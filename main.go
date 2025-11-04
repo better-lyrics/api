@@ -47,6 +47,7 @@ type CacheDumpResponse struct {
 type InFlightRequest struct {
 	wg     sync.WaitGroup
 	result string
+	score  float64
 	err    error
 }
 
@@ -161,6 +162,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ttml": cachedTTML,
+			// Score not available for cached responses
 		})
 		return
 	}
@@ -206,7 +208,8 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-RateLimit-Type", rateLimitType)
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ttml": req.result,
+			"ttml":  req.result,
+			"score": req.score,
 		})
 		return
 	}
@@ -226,11 +229,12 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		durationMs = durationMs * 1000 // Convert seconds to milliseconds
 	}
 
-	ttmlString, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
+	ttmlString, score, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
 
 	req.err = err
 	if err == nil {
 		req.result = ttmlString
+		req.score = score
 	}
 
 	if err != nil {
@@ -270,7 +274,8 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Type", rateLimitType)
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ttml": ttmlString,
+		"ttml":  ttmlString,
+		"score": score,
 	})
 }
 

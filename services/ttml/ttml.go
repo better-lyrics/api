@@ -8,8 +8,8 @@ import (
 
 // FetchTTMLLyrics is the main function to fetch TTML API lyrics
 // durationMs is optional (0 means no duration filter), used to find closest matching track by duration
-// Returns: raw TTML string, error
-func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (string, error) {
+// Returns: raw TTML string, similarity score, error
+func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (string, float64, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
@@ -20,7 +20,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 
 	if songName == "" && artistName == "" {
-		return "", fmt.Errorf("song name and artist name cannot both be empty")
+		return "", 0.0, fmt.Errorf("song name and artist name cannot both be empty")
 	}
 
 	query := songName + " " + artistName
@@ -34,13 +34,13 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		log.Infof("Searching TTML API for: %s", query)
 	}
 
-	track, err := searchTrack(query, storefront, songName, artistName, albumName, durationMs)
+	track, score, err := searchTrack(query, storefront, songName, artistName, albumName, durationMs)
 	if err != nil {
-		return "", fmt.Errorf("search failed: %v", err)
+		return "", 0.0, fmt.Errorf("search failed: %v", err)
 	}
 
 	if track == nil {
-		return "", fmt.Errorf("no track found for query: %s", query)
+		return "", 0.0, fmt.Errorf("no track found for query: %s", query)
 	}
 
 	if durationMs > 0 {
@@ -57,14 +57,14 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 
 	ttml, err := fetchLyricsTTML(track.ID, storefront)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch TTML: %v", err)
+		return "", 0.0, fmt.Errorf("failed to fetch TTML: %v", err)
 	}
 
 	if ttml == "" {
-		return "", fmt.Errorf("TTML content is empty")
+		return "", 0.0, fmt.Errorf("TTML content is empty")
 	}
 
-	log.Infof("Successfully fetched TTML from API")
+	log.Infof("Successfully fetched TTML from API (similarity score: %.3f)", score)
 
-	return ttml, nil
+	return ttml, score, nil
 }

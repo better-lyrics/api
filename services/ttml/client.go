@@ -200,9 +200,9 @@ func makeAPIRequest(urlStr string, retries int) (*http.Response, error) {
 // API FUNCTIONS
 // =============================================================================
 
-func searchTrack(query string, storefront string, songName, artistName, albumName string, durationMs int) (*Track, error) {
+func searchTrack(query string, storefront string, songName, artistName, albumName string, durationMs int) (*Track, float64, error) {
 	if query == "" {
-		return nil, fmt.Errorf("empty search query")
+		return nil, 0.0, fmt.Errorf("empty search query")
 	}
 
 	if storefront == "" {
@@ -218,26 +218,26 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 
 	resp, err := makeAPIRequest(searchURL, 0)
 	if err != nil {
-		return nil, fmt.Errorf("search request failed: %v", err)
+		return nil, 0.0, fmt.Errorf("search request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read search response: %v", err)
+		return nil, 0.0, fmt.Errorf("failed to read search response: %v", err)
 	}
 
 	if len(body) == 0 {
-		return nil, fmt.Errorf("empty search response body")
+		return nil, 0.0, fmt.Errorf("empty search response body")
 	}
 
 	var searchResp SearchResponse
 	if err := json.Unmarshal(body, &searchResp); err != nil {
-		return nil, fmt.Errorf("failed to parse search response: %v", err)
+		return nil, 0.0, fmt.Errorf("failed to parse search response: %v", err)
 	}
 
 	if len(searchResp.Results.Songs.Data) == 0 {
-		return nil, fmt.Errorf("no tracks found for query: %s", query)
+		return nil, 0.0, fmt.Errorf("no tracks found for query: %s", query)
 	}
 
 	tracks := searchResp.Results.Songs.Data
@@ -268,17 +268,30 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 		}
 
 		if bestScore.Track != nil {
+			conf := config.Get()
+			minScore := conf.Configuration.MinSimilarityScore
+
+			// Check if the best score meets the minimum threshold
+			if bestScore.TotalScore < minScore {
+				log.Warnf("[Best Match] Score %.3f below threshold %.3f for: %s - %s",
+					bestScore.TotalScore,
+					minScore,
+					bestScore.Track.Attributes.Name,
+					bestScore.Track.Attributes.ArtistName)
+				return nil, 0.0, fmt.Errorf("no matching tracks found (best match score %.3f below threshold %.3f)", bestScore.TotalScore, minScore)
+			}
+
 			log.Infof("[Best Match] %s - %s (Score: %.3f)",
 				bestScore.Track.Attributes.Name,
 				bestScore.Track.Attributes.ArtistName,
 				bestScore.TotalScore)
-			return bestScore.Track, nil
+			return bestScore.Track, bestScore.TotalScore, nil
 		}
 	}
 
-	// Fallback: return the first (best) match from API
+	// Fallback: return the first (best) match from API (no score calculated)
 	log.Debugf("[Fallback] Using first search result")
-	return &tracks[0], nil
+	return &tracks[0], 1.0, nil
 }
 
 func fetchLyricsTTML(trackID string, storefront string) (string, error) {

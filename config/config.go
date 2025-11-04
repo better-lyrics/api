@@ -23,7 +23,8 @@ type Config struct {
 		TTMLStorefront     string `envconfig:"TTML_STOREFRONT" default:"us"`
 		TTMLBaseURL        string `envconfig:"TTML_BASE_URL" default:""`
 		TTMLSearchPath     string `envconfig:"TTML_SEARCH_PATH" default:""`
-		TTMLLyricsPath     string `envconfig:"TTML_LYRICS_PATH" default:""`
+		TTMLLyricsPath     string  `envconfig:"TTML_LYRICS_PATH" default:""`
+		MinSimilarityScore float64 `envconfig:"MIN_SIMILARITY_SCORE" default:"0.6"`
 	}
 
 	FeatureFlags struct {
