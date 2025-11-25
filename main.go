@@ -239,6 +239,25 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		log.Errorf("Error fetching TTML: %v", err)
+
+		// Try fallback cache keys before returning error
+		fallbackKeys := buildFallbackCacheKeys(songName, artistName, albumName, durationStr, cacheKey)
+		for _, fallbackKey := range fallbackKeys {
+			if cachedTTML, ok := getCache(fallbackKey); ok {
+				log.Warnf("[Cache:Lyrics] Backend failed, serving stale cache from key: %s", fallbackKey)
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Cache-Status", "STALE")
+				if rateLimitType != "" {
+					w.Header().Set("X-RateLimit-Type", rateLimitType)
+				}
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"ttml": cachedTTML,
+				})
+				return
+			}
+		}
+
+		// No fallback found, return the error
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		if rateLimitType != "" {
@@ -594,4 +613,30 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// buildFallbackCacheKeys returns a list of cache keys to try when the backend fails.
+// Keys are ordered from most specific to least specific, excluding the original key.
+func buildFallbackCacheKeys(songName, artistName, albumName, durationStr, originalKey string) []string {
+	var keys []string
+
+	// Fallback 1: without duration (if duration was provided)
+	if durationStr != "" {
+		query := songName + " " + artistName + " " + albumName
+		keyWithoutDuration := fmt.Sprintf("ttml_lyrics:%s", query)
+		if keyWithoutDuration != originalKey {
+			keys = append(keys, keyWithoutDuration)
+		}
+	}
+
+	// Fallback 2: without album and duration (if album was provided)
+	if albumName != "" {
+		query := songName + " " + artistName
+		keyWithoutAlbum := fmt.Sprintf("ttml_lyrics:%s ", query)
+		if keyWithoutAlbum != originalKey {
+			keys = append(keys, keyWithoutAlbum)
+		}
+	}
+
+	return keys
 }
