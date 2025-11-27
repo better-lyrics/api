@@ -92,6 +92,12 @@ func NewPersistentCache(dbPath string, backupPath string, compressionEnabled boo
 
 // loadToMemory loads all cache entries from disk to memory
 func (pc *PersistentCache) loadToMemory() error {
+	// Clear existing memory cache first
+	pc.memCache.Range(func(key, value interface{}) bool {
+		pc.memCache.Delete(key)
+		return true
+	})
+
 	count := 0
 	err := pc.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // setupTestCache creates a temporary cache for testing
@@ -422,5 +423,187 @@ func TestCacheWithEmptyValue(t *testing.T) {
 	}
 	if retrieved != value {
 		t.Errorf("Expected empty string, got %q", retrieved)
+	}
+}
+
+func TestListBackups(t *testing.T) {
+	cache, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	// Initially no backups
+	backups, err := cache.ListBackups()
+	if err != nil {
+		t.Fatalf("Failed to list backups: %v", err)
+	}
+	if len(backups) != 0 {
+		t.Errorf("Expected 0 backups initially, got %d", len(backups))
+	}
+
+	// Create some data and backup
+	cache.Set("key1", "value1")
+	backupPath1, err := cache.Backup()
+	if err != nil {
+		t.Fatalf("Failed to create first backup: %v", err)
+	}
+
+	// List should show 1 backup
+	backups, err = cache.ListBackups()
+	if err != nil {
+		t.Fatalf("Failed to list backups: %v", err)
+	}
+	if len(backups) != 1 {
+		t.Errorf("Expected 1 backup, got %d", len(backups))
+	}
+	if backups[0].FilePath != backupPath1 {
+		t.Errorf("Expected backup path %q, got %q", backupPath1, backups[0].FilePath)
+	}
+
+	// Create another backup (wait 1 second to ensure unique timestamp)
+	time.Sleep(1 * time.Second)
+	cache.Set("key2", "value2")
+	_, err = cache.Backup()
+	if err != nil {
+		t.Fatalf("Failed to create second backup: %v", err)
+	}
+
+	// List should show 2 backups
+	backups, err = cache.ListBackups()
+	if err != nil {
+		t.Fatalf("Failed to list backups: %v", err)
+	}
+	if len(backups) != 2 {
+		t.Errorf("Expected 2 backups, got %d", len(backups))
+	}
+
+	// Verify backup info fields
+	for _, b := range backups {
+		if b.FileName == "" {
+			t.Error("Expected non-empty FileName")
+		}
+		if b.FilePath == "" {
+			t.Error("Expected non-empty FilePath")
+		}
+		if b.Size <= 0 {
+			t.Errorf("Expected positive Size, got %d", b.Size)
+		}
+		if b.CreatedAt.IsZero() {
+			t.Error("Expected non-zero CreatedAt")
+		}
+	}
+}
+
+func TestRestoreFromBackup(t *testing.T) {
+	cache, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	// Create initial data
+	cache.Set("original_key", "original_value")
+
+	// Create backup
+	backupPath, err := cache.Backup()
+	if err != nil {
+		t.Fatalf("Failed to create backup: %v", err)
+	}
+	backupFileName := filepath.Base(backupPath)
+
+	// Modify data after backup
+	cache.Set("original_key", "modified_value")
+	cache.Set("new_key", "new_value")
+
+	// Verify modification
+	val, _ := cache.Get("original_key")
+	if val != "modified_value" {
+		t.Errorf("Expected modified_value, got %q", val)
+	}
+
+	// Restore from backup
+	err = cache.RestoreFromBackup(backupFileName)
+	if err != nil {
+		t.Fatalf("Failed to restore from backup: %v", err)
+	}
+
+	// Verify data is restored to backup state
+	val, found := cache.Get("original_key")
+	if !found {
+		t.Error("Expected to find original_key after restore")
+	}
+	if val != "original_value" {
+		t.Errorf("Expected original_value after restore, got %q", val)
+	}
+
+	// new_key should not exist (wasn't in backup)
+	_, found = cache.Get("new_key")
+	if found {
+		t.Error("Expected new_key to not exist after restore")
+	}
+}
+
+func TestRestoreFromBackup_InvalidFile(t *testing.T) {
+	cache, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	// Try to restore from non-existent backup
+	err := cache.RestoreFromBackup("nonexistent_backup.db")
+	if err == nil {
+		t.Error("Expected error when restoring from non-existent backup")
+	}
+
+	// Try to restore from invalid file extension
+	err = cache.RestoreFromBackup("invalid_backup.txt")
+	if err == nil {
+		t.Error("Expected error when restoring from non-.db file")
+	}
+}
+
+func TestDeleteBackup(t *testing.T) {
+	cache, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	// Create a backup
+	cache.Set("key1", "value1")
+	backupPath, err := cache.Backup()
+	if err != nil {
+		t.Fatalf("Failed to create backup: %v", err)
+	}
+	backupFileName := filepath.Base(backupPath)
+
+	// Verify backup exists
+	backups, _ := cache.ListBackups()
+	if len(backups) != 1 {
+		t.Errorf("Expected 1 backup before delete, got %d", len(backups))
+	}
+
+	// Delete the backup
+	err = cache.DeleteBackup(backupFileName)
+	if err != nil {
+		t.Fatalf("Failed to delete backup: %v", err)
+	}
+
+	// Verify backup is deleted
+	backups, _ = cache.ListBackups()
+	if len(backups) != 0 {
+		t.Errorf("Expected 0 backups after delete, got %d", len(backups))
+	}
+
+	// Verify file is gone
+	if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+		t.Error("Expected backup file to be deleted from disk")
+	}
+}
+
+func TestDeleteBackup_InvalidFile(t *testing.T) {
+	cache, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	// Try to delete non-existent backup
+	err := cache.DeleteBackup("nonexistent_backup.db")
+	if err == nil {
+		t.Error("Expected error when deleting non-existent backup")
+	}
+
+	// Try to delete invalid file extension
+	err = cache.DeleteBackup("invalid_backup.txt")
+	if err == nil {
+		t.Error("Expected error when deleting non-.db file")
 	}
 }

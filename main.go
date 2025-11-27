@@ -11,6 +11,7 @@ import (
 	"lyrics-api-go/services/ttml"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,8 +54,14 @@ type InFlightRequest struct {
 
 // CachedLyrics stores TTML with track metadata for duration validation
 type CachedLyrics struct {
-	TTML           string `json:"ttml"`
+	TTML            string `json:"ttml"`
 	TrackDurationMs int    `json:"trackDurationMs"`
+}
+
+// NegativeCacheEntry stores info about failed lyrics lookups
+type NegativeCacheEntry struct {
+	Reason    string `json:"reason"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 func init() {
@@ -159,7 +166,7 @@ func getCachedLyrics(key string) (string, int, bool) {
 // setCachedLyrics stores lyrics with track duration for validation
 func setCachedLyrics(key, ttml string, trackDurationMs int) {
 	cachedLyrics := CachedLyrics{
-		TTML:           ttml,
+		TTML:            ttml,
 		TrackDurationMs: trackDurationMs,
 	}
 	data, err := json.Marshal(cachedLyrics)
@@ -170,6 +177,71 @@ func setCachedLyrics(key, ttml string, trackDurationMs int) {
 	if err := persistentCache.Set(key, string(data)); err != nil {
 		log.Errorf("Error setting cache value: %v", err)
 	}
+}
+
+// getNegativeCache checks if a request is in the negative cache (no lyrics available)
+// Returns the reason and true if found and not expired, empty string and false otherwise
+func getNegativeCache(key string) (string, bool) {
+	negativeKey := "no_lyrics:" + key
+	cached, ok := persistentCache.Get(negativeKey)
+	if !ok {
+		return "", false
+	}
+
+	var entry NegativeCacheEntry
+	if err := json.Unmarshal([]byte(cached), &entry); err != nil {
+		return "", false
+	}
+
+	// Check if entry has expired
+	ttlDays := conf.Configuration.NegativeCacheTTLInDays
+	expirationTime := entry.Timestamp + int64(ttlDays*24*60*60)
+	if time.Now().Unix() > expirationTime {
+		// Expired - delete and return not found
+		persistentCache.Delete(negativeKey)
+		return "", false
+	}
+
+	return entry.Reason, true
+}
+
+// setNegativeCache stores a failed lookup in the negative cache
+func setNegativeCache(key, reason string) {
+	negativeKey := "no_lyrics:" + key
+	entry := NegativeCacheEntry{
+		Reason:    reason,
+		Timestamp: time.Now().Unix(),
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		log.Errorf("Error marshaling negative cache entry: %v", err)
+		return
+	}
+	if err := persistentCache.Set(negativeKey, string(data)); err != nil {
+		log.Errorf("Error setting negative cache: %v", err)
+	}
+	log.Infof("[Cache:Negative] Cached 'no lyrics' for key: %s (reason: %s)", key, reason)
+}
+
+// shouldNegativeCache determines if an error should be stored in negative cache
+// Only permanent "no lyrics" type errors should be cached, not transient failures
+func shouldNegativeCache(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// Permanent errors - cache these
+	permanentErrors := []string{
+		"no track found",
+		"no tracks found within",
+		"TTML content is empty",
+	}
+	for _, pe := range permanentErrors {
+		if strings.Contains(errStr, pe) {
+			return true
+		}
+	}
+	return false
 }
 
 func getLyrics(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +277,21 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ttml": cachedTTML,
 			// Score not available for cached responses
+		})
+		return
+	}
+
+	// Check negative cache (known "no lyrics" responses)
+	if reason, found := getNegativeCache(cacheKey); found {
+		log.Infof("[Cache:Negative] Returning cached 'no lyrics' response for: %s", query)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache-Status", "NEGATIVE_HIT")
+		if rateLimitType != "" {
+			w.Header().Set("X-RateLimit-Type", rateLimitType)
+		}
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": reason,
 		})
 		return
 	}
@@ -299,6 +386,11 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Cache permanent "no lyrics" errors to avoid repeated API calls
+		if shouldNegativeCache(err) {
+			setNegativeCache(cacheKey, err.Error())
+		}
+
 		// No fallback found (or skipped due to duration), return the error
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
@@ -314,6 +406,8 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	if ttmlString == "" {
 		log.Warnf("No TTML found for: %s", query)
+		// Cache this negative result to avoid repeated API calls
+		setNegativeCache(cacheKey, "Lyrics not available for this track")
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		if rateLimitType != "" {
