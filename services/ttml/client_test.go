@@ -1,7 +1,6 @@
 package ttml
 
 import (
-	"math"
 	"testing"
 )
 
@@ -161,103 +160,6 @@ func TestStringSimilarity(t *testing.T) {
 	}
 }
 
-func TestDurationScore(t *testing.T) {
-	tests := []struct {
-		name             string
-		trackDurationMs  int
-		targetDurationMs int
-		expectedMin      float64
-		expectedMax      float64
-	}{
-		{
-			name:             "Exact match",
-			trackDurationMs:  234000,
-			targetDurationMs: 234000,
-			expectedMin:      0.99,
-			expectedMax:      1.0,
-		},
-		{
-			name:             "5 second difference",
-			trackDurationMs:  234000,
-			targetDurationMs: 239000,
-			expectedMin:      0.75,
-			expectedMax:      0.85,
-		},
-		{
-			name:             "10 second difference",
-			trackDurationMs:  234000,
-			targetDurationMs: 244000,
-			expectedMin:      0.55,
-			expectedMax:      0.65,
-		},
-		{
-			name:             "30 second difference",
-			trackDurationMs:  234000,
-			targetDurationMs: 264000,
-			expectedMin:      0.15,
-			expectedMax:      0.25,
-		},
-		{
-			name:             "1 minute difference",
-			trackDurationMs:  234000,
-			targetDurationMs: 294000,
-			expectedMin:      0.04,
-			expectedMax:      0.10,
-		},
-		{
-			name:             "No target duration",
-			trackDurationMs:  234000,
-			targetDurationMs: 0,
-			expectedMin:      0.0,
-			expectedMax:      0.0,
-		},
-		{
-			name:             "Negative target (invalid)",
-			trackDurationMs:  234000,
-			targetDurationMs: -1000,
-			expectedMin:      0.0,
-			expectedMax:      0.0,
-		},
-		{
-			name:             "Small difference (1 second)",
-			trackDurationMs:  234000,
-			targetDurationMs: 235000,
-			expectedMin:      0.95,
-			expectedMax:      1.0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := durationScore(tt.trackDurationMs, tt.targetDurationMs)
-
-			if result < tt.expectedMin || result > tt.expectedMax {
-				t.Errorf("Expected score between %.3f and %.3f, got %.3f",
-					tt.expectedMin, tt.expectedMax, result)
-			}
-
-			// Score should always be between 0 and 1
-			if result < 0.0 || result > 1.0 {
-				t.Errorf("Score out of range [0, 1]: %.3f", result)
-			}
-		})
-	}
-}
-
-func TestDurationScore_Symmetry(t *testing.T) {
-	// Duration score should be symmetric: diff of +10s = diff of -10s
-	trackDuration := 234000
-	targetDuration1 := 244000 // +10s
-	targetDuration2 := 224000 // -10s
-
-	score1 := durationScore(trackDuration, targetDuration1)
-	score2 := durationScore(trackDuration, targetDuration2)
-
-	if math.Abs(score1-score2) > 0.001 {
-		t.Errorf("Duration score not symmetric: +10s gave %.3f, -10s gave %.3f", score1, score2)
-	}
-}
-
 func TestScoreTrack(t *testing.T) {
 	track := &Track{
 		ID: "test123",
@@ -282,7 +184,6 @@ func TestScoreTrack(t *testing.T) {
 		songName         string
 		artistName       string
 		albumName        string
-		durationMs       int
 		expectedScoreMin float64
 		expectedScoreMax float64
 	}{
@@ -291,16 +192,6 @@ func TestScoreTrack(t *testing.T) {
 			songName:         "Shape of You",
 			artistName:       "Ed Sheeran",
 			albumName:        "Divide",
-			durationMs:       233712,
-			expectedScoreMin: 0.95,
-			expectedScoreMax: 1.01, // Allow slight float precision overage
-		},
-		{
-			name:             "Perfect match without duration",
-			songName:         "Shape of You",
-			artistName:       "Ed Sheeran",
-			albumName:        "Divide",
-			durationMs:       0,
 			expectedScoreMin: 0.95,
 			expectedScoreMax: 1.01, // Allow slight float precision overage
 		},
@@ -309,7 +200,6 @@ func TestScoreTrack(t *testing.T) {
 			songName:         "SHAPE OF YOU",
 			artistName:       "ed sheeran",
 			albumName:        "divide",
-			durationMs:       233712,
 			expectedScoreMin: 0.95,
 			expectedScoreMax: 1.01, // Allow slight float precision overage
 		},
@@ -318,7 +208,6 @@ func TestScoreTrack(t *testing.T) {
 			songName:         "Shape of You (Remix)",
 			artistName:       "Ed Sheeran",
 			albumName:        "Divide",
-			durationMs:       233712,
 			expectedScoreMin: 0.85,
 			expectedScoreMax: 1.0,
 		},
@@ -327,43 +216,30 @@ func TestScoreTrack(t *testing.T) {
 			songName:         "Shape of You",
 			artistName:       "Ed Sheeran",
 			albumName:        "Greatest Hits",
-			durationMs:       233712,
 			expectedScoreMin: 0.85,
 			expectedScoreMax: 0.95,
-		},
-		{
-			name:             "Duration mismatch",
-			songName:         "Shape of You",
-			artistName:       "Ed Sheeran",
-			albumName:        "Divide",
-			durationMs:       300000, // Very different (66 seconds off)
-			expectedScoreMin: 0.75,
-			expectedScoreMax: 0.85,
 		},
 		{
 			name:             "Wrong artist",
 			songName:         "Shape of You",
 			artistName:       "Taylor Swift",
 			albumName:        "Divide",
-			durationMs:       233712,
-			expectedScoreMin: 0.70,
-			expectedScoreMax: 0.85,
+			expectedScoreMin: 0.55,
+			expectedScoreMax: 0.80,
 		},
 		{
 			name:             "Completely wrong",
 			songName:         "Bohemian Rhapsody",
 			artistName:       "Queen",
 			albumName:        "A Night at the Opera",
-			durationMs:       354000,
 			expectedScoreMin: 0.0,
-			expectedScoreMax: 0.45,
+			expectedScoreMax: 0.50,
 		},
 		{
 			name:             "Empty strings",
 			songName:         "",
 			artistName:       "",
 			albumName:        "",
-			durationMs:       0,
 			expectedScoreMin: 0.0,
 			expectedScoreMax: 0.0,
 		},
@@ -371,7 +247,7 @@ func TestScoreTrack(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := scoreTrack(track, tt.songName, tt.artistName, tt.albumName, tt.durationMs)
+			result := scoreTrack(track, tt.songName, tt.artistName, tt.albumName)
 
 			if result.TotalScore < tt.expectedScoreMin || result.TotalScore > tt.expectedScoreMax {
 				t.Errorf("Expected total score between %.3f and %.3f, got %.3f",
@@ -389,9 +265,6 @@ func TestScoreTrack(t *testing.T) {
 			if result.AlbumScore < 0.0 || result.AlbumScore > 1.0+epsilon {
 				t.Errorf("Album score out of range [0, 1]: %.3f", result.AlbumScore)
 			}
-			if result.DurationScore < 0.0 || result.DurationScore > 1.0+epsilon {
-				t.Errorf("Duration score out of range [0, 1]: %.3f", result.DurationScore)
-			}
 			if result.TotalScore < 0.0 || result.TotalScore > 1.0+epsilon {
 				t.Errorf("Total score out of range [0, 1]: %.3f", result.TotalScore)
 			}
@@ -404,7 +277,7 @@ func TestScoreTrack(t *testing.T) {
 	}
 }
 
-func TestScoreTrack_WeightRedistribution(t *testing.T) {
+func TestScoreTrack_PerfectMatch(t *testing.T) {
 	track := &Track{
 		Attributes: struct {
 			Name             string `json:"name"`
@@ -422,25 +295,12 @@ func TestScoreTrack_WeightRedistribution(t *testing.T) {
 		},
 	}
 
-	// Score with duration
-	scoreWithDuration := scoreTrack(track, "Test Song", "Test Artist", "Test Album", 200000)
+	// Score for perfect match
+	score := scoreTrack(track, "Test Song", "Test Artist", "Test Album")
 
-	// Score without duration
-	scoreWithoutDuration := scoreTrack(track, "Test Song", "Test Artist", "Test Album", 0)
-
-	// Without duration, score should still be high for perfect name/artist/album match
-	if scoreWithoutDuration.TotalScore < 0.95 {
-		t.Errorf("Expected high score without duration for perfect match, got %.3f", scoreWithoutDuration.TotalScore)
-	}
-
-	// Duration score should be 0 when no target duration
-	if scoreWithoutDuration.DurationScore != 0.0 {
-		t.Errorf("Expected duration score 0 when no target duration, got %.3f", scoreWithoutDuration.DurationScore)
-	}
-
-	// With duration and perfect match, score should be very high
-	if scoreWithDuration.TotalScore < 0.95 {
-		t.Errorf("Expected very high score with duration for perfect match, got %.3f", scoreWithDuration.TotalScore)
+	// Perfect match should score very high
+	if score.TotalScore < 0.95 {
+		t.Errorf("Expected high score for perfect match, got %.3f", score.TotalScore)
 	}
 }
 
@@ -462,7 +322,7 @@ func TestScoreTrack_ComponentScores(t *testing.T) {
 		},
 	}
 
-	score := scoreTrack(track, "Test Song", "Drake", "Scorpion", 250000)
+	score := scoreTrack(track, "Test Song", "Drake", "Scorpion")
 
 	// Name should match perfectly
 	if score.NameScore < 0.99 {
@@ -477,11 +337,6 @@ func TestScoreTrack_ComponentScores(t *testing.T) {
 	// Album should not match (completely different)
 	if score.AlbumScore > 0.5 {
 		t.Errorf("Expected low album score for 'Abbey Road' vs 'Scorpion', got %.3f", score.AlbumScore)
-	}
-
-	// Duration is different but not too far (50 seconds)
-	if score.DurationScore < 0.05 || score.DurationScore > 0.15 {
-		t.Errorf("Expected moderate duration score for 50s difference, got %.3f", score.DurationScore)
 	}
 }
 
@@ -579,8 +434,8 @@ func TestScoreTrack_Comparison(t *testing.T) {
 		},
 	}
 
-	perfectScore := scoreTrack(perfectTrack, "Shape of You", "Ed Sheeran", "Divide", 233000)
-	wrongScore := scoreTrack(wrongTrack, "Shape of You", "Ed Sheeran", "Divide", 233000)
+	perfectScore := scoreTrack(perfectTrack, "Shape of You", "Ed Sheeran", "Divide")
+	wrongScore := scoreTrack(wrongTrack, "Shape of You", "Ed Sheeran", "Divide")
 
 	// Perfect match should score significantly higher
 	if perfectScore.TotalScore <= wrongScore.TotalScore {
@@ -595,7 +450,7 @@ func TestScoreTrack_Comparison(t *testing.T) {
 
 	// Wrong match should be noticeably lower
 	// "Shape of My Heart" by Sting has some overlap with "Shape of You" by Ed Sheeran
-	// due to "Shape of" being common, but artist/album/duration are wrong
+	// due to "Shape of" being common, but artist/album are wrong
 	if wrongScore.TotalScore > 0.65 {
 		t.Errorf("Wrong match should score < 0.65, got %.3f", wrongScore.TotalScore)
 	}

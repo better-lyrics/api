@@ -8,8 +8,8 @@ import (
 
 // FetchTTMLLyrics is the main function to fetch TTML API lyrics
 // durationMs is optional (0 means no duration filter), used to find closest matching track by duration
-// Returns: raw TTML string, similarity score, error
-func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (string, float64, error) {
+// Returns: raw TTML string, track duration in ms, similarity score, error
+func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (string, int, float64, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
@@ -20,7 +20,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 
 	if songName == "" && artistName == "" {
-		return "", 0.0, fmt.Errorf("song name and artist name cannot both be empty")
+		return "", 0, 0.0, fmt.Errorf("song name and artist name cannot both be empty")
 	}
 
 	query := songName + " " + artistName
@@ -36,35 +36,37 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 
 	track, score, err := searchTrack(query, storefront, songName, artistName, albumName, durationMs)
 	if err != nil {
-		return "", 0.0, fmt.Errorf("search failed: %v", err)
+		return "", 0, 0.0, fmt.Errorf("search failed: %v", err)
 	}
 
 	if track == nil {
-		return "", 0.0, fmt.Errorf("no track found for query: %s", query)
+		return "", 0, 0.0, fmt.Errorf("no track found for query: %s", query)
 	}
 
+	trackDurationMs := track.Attributes.DurationInMillis
+
 	if durationMs > 0 {
-		durationDiff := track.Attributes.DurationInMillis - durationMs
+		durationDiff := trackDurationMs - durationMs
 		if durationDiff < 0 {
 			durationDiff = -durationDiff
 		}
 		log.Infof("Found track: %s by %s (ID: %s, duration: %dms, diff: %dms)",
 			track.Attributes.Name, track.Attributes.ArtistName, track.ID,
-			track.Attributes.DurationInMillis, durationDiff)
+			trackDurationMs, durationDiff)
 	} else {
-		log.Infof("Found track: %s by %s (ID: %s)", track.Attributes.Name, track.Attributes.ArtistName, track.ID)
+		log.Infof("Found track: %s by %s (ID: %s, duration: %dms)", track.Attributes.Name, track.Attributes.ArtistName, track.ID, trackDurationMs)
 	}
 
 	ttml, err := fetchLyricsTTML(track.ID, storefront)
 	if err != nil {
-		return "", 0.0, fmt.Errorf("failed to fetch TTML: %v", err)
+		return "", 0, 0.0, fmt.Errorf("failed to fetch TTML: %v", err)
 	}
 
 	if ttml == "" {
-		return "", 0.0, fmt.Errorf("TTML content is empty")
+		return "", 0, 0.0, fmt.Errorf("TTML content is empty")
 	}
 
 	log.Infof("Successfully fetched TTML from API (similarity score: %.3f)", score)
 
-	return ttml, score, nil
+	return ttml, trackDurationMs, score, nil
 }

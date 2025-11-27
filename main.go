@@ -51,6 +51,12 @@ type InFlightRequest struct {
 	err    error
 }
 
+// CachedLyrics stores TTML with track metadata for duration validation
+type CachedLyrics struct {
+	TTML           string `json:"ttml"`
+	TrackDurationMs int    `json:"trackDurationMs"`
+}
+
 func init() {
 	log.SetFormatter(&log.JSONFormatter{})
 	log.SetOutput(os.Stdout)
@@ -130,6 +136,40 @@ func setCache(key, value string) {
 	}
 }
 
+// getCachedLyrics retrieves and parses cached lyrics, returns ttml, trackDurationMs, found
+// Handles both old format (plain TTML string) and new format (JSON with duration)
+func getCachedLyrics(key string) (string, int, bool) {
+	cached, ok := persistentCache.Get(key)
+	if !ok {
+		return "", 0, false
+	}
+
+	// Try to parse as new JSON format
+	var cachedLyrics CachedLyrics
+	if err := json.Unmarshal([]byte(cached), &cachedLyrics); err == nil && cachedLyrics.TTML != "" {
+		return cachedLyrics.TTML, cachedLyrics.TrackDurationMs, true
+	}
+
+	// Fallback to old format (plain TTML string) - no duration info available
+	return cached, 0, true
+}
+
+// setCachedLyrics stores lyrics with track duration for validation
+func setCachedLyrics(key, ttml string, trackDurationMs int) {
+	cachedLyrics := CachedLyrics{
+		TTML:           ttml,
+		TrackDurationMs: trackDurationMs,
+	}
+	data, err := json.Marshal(cachedLyrics)
+	if err != nil {
+		log.Errorf("Error marshaling cached lyrics: %v", err)
+		return
+	}
+	if err := persistentCache.Set(key, string(data)); err != nil {
+		log.Errorf("Error setting cache value: %v", err)
+	}
+}
+
 func getLyrics(w http.ResponseWriter, r *http.Request) {
 	songName := r.URL.Query().Get("s") + r.URL.Query().Get("song") + r.URL.Query().Get("songName")
 	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist") + r.URL.Query().Get("artistName")
@@ -153,7 +193,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	rateLimitType, _ := r.Context().Value(rateLimitTypeKey).(string)
 
 	// Check cache first
-	if cachedTTML, ok := getCache(cacheKey); ok {
+	if cachedTTML, _, ok := getCachedLyrics(cacheKey); ok {
 		log.Info("[Cache:Lyrics] Found cached TTML")
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "HIT")
@@ -229,7 +269,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		durationMs = durationMs * 1000 // Convert seconds to milliseconds
 	}
 
-	ttmlString, score, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
+	ttmlString, trackDurationMs, score, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
 
 	req.err = err
 	if err == nil {
@@ -243,7 +283,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		// Try fallback cache keys before returning error
 		fallbackKeys := buildFallbackCacheKeys(songName, artistName, albumName, durationStr, cacheKey)
 		for _, fallbackKey := range fallbackKeys {
-			if cachedTTML, ok := getCache(fallbackKey); ok {
+			if cachedTTML, _, ok := getCachedLyrics(fallbackKey); ok {
 				log.Warnf("[Cache:Lyrics] Backend failed, serving stale cache from key: %s", fallbackKey)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Cache-Status", "STALE")
@@ -257,7 +297,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// No fallback found, return the error
+		// No fallback found (or skipped due to duration), return the error
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		if rateLimitType != "" {
@@ -284,8 +324,8 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Infof("[Cache:Lyrics] Caching TTML for: %s", query)
-	setCache(cacheKey, ttmlString)
+	log.Infof("[Cache:Lyrics] Caching TTML for: %s (trackDuration: %dms)", query, trackDurationMs)
+	setCachedLyrics(cacheKey, ttmlString, trackDurationMs)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Cache-Status", "MISS")
@@ -617,22 +657,19 @@ func getEnvOrDefault(key, defaultValue string) string {
 
 // buildFallbackCacheKeys returns a list of cache keys to try when the backend fails.
 // Keys are ordered from most specific to least specific, excluding the original key.
+// When duration is provided, fallback keys still include duration to maintain strict matching.
 func buildFallbackCacheKeys(songName, artistName, albumName, durationStr, originalKey string) []string {
 	var keys []string
 
-	// Fallback 1: without duration (if duration was provided)
-	if durationStr != "" {
-		query := songName + " " + artistName + " " + albumName
-		keyWithoutDuration := fmt.Sprintf("ttml_lyrics:%s", query)
-		if keyWithoutDuration != originalKey {
-			keys = append(keys, keyWithoutDuration)
-		}
-	}
-
-	// Fallback 2: without album and duration (if album was provided)
+	// Fallback: without album (if album was provided)
+	// Duration is preserved if it was in the original request
+	// Key format must match original: "songName + artistName + " " + albumName" where albumName is empty
 	if albumName != "" {
-		query := songName + " " + artistName
-		keyWithoutAlbum := fmt.Sprintf("ttml_lyrics:%s ", query)
+		query := songName + " " + artistName + " " // trailing space to match empty album format
+		if durationStr != "" {
+			query = query + " " + durationStr + "s"
+		}
+		keyWithoutAlbum := fmt.Sprintf("ttml_lyrics:%s", query)
 		if keyWithoutAlbum != originalKey {
 			keys = append(keys, keyWithoutAlbum)
 		}
