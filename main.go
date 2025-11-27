@@ -95,6 +95,9 @@ func main() {
 	router.HandleFunc("/cache/backups", listBackups)
 	router.HandleFunc("/cache/restore", restoreCache)
 	router.HandleFunc("/cache/clear", clearCache)
+	router.HandleFunc("/circuit-breaker", getCircuitBreakerStatus)
+	router.HandleFunc("/circuit-breaker/reset", resetCircuitBreaker)
+	router.HandleFunc("/circuit-breaker/simulate-failure", simulateCircuitBreakerFailure)
 	router.HandleFunc("/test-notifications", testNotifications)
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -702,6 +705,58 @@ func restoreCache(w http.ResponseWriter, r *http.Request) {
 		"restored_from":  backupFileName,
 		"keys_restored":  numKeys,
 		"size_kb":        sizeKB,
+	})
+}
+
+func getCircuitBreakerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	state, failures, timeUntilRetry := ttml.GetCircuitBreakerStats()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"state":            state,
+		"failures":         failures,
+		"time_until_retry": timeUntilRetry.String(),
+		"config": map[string]interface{}{
+			"threshold":    conf.Configuration.CircuitBreakerThreshold,
+			"cooldown_sec": conf.Configuration.CircuitBreakerCooldownSecs,
+		},
+	})
+}
+
+func resetCircuitBreaker(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	ttml.ResetCircuitBreaker()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Circuit breaker reset to CLOSED state",
+	})
+}
+
+func simulateCircuitBreakerFailure(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	ttml.SimulateFailure()
+	state, failures, timeUntilRetry := ttml.GetCircuitBreakerStats()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":          "Simulated a failure",
+		"state":            state,
+		"failures":         failures,
+		"time_until_retry": timeUntilRetry.String(),
 	})
 }
 

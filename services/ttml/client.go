@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"lyrics-api-go/circuitbreaker"
 	"lyrics-api-go/config"
 	"net/http"
 	"net/url"
@@ -12,6 +13,47 @@ import (
 
 	log "github.com/sirupsen/logrus"
 )
+
+var apiCircuitBreaker *circuitbreaker.CircuitBreaker
+
+func initCircuitBreaker() {
+	if apiCircuitBreaker != nil {
+		return
+	}
+	conf := config.Get()
+	apiCircuitBreaker = circuitbreaker.New(circuitbreaker.Config{
+		Name:      "TTML-API",
+		Threshold: conf.Configuration.CircuitBreakerThreshold,
+		Cooldown:  time.Duration(conf.Configuration.CircuitBreakerCooldownSecs) * time.Second,
+	})
+	log.Infof("[CircuitBreaker] Initialized with threshold=%d, cooldown=%ds",
+		conf.Configuration.CircuitBreakerThreshold,
+		conf.Configuration.CircuitBreakerCooldownSecs)
+}
+
+// GetCircuitBreakerStats returns circuit breaker statistics for monitoring
+func GetCircuitBreakerStats() (state string, failures int, timeUntilRetry time.Duration) {
+	if apiCircuitBreaker == nil {
+		return "UNINITIALIZED", 0, 0
+	}
+	s, f, _ := apiCircuitBreaker.Stats()
+	return s.String(), f, apiCircuitBreaker.TimeUntilRetry()
+}
+
+// ResetCircuitBreaker manually resets the circuit breaker (for admin use)
+func ResetCircuitBreaker() {
+	if apiCircuitBreaker != nil {
+		apiCircuitBreaker.Reset()
+	}
+}
+
+// SimulateFailure simulates an API failure for testing the circuit breaker
+func SimulateFailure() {
+	if apiCircuitBreaker == nil {
+		initCircuitBreaker()
+	}
+	apiCircuitBreaker.RecordFailure()
+}
 
 // =============================================================================
 // STRING SIMILARITY & SCORING
@@ -122,6 +164,16 @@ func makeAPIRequest(urlStr string, retries int) (*http.Response, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
+	if apiCircuitBreaker == nil {
+		initCircuitBreaker()
+	}
+
+	// Check circuit breaker before making request
+	if !apiCircuitBreaker.Allow() {
+		timeUntilRetry := apiCircuitBreaker.TimeUntilRetry()
+		log.Warnf("[CircuitBreaker] Request blocked, circuit is OPEN (retry in %v)", timeUntilRetry)
+		return nil, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
+	}
 
 	account := accountManager.getCurrentAccount()
 	req, err := http.NewRequest("GET", urlStr, nil)
@@ -141,13 +193,32 @@ func makeAPIRequest(urlStr string, retries int) (*http.Response, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		apiCircuitBreaker.RecordFailure()
 		return nil, err
 	}
 
-	// Handle rate limiting and auth errors with retry
-	if (resp.StatusCode == 401 || resp.StatusCode == 429) && retries < 3 {
+	// Handle rate limiting - record failure for circuit breaker
+	if resp.StatusCode == 429 {
+		apiCircuitBreaker.RecordFailure()
+
+		// Still attempt retry with account switch if we have retries left
+		if retries < 3 {
+			resp.Body.Close()
+			log.Warnf("TTML API returned 429, switching account and retrying (attempt %d/3)...", retries+1)
+			accountManager.switchToNextAccount()
+			time.Sleep(time.Second * time.Duration(retries+1))
+			return makeAPIRequest(urlStr, retries+1)
+		}
+
+		body, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
-		log.Warnf("TTML API returned %d, switching account and retrying...", resp.StatusCode)
+		return nil, fmt.Errorf("TTML API returned status 429: %s", string(body))
+	}
+
+	// Handle auth errors (don't count as circuit breaker failure, just retry)
+	if resp.StatusCode == 401 && retries < 3 {
+		resp.Body.Close()
+		log.Warnf("TTML API returned 401, switching account and retrying...")
 		accountManager.switchToNextAccount()
 		time.Sleep(time.Second * time.Duration(retries+1))
 		return makeAPIRequest(urlStr, retries+1)
@@ -159,6 +230,8 @@ func makeAPIRequest(urlStr string, retries int) (*http.Response, error) {
 		return nil, fmt.Errorf("TTML API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Success! Record it
+	apiCircuitBreaker.RecordSuccess()
 	return resp, nil
 }
 
