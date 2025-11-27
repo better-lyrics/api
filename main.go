@@ -85,6 +85,8 @@ func main() {
 	router.HandleFunc("/getLyrics", getLyrics)
 	router.HandleFunc("/cache", getCacheDump)
 	router.HandleFunc("/cache/backup", backupCache)
+	router.HandleFunc("/cache/backups", listBackups)
+	router.HandleFunc("/cache/restore", restoreCache)
 	router.HandleFunc("/cache/clear", clearCache)
 	router.HandleFunc("/test-notifications", testNotifications)
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -541,6 +543,71 @@ func clearCache(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":     "Cache cleared successfully",
 		"backup_path": backupPath,
+	})
+}
+
+func listBackups(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	backups, err := persistentCache.ListBackups()
+	if err != nil {
+		log.Errorf("[Cache:Backups] Failed to list backups: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": fmt.Sprintf("Failed to list backups: %v", err),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"count":   len(backups),
+		"backups": backups,
+	})
+}
+
+func restoreCache(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get backup filename from query parameter
+	backupFileName := r.URL.Query().Get("backup")
+	if backupFileName == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "Missing 'backup' query parameter. Use /cache/backups to list available backups.",
+		})
+		return
+	}
+
+	// Restore from the specified backup
+	if err := persistentCache.RestoreFromBackup(backupFileName); err != nil {
+		log.Errorf("[Cache:Restore] Failed to restore from backup %s: %v", backupFileName, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": fmt.Sprintf("Failed to restore from backup: %v", err),
+		})
+		return
+	}
+
+	// Get new cache stats after restore
+	numKeys, sizeKB := persistentCache.Stats()
+
+	log.Infof("[Cache:Restore] Cache restored from backup: %s", backupFileName)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":        "Cache restored successfully",
+		"restored_from":  backupFileName,
+		"keys_restored":  numKeys,
+		"size_kb":        sizeKB,
 	})
 }
 

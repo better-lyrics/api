@@ -364,3 +364,122 @@ func (pc *PersistentCache) Close() error {
 	}
 	return nil
 }
+
+// BackupInfo contains metadata about a backup file
+type BackupInfo struct {
+	FileName  string    `json:"fileName"`
+	FilePath  string    `json:"filePath"`
+	Size      int64     `json:"sizeBytes"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// ListBackups returns a list of all available backup files
+func (pc *PersistentCache) ListBackups() ([]BackupInfo, error) {
+	var backups []BackupInfo
+
+	entries, err := os.ReadDir(pc.backupPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return backups, nil // No backups directory yet
+		}
+		return nil, fmt.Errorf("failed to read backup directory: %v", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		// Only include .db files that match our backup pattern
+		if filepath.Ext(entry.Name()) != ".db" {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			log.Warnf("[Cache:Backups] Failed to get info for %s: %v", entry.Name(), err)
+			continue
+		}
+
+		backups = append(backups, BackupInfo{
+			FileName:  entry.Name(),
+			FilePath:  filepath.Join(pc.backupPath, entry.Name()),
+			Size:      info.Size(),
+			CreatedAt: info.ModTime(),
+		})
+	}
+
+	return backups, nil
+}
+
+// RestoreFromBackup replaces the current cache database with a backup
+// This will close the current database, replace the file, and reopen it
+func (pc *PersistentCache) RestoreFromBackup(backupFileName string) error {
+	backupFilePath := filepath.Join(pc.backupPath, backupFileName)
+
+	// Validate backup file exists
+	if _, err := os.Stat(backupFilePath); os.IsNotExist(err) {
+		return fmt.Errorf("backup file not found: %s", backupFileName)
+	}
+
+	// Validate it's a .db file
+	if filepath.Ext(backupFileName) != ".db" {
+		return fmt.Errorf("invalid backup file: must be a .db file")
+	}
+
+	log.Infof("[Cache:Restore] Starting restore from backup: %s", backupFileName)
+
+	// Close the current database
+	if err := pc.db.Close(); err != nil {
+		return fmt.Errorf("failed to close current database: %v", err)
+	}
+
+	// Create a backup of the current database before replacing (safety measure)
+	currentBackupPath := pc.dbPath + ".pre-restore"
+	if err := copyFile(pc.dbPath, currentBackupPath); err != nil {
+		// Try to reopen the original database
+		pc.reopenDatabase()
+		return fmt.Errorf("failed to backup current database: %v", err)
+	}
+
+	// Replace the current database with the backup
+	if err := copyFile(backupFilePath, pc.dbPath); err != nil {
+		// Try to restore from pre-restore backup
+		copyFile(currentBackupPath, pc.dbPath)
+		pc.reopenDatabase()
+		return fmt.Errorf("failed to restore backup: %v", err)
+	}
+
+	// Remove the pre-restore backup on success
+	os.Remove(currentBackupPath)
+
+	// Reopen the database with restored data
+	if err := pc.reopenDatabase(); err != nil {
+		return fmt.Errorf("failed to reopen database after restore: %v", err)
+	}
+
+	log.Infof("[Cache:Restore] Successfully restored from backup: %s", backupFileName)
+	return nil
+}
+
+// DeleteBackup deletes a specific backup file
+func (pc *PersistentCache) DeleteBackup(backupFileName string) error {
+	backupFilePath := filepath.Join(pc.backupPath, backupFileName)
+
+	// Validate it's a .db file
+	if filepath.Ext(backupFileName) != ".db" {
+		return fmt.Errorf("invalid backup file: must be a .db file")
+	}
+
+	// Validate backup file exists
+	if _, err := os.Stat(backupFilePath); os.IsNotExist(err) {
+		return fmt.Errorf("backup file not found: %s", backupFileName)
+	}
+
+	if err := os.Remove(backupFilePath); err != nil {
+		return fmt.Errorf("failed to delete backup: %v", err)
+	}
+
+	log.Infof("[Cache:Backup] Deleted backup: %s", backupFileName)
+	return nil
+}
