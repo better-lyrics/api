@@ -54,12 +54,12 @@ func TestNormalizeString(t *testing.T) {
 
 func TestStringSimilarity(t *testing.T) {
 	tests := []struct {
-		name          string
-		s1            string
-		s2            string
-		expectedMin   float64
-		expectedMax   float64
-		expectExact   bool
+		name        string
+		s1          string
+		s2          string
+		expectedMin float64
+		expectedMax float64
+		expectExact bool
 	}{
 		{
 			name:        "Exact match",

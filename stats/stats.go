@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,12 +13,12 @@ type Stats struct {
 	StartTime time.Time
 
 	// Request counters
-	TotalRequests     atomic.Int64
-	LyricsRequests    atomic.Int64
-	CacheRequests     atomic.Int64
-	StatsRequests     atomic.Int64
-	HealthRequests    atomic.Int64
-	OtherRequests     atomic.Int64
+	TotalRequests  atomic.Int64
+	LyricsRequests atomic.Int64
+	CacheRequests  atomic.Int64
+	StatsRequests  atomic.Int64
+	HealthRequests atomic.Int64
+	OtherRequests  atomic.Int64
 
 	// Cache performance
 	CacheHits         atomic.Int64
@@ -45,6 +46,13 @@ type Stats struct {
 	// Endpoint response times (microseconds)
 	lyricsResponseTime  atomic.Int64
 	lyricsResponseCount atomic.Int64
+
+	// Request rate tracking (sliding window)
+	requestTimes   []time.Time
+	requestTimesMu sync.Mutex
+
+	// Account usage tracking
+	accountUsage sync.Map // map[string]*atomic.Int64
 }
 
 // Global stats instance
@@ -77,6 +85,61 @@ func (s *Stats) RecordRequest(endpoint string) {
 	default:
 		s.OtherRequests.Add(1)
 	}
+
+	// Track request time for rate calculation
+	s.requestTimesMu.Lock()
+	now := time.Now()
+	s.requestTimes = append(s.requestTimes, now)
+	// Keep only last hour of requests to limit memory
+	cutoff := now.Add(-time.Hour)
+	idx := sort.Search(len(s.requestTimes), func(i int) bool {
+		return s.requestTimes[i].After(cutoff)
+	})
+	if idx > 0 {
+		s.requestTimes = s.requestTimes[idx:]
+	}
+	s.requestTimesMu.Unlock()
+}
+
+// RecordAccountUsage records a successful request using a specific account
+func (s *Stats) RecordAccountUsage(accountName string) {
+	counter, _ := s.accountUsage.LoadOrStore(accountName, &atomic.Int64{})
+	counter.(*atomic.Int64).Add(1)
+}
+
+// RequestsPerMinute returns the number of requests in the last minute
+func (s *Stats) RequestsPerMinute() int64 {
+	s.requestTimesMu.Lock()
+	defer s.requestTimesMu.Unlock()
+
+	cutoff := time.Now().Add(-time.Minute)
+	count := int64(0)
+	for i := len(s.requestTimes) - 1; i >= 0; i-- {
+		if s.requestTimes[i].After(cutoff) {
+			count++
+		} else {
+			break
+		}
+	}
+	return count
+}
+
+// RequestsPerHour returns the number of requests in the last hour
+func (s *Stats) RequestsPerHour() int64 {
+	s.requestTimesMu.Lock()
+	defer s.requestTimesMu.Unlock()
+
+	return int64(len(s.requestTimes))
+}
+
+// AccountUsageSnapshot returns a map of account names to request counts
+func (s *Stats) AccountUsageSnapshot() map[string]int64 {
+	result := make(map[string]int64)
+	s.accountUsage.Range(func(key, value interface{}) bool {
+		result[key.(string)] = value.(*atomic.Int64).Load()
+		return true
+	})
+	return result
 }
 
 // RecordCacheHit records a cache hit
@@ -202,20 +265,24 @@ func (s *Stats) AvgLyricsResponseTime() time.Duration {
 // Snapshot returns a point-in-time snapshot of all stats
 func (s *Stats) Snapshot() map[string]interface{} {
 	uptime := s.Uptime()
+	reqPerMin := s.RequestsPerMinute()
+	reqPerHour := s.RequestsPerHour()
 
 	return map[string]interface{}{
 		"server": map[string]interface{}{
-			"start_time":   s.StartTime.Format(time.RFC3339),
-			"uptime":       uptime.String(),
+			"start_time":     s.StartTime.Format(time.RFC3339),
+			"uptime":         uptime.String(),
 			"uptime_seconds": int64(uptime.Seconds()),
 		},
 		"requests": map[string]interface{}{
-			"total":   s.TotalRequests.Load(),
-			"lyrics":  s.LyricsRequests.Load(),
-			"cache":   s.CacheRequests.Load(),
-			"stats":   s.StatsRequests.Load(),
-			"health":  s.HealthRequests.Load(),
-			"other":   s.OtherRequests.Load(),
+			"total":      s.TotalRequests.Load(),
+			"lyrics":     s.LyricsRequests.Load(),
+			"cache":      s.CacheRequests.Load(),
+			"stats":      s.StatsRequests.Load(),
+			"health":     s.HealthRequests.Load(),
+			"other":      s.OtherRequests.Load(),
+			"per_minute": reqPerMin,
+			"per_hour":   reqPerHour,
 		},
 		"cache": map[string]interface{}{
 			"hits":          s.CacheHits.Load(),
@@ -225,9 +292,9 @@ func (s *Stats) Snapshot() map[string]interface{} {
 			"hit_rate":      s.CacheHitRate(),
 		},
 		"rate_limiting": map[string]interface{}{
-			"normal_tier":   s.RateLimitNormal.Load(),
-			"cached_tier":   s.RateLimitCached.Load(),
-			"exceeded":      s.RateLimitExceeded.Load(),
+			"normal_tier": s.RateLimitNormal.Load(),
+			"cached_tier": s.RateLimitCached.Load(),
+			"exceeded":    s.RateLimitExceeded.Load(),
 		},
 		"responses": map[string]interface{}{
 			"2xx": s.Status2xx.Load(),
@@ -235,10 +302,11 @@ func (s *Stats) Snapshot() map[string]interface{} {
 			"5xx": s.Status5xx.Load(),
 		},
 		"response_times": map[string]interface{}{
-			"avg":       s.AvgResponseTime().String(),
-			"min":       s.MinResponseTime().String(),
-			"max":       s.MaxResponseTime().String(),
+			"avg":        s.AvgResponseTime().String(),
+			"min":        s.MinResponseTime().String(),
+			"max":        s.MaxResponseTime().String(),
 			"avg_lyrics": s.AvgLyricsResponseTime().String(),
 		},
+		"accounts": s.AccountUsageSnapshot(),
 	}
 }

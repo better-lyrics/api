@@ -7,6 +7,7 @@ import (
 	"lyrics-api-go/circuitbreaker"
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
+	"lyrics-api-go/stats"
 	"net/http"
 	"net/url"
 	"strings"
@@ -156,7 +157,7 @@ type TrackScore struct {
 func scoreTrack(track *Track, targetSongName, targetArtistName, targetAlbumName string) TrackScore {
 	// Weights for each factor (must sum to 1.0)
 	const (
-		nameWeight   = 0.50 // 50% weight for song name match
+		nameWeight   = 0.50  // 50% weight for song name match
 		artistWeight = 0.375 // 37.5% weight for artist name match
 		albumWeight  = 0.125 // 12.5% weight for album name match
 	)
@@ -280,6 +281,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	// Success! Record it and clear any quarantine
 	apiCircuitBreaker.RecordSuccess()
 	accountManager.clearQuarantine(account)
+	stats.Get().RecordAccountUsage(account.NameID)
 	log.Infof("%s Request successful via %s", logcolors.LogHTTP, logcolors.Account(account.NameID))
 	return resp, account, nil
 }
@@ -359,7 +361,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 				filteredTracks = append(filteredTracks, track)
 			} else {
 				log.Debugf("%s Rejected %s - %s (duration: %dms, diff: %dms, max delta: %dms)",
-				logcolors.LogDurationFilter,
+					logcolors.LogDurationFilter,
 					track.Attributes.Name,
 					track.Attributes.ArtistName,
 					track.Attributes.DurationInMillis,
@@ -416,7 +418,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 			// Check if the best score meets the minimum threshold
 			if bestScore.TotalScore < minScore {
 				log.Warnf("%s Score %.3f below threshold %.3f for: %s - %s",
-				logcolors.LogBestMatch,
+					logcolors.LogBestMatch,
 					bestScore.TotalScore,
 					minScore,
 					bestScore.Track.Attributes.Name,

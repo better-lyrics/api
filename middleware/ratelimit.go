@@ -1,8 +1,8 @@
 package middleware
 
 import (
-	"math"
 	"golang.org/x/time/rate"
+	"math"
 	"sync"
 )
 

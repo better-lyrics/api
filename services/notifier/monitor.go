@@ -18,11 +18,11 @@ type TokenInfo struct {
 
 // MonitorConfig holds the configuration for the token monitor
 type MonitorConfig struct {
-	Tokens            []TokenInfo // Multiple tokens to monitor
-	WarningThreshold  int         // Days before expiration to start warning
-	ReminderInterval  int         // Hours between reminders (to avoid spam)
-	StateFile         string
-	Notifiers         []Notifier
+	Tokens           []TokenInfo // Multiple tokens to monitor
+	WarningThreshold int         // Days before expiration to start warning
+	ReminderInterval int         // Hours between reminders (to avoid spam)
+	StateFile        string
+	Notifiers        []Notifier
 }
 
 // MonitorState tracks when we last sent notifications

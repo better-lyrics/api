@@ -37,7 +37,7 @@ type MusicAccount struct {
 
 type AccountManager struct {
 	accounts       []MusicAccount
-	currentIndex   uint64 // Use uint64 for atomic operations
+	currentIndex   uint64        // Use uint64 for atomic operations
 	quarantineTime map[int]int64 // account index -> unix timestamp when quarantine ends
 }
 
@@ -81,11 +81,11 @@ type LyricsResponse struct {
 // =============================================================================
 
 type TTML struct {
-	XMLName      xml.Name   `xml:"tt"`
-	Timing       string     `xml:"timing,attr"`
-	ITunesTiming string     `xml:"http://music.apple.com/lyric-ttml-internal timing,attr"`
-	Head         TTMLHead   `xml:"head"`
-	Body         TTMLBody   `xml:"body"`
+	XMLName      xml.Name `xml:"tt"`
+	Timing       string   `xml:"timing,attr"`
+	ITunesTiming string   `xml:"http://music.apple.com/lyric-ttml-internal timing,attr"`
+	Head         TTMLHead `xml:"head"`
+	Body         TTMLBody `xml:"body"`
 }
 
 type TTMLHead struct {
