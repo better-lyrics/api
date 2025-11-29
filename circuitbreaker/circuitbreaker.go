@@ -2,6 +2,7 @@ package circuitbreaker
 
 import (
 	"errors"
+	"lyrics-api-go/logcolors"
 	"sync"
 	"time"
 
@@ -86,7 +87,7 @@ func (cb *CircuitBreaker) Allow() bool {
 		// Check if cooldown has passed
 		if time.Since(cb.lastFailureTime) >= cb.cooldown {
 			cb.state = StateHalfOpen
-			log.Infof("[CircuitBreaker:%s] Cooldown passed, transitioning to HALF-OPEN", cb.name)
+			log.Infof("%s Cooldown passed, transitioning to HALF-OPEN", logcolors.CircuitBreakerPrefix(cb.name))
 			return true // Allow one test request
 		}
 		return false
@@ -110,7 +111,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 		// Test request succeeded, close the circuit
 		cb.state = StateClosed
 		cb.failures = 0
-		log.Infof("[CircuitBreaker:%s] Test request succeeded, transitioning to CLOSED", cb.name)
+		log.Infof("%s Test request succeeded, transitioning to CLOSED", logcolors.CircuitBreakerPrefix(cb.name))
 	} else if cb.state == StateClosed {
 		// Reset failure count on success
 		cb.failures = 0
@@ -128,14 +129,14 @@ func (cb *CircuitBreaker) RecordFailure() {
 	if cb.state == StateHalfOpen {
 		// Test request failed, back to open
 		cb.state = StateOpen
-		log.Warnf("[CircuitBreaker:%s] Test request failed, transitioning back to OPEN", cb.name)
+		log.Warnf("%s Test request failed, transitioning back to OPEN", logcolors.CircuitBreakerPrefix(cb.name))
 		return
 	}
 
 	if cb.state == StateClosed && cb.failures >= cb.threshold {
 		cb.state = StateOpen
-		log.Warnf("[CircuitBreaker:%s] Threshold reached (%d failures), transitioning to OPEN (cooldown: %v)",
-			cb.name, cb.failures, cb.cooldown)
+		log.Warnf("%s Threshold reached (%d failures), transitioning to OPEN (cooldown: %v)",
+			logcolors.CircuitBreakerPrefix(cb.name), cb.failures, cb.cooldown)
 	}
 }
 
@@ -167,7 +168,7 @@ func (cb *CircuitBreaker) Reset() {
 	cb.state = StateClosed
 	cb.failures = 0
 	cb.lastFailureTime = time.Time{}
-	log.Infof("[CircuitBreaker:%s] Manually reset to CLOSED", cb.name)
+	log.Infof("%s Manually reset to CLOSED", logcolors.CircuitBreakerPrefix(cb.name))
 }
 
 // IsOpen returns true if the circuit is open (blocking requests)

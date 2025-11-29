@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"lyrics-api-go/logcolors"
 	"lyrics-api-go/utils"
 	"os"
 	"path/filepath"
@@ -37,9 +38,9 @@ func NewPersistentCache(dbPath string, backupPath string, compressionEnabled boo
 
 	// Check if directory exists
 	if info, err := os.Stat(dir); err == nil {
-		log.Infof("[Cache:Init] Directory %s exists (IsDir: %v)", dir, info.IsDir())
+		log.Infof("%s Directory %s exists (IsDir: %v)", logcolors.LogCacheInit, dir, info.IsDir())
 	} else {
-		log.Infof("[Cache:Init] Directory %s does not exist, creating...", dir)
+		log.Infof("%s Directory %s does not exist, creating...", logcolors.LogCacheInit, dir)
 	}
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -50,13 +51,13 @@ func NewPersistentCache(dbPath string, backupPath string, compressionEnabled boo
 	if err := os.MkdirAll(backupPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create backup directory: %v", err)
 	}
-	log.Infof("[Cache:Init] Backup directory set to: %s", backupPath)
+	log.Infof("%s Backup directory set to: %s", logcolors.LogCacheInit, backupPath)
 
 	// Check if database file already exists
 	if info, err := os.Stat(dbPath); err == nil {
-		log.Infof("[Cache:Init] Found existing database file at: %s (size: %d bytes)", dbPath, info.Size())
+		log.Infof("%s Found existing database file at: %s (size: %d bytes)", logcolors.LogCacheInit, dbPath, info.Size())
 	} else {
-		log.Infof("[Cache:Init] Creating new database file at: %s", dbPath)
+		log.Infof("%s Creating new database file at: %s", logcolors.LogCacheInit, dbPath)
 	}
 
 	db, err := bolt.Open(dbPath, 0600, nil)
@@ -83,10 +84,10 @@ func NewPersistentCache(dbPath string, backupPath string, compressionEnabled boo
 
 	// Load all entries into memory cache
 	if err := pc.loadToMemory(); err != nil {
-		log.Warnf("[Cache] Failed to preload cache to memory: %v", err)
+		log.Warnf("%s Failed to preload cache to memory: %v", logcolors.LogCache, err)
 	}
 
-	log.Infof("[Cache] Persistent cache initialized at %s (compression: %v)", dbPath, compressionEnabled)
+	log.Infof("%s Persistent cache initialized at %s (compression: %v)", logcolors.LogCache, dbPath, compressionEnabled)
 	return pc, nil
 }
 
@@ -108,7 +109,7 @@ func (pc *PersistentCache) loadToMemory() error {
 		return b.ForEach(func(k, v []byte) error {
 			var entry CacheEntry
 			if err := json.Unmarshal(v, &entry); err != nil {
-				log.Warnf("[Cache] Failed to unmarshal cache entry for key %s: %v", string(k), err)
+				log.Warnf("%s Failed to unmarshal cache entry for key %s: %v", logcolors.LogCache, string(k), err)
 				return nil // Continue to next entry
 			}
 			pc.memCache.Store(string(k), entry)
@@ -121,7 +122,7 @@ func (pc *PersistentCache) loadToMemory() error {
 		return err
 	}
 
-	log.Infof("[Cache] Loaded %d entries from disk to memory", count)
+	log.Infof("%s Loaded %d entries from disk to memory", logcolors.LogCache, count)
 	return nil
 }
 
@@ -136,7 +137,7 @@ func (pc *PersistentCache) Get(key string) (string, bool) {
 		if pc.compressionEnabled {
 			decompressed, err := utils.DecompressString(value)
 			if err != nil {
-				log.Errorf("[Cache] Error decompressing cache value for key %s: %v", key, err)
+				log.Errorf("%s Error decompressing cache value for key %s: %v", logcolors.LogCache, key, err)
 				return "", false
 			}
 			return decompressed, true
@@ -177,7 +178,7 @@ func (pc *PersistentCache) Get(key string) (string, bool) {
 	if pc.compressionEnabled {
 		decompressed, err := utils.DecompressString(value)
 		if err != nil {
-			log.Errorf("[Cache] Error decompressing cache value for key %s: %v", key, err)
+			log.Errorf("%s Error decompressing cache value for key %s: %v", logcolors.LogCache, key, err)
 			return "", false
 		}
 		return decompressed, true
@@ -196,7 +197,7 @@ func (pc *PersistentCache) Set(key, value string) error {
 	if pc.compressionEnabled {
 		finalValue, err = utils.CompressString(value)
 		if err != nil {
-			log.Errorf("[Cache] Error compressing cache value for key %s: %v", key, err)
+			log.Errorf("%s Error compressing cache value for key %s: %v", logcolors.LogCache, key, err)
 			return err
 		}
 	} else {
@@ -284,7 +285,7 @@ func (pc *PersistentCache) Backup() (string, error) {
 	backupFileName := fmt.Sprintf("cache_backup_%s.db", timestamp)
 	backupFilePath := filepath.Join(pc.backupPath, backupFileName)
 
-	log.Infof("[Cache:Backup] Creating backup at: %s", backupFilePath)
+	log.Infof("%s Creating backup at: %s", logcolors.LogCacheBackup, backupFilePath)
 
 	// Close the database temporarily to ensure all data is flushed
 	if err := pc.db.Close(); err != nil {
@@ -303,7 +304,7 @@ func (pc *PersistentCache) Backup() (string, error) {
 		return "", fmt.Errorf("failed to reopen database after backup: %v", err)
 	}
 
-	log.Infof("[Cache:Backup] Backup created successfully: %s", backupFilePath)
+	log.Infof("%s Backup created successfully: %s", logcolors.LogCacheBackup, backupFilePath)
 	return backupFilePath, nil
 }
 
@@ -320,7 +321,7 @@ func (pc *PersistentCache) BackupAndClear() (string, error) {
 		return backupPath, fmt.Errorf("backup created but failed to clear cache: %v", err)
 	}
 
-	log.Infof("[Cache:Clear] Cache cleared successfully (backup: %s)", backupPath)
+	log.Infof("%s Cache cleared successfully (backup: %s)", logcolors.LogCacheClear, backupPath)
 	return backupPath, nil
 }
 
@@ -334,7 +335,7 @@ func (pc *PersistentCache) reopenDatabase() error {
 
 	// Reload memory cache
 	if err := pc.loadToMemory(); err != nil {
-		log.Warnf("[Cache] Failed to reload cache to memory: %v", err)
+		log.Warnf("%s Failed to reload cache to memory: %v", logcolors.LogCache, err)
 	}
 
 	return nil
@@ -403,7 +404,7 @@ func (pc *PersistentCache) ListBackups() ([]BackupInfo, error) {
 
 		info, err := entry.Info()
 		if err != nil {
-			log.Warnf("[Cache:Backups] Failed to get info for %s: %v", entry.Name(), err)
+			log.Warnf("%s Failed to get info for %s: %v", logcolors.LogCacheBackups, entry.Name(), err)
 			continue
 		}
 
@@ -433,7 +434,7 @@ func (pc *PersistentCache) RestoreFromBackup(backupFileName string) error {
 		return fmt.Errorf("invalid backup file: must be a .db file")
 	}
 
-	log.Infof("[Cache:Restore] Starting restore from backup: %s", backupFileName)
+	log.Infof("%s Starting restore from backup: %s", logcolors.LogCacheRestore, backupFileName)
 
 	// Close the current database
 	if err := pc.db.Close(); err != nil {
@@ -464,7 +465,7 @@ func (pc *PersistentCache) RestoreFromBackup(backupFileName string) error {
 		return fmt.Errorf("failed to reopen database after restore: %v", err)
 	}
 
-	log.Infof("[Cache:Restore] Successfully restored from backup: %s", backupFileName)
+	log.Infof("%s Successfully restored from backup: %s", logcolors.LogCacheRestore, backupFileName)
 	return nil
 }
 
@@ -486,6 +487,6 @@ func (pc *PersistentCache) DeleteBackup(backupFileName string) error {
 		return fmt.Errorf("failed to delete backup: %v", err)
 	}
 
-	log.Infof("[Cache:Backup] Deleted backup: %s", backupFileName)
+	log.Infof("%s Deleted backup: %s", logcolors.LogCacheBackup, backupFileName)
 	return nil
 }

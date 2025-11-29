@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"lyrics-api-go/circuitbreaker"
 	"lyrics-api-go/config"
+	"lyrics-api-go/logcolors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -43,7 +44,7 @@ func initCircuitBreaker() {
 		Threshold: scaledThreshold,
 		Cooldown:  time.Duration(conf.Configuration.CircuitBreakerCooldownSecs) * time.Second,
 	})
-	log.Infof("[CircuitBreaker] Initialized with threshold=%d (base=%d × %d accounts), cooldown=%ds",
+	log.Infof("%s Initialized with threshold=%d (base=%d × %d accounts), cooldown=%ds", logcolors.LogCircuitBreaker,
 		scaledThreshold,
 		baseThreshold,
 		numAccounts,
@@ -189,16 +190,16 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	// Check circuit breaker before making request
 	if !apiCircuitBreaker.Allow() {
 		timeUntilRetry := apiCircuitBreaker.TimeUntilRetry()
-		log.Warnf("[CircuitBreaker] Request blocked, circuit is OPEN (retry in %v)", timeUntilRetry)
+		log.Warnf("%s Request blocked, circuit is OPEN (retry in %v)", logcolors.LogCircuitBreaker, timeUntilRetry)
 		return nil, account, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
 	}
 
 	attemptNum := retries + 1
-	log.Infof("[HTTP] Making request via %s (attempt %d)...", account.NameID, attemptNum)
+	log.Infof("%s Making request via %s (attempt %d)...", logcolors.LogHTTP, account.NameID, attemptNum)
 
 	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
-		log.Errorf("[HTTP] Failed to create request: %v", err)
+		log.Errorf("%s Failed to create request: %v", logcolors.LogHTTP, err)
 		return nil, account, err
 	}
 
@@ -215,11 +216,11 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	resp, err := client.Do(req)
 	if err != nil {
 		apiCircuitBreaker.RecordFailure()
-		log.Errorf("[HTTP] Request failed via %s: %v", account.NameID, err)
+		log.Errorf("%s Request failed via %s: %v", logcolors.LogHTTP, account.NameID, err)
 		return nil, account, err
 	}
 
-	log.Infof("[HTTP] Response from %s: status %d", account.NameID, resp.StatusCode)
+	log.Infof("%s Response from %s: status %d", logcolors.LogHTTP, account.NameID, resp.StatusCode)
 
 	// Handle rate limiting - quarantine account and retry with different one
 	if resp.StatusCode == 429 {
@@ -230,7 +231,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 		availableAccounts := accountManager.availableAccountCount()
 		if availableAccounts == 0 {
 			apiCircuitBreaker.RecordFailure()
-			log.Warnf("[Rate Limit] All accounts quarantined, recording circuit breaker failure")
+			log.Warnf("%s All accounts quarantined, recording circuit breaker failure", logcolors.LogRateLimit)
 		}
 
 		// Get next available (non-quarantined) account and retry
@@ -242,15 +243,15 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 			resp.Body.Close()
 			nextAccount := accountManager.getNextAccount()
 			sleepDuration := time.Duration(retries+1) * time.Second
-			log.Warnf("[Rate Limit] 429 on %s (quarantined), switching to %s (attempt %d/%d, sleeping %v, %d accounts available)...",
-				account.NameID, nextAccount.NameID, attemptNum, maxRetries, sleepDuration, availableAccounts)
+			log.Warnf("%s 429 on %s (quarantined), switching to %s (attempt %d/%d, sleeping %v, %d accounts available)...",
+				logcolors.LogRateLimit, account.NameID, nextAccount.NameID, attemptNum, maxRetries, sleepDuration, availableAccounts)
 			time.Sleep(sleepDuration)
 			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)
 		}
 
 		body, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
-		log.Errorf("[Rate Limit] All %d retries exhausted, last account: %s", maxRetries, account.NameID)
+		log.Errorf("%s All %d retries exhausted, last account: %s", logcolors.LogRateLimit, maxRetries, account.NameID)
 		return nil, account, fmt.Errorf("TTML API returned status 429: %s", string(body))
 	}
 
@@ -263,8 +264,8 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 		resp.Body.Close()
 		nextAccount := accountManager.getNextAccount()
 		sleepDuration := time.Duration(retries+1) * time.Second
-		log.Warnf("[Auth Error] 401 on %s, switching to %s (attempt %d/%d, sleeping %v)...",
-			account.NameID, nextAccount.NameID, attemptNum, maxRetries, sleepDuration)
+		log.Warnf("%s 401 on %s, switching to %s (attempt %d/%d, sleeping %v)...",
+			logcolors.LogAuthError, account.NameID, nextAccount.NameID, attemptNum, maxRetries, sleepDuration)
 		time.Sleep(sleepDuration)
 		return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)
 	}
@@ -272,14 +273,14 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	if resp.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
-		log.Errorf("[HTTP] Unexpected status %d from %s: %s", resp.StatusCode, account.NameID, string(body))
+		log.Errorf("%s Unexpected status %d from %s: %s", logcolors.LogHTTP, resp.StatusCode, account.NameID, string(body))
 		return nil, account, fmt.Errorf("TTML API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Success! Record it and clear any quarantine
 	apiCircuitBreaker.RecordSuccess()
 	accountManager.clearQuarantine(account)
-	log.Infof("[HTTP] Request successful via %s", account.NameID)
+	log.Infof("%s Request successful via %s", logcolors.LogHTTP, account.NameID)
 	return resp, account, nil
 }
 
@@ -305,7 +306,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 		url.QueryEscape(query),
 	)
 
-	log.Infof("[Search] Querying TTML API via %s: %s", account.NameID, query)
+	log.Infof("%s Querying TTML API via %s: %s", logcolors.LogSearch, account.NameID, query)
 	resp, successAccount, err := makeAPIRequestWithAccount(searchURL, account, 0)
 	if err != nil {
 		return nil, 0.0, successAccount, fmt.Errorf("search request failed: %v", err)
@@ -357,7 +358,8 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 			if diff <= deltaMs {
 				filteredTracks = append(filteredTracks, track)
 			} else {
-				log.Debugf("[Duration Filter] Rejected %s - %s (duration: %dms, diff: %dms, max delta: %dms)",
+				log.Debugf("%s Rejected %s - %s (duration: %dms, diff: %dms, max delta: %dms)",
+				logcolors.LogDurationFilter,
 					track.Attributes.Name,
 					track.Attributes.ArtistName,
 					track.Attributes.DurationInMillis,
@@ -378,7 +380,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 			return nil, 0.0, successAccount, fmt.Errorf("no tracks found within %dms of requested duration %dms", deltaMs, durationMs)
 		}
 
-		log.Infof("[Duration Filter] %d/%d tracks passed duration filter (delta: %dms)", len(filteredTracks), len(tracks), deltaMs)
+		log.Infof("%s %d/%d tracks passed duration filter (delta: %dms)", logcolors.LogDurationFilter, len(filteredTracks), len(tracks), deltaMs)
 		tracks = filteredTracks
 	}
 
@@ -392,7 +394,8 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 			score := scoreTrack(track, songName, artistName, albumName)
 
 			// Log detailed scoring for debugging
-			log.Debugf("[Track Score] %s - %s | Total: %.3f (Name: %.3f, Artist: %.3f, Album: %.3f) | Duration: %dms",
+			log.Debugf("%s %s - %s | Total: %.3f (Name: %.3f, Artist: %.3f, Album: %.3f) | Duration: %dms",
+				logcolors.LogTrackScore,
 				track.Attributes.Name,
 				track.Attributes.ArtistName,
 				score.TotalScore,
@@ -412,7 +415,8 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 
 			// Check if the best score meets the minimum threshold
 			if bestScore.TotalScore < minScore {
-				log.Warnf("[Best Match] Score %.3f below threshold %.3f for: %s - %s",
+				log.Warnf("%s Score %.3f below threshold %.3f for: %s - %s",
+				logcolors.LogBestMatch,
 					bestScore.TotalScore,
 					minScore,
 					bestScore.Track.Attributes.Name,
@@ -420,7 +424,8 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 				return nil, 0.0, successAccount, fmt.Errorf("no matching tracks found (best match score %.3f below threshold %.3f)", bestScore.TotalScore, minScore)
 			}
 
-			log.Infof("[Best Match] %s - %s (Score: %.3f)",
+			log.Infof("%s %s - %s (Score: %.3f)",
+				logcolors.LogBestMatch,
 				bestScore.Track.Attributes.Name,
 				bestScore.Track.Attributes.ArtistName,
 				bestScore.TotalScore)
@@ -429,7 +434,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 	}
 
 	// Fallback: return the first (best) match from API (no score calculated)
-	log.Debugf("[Fallback] Using first search result")
+	log.Debugf("%s Using first search result", logcolors.LogFallback)
 	return &tracks[0], 1.0, successAccount, nil
 }
 
@@ -441,7 +446,7 @@ func fetchLyricsTTML(trackID string, storefront string, account MusicAccount) (s
 		trackID,
 	)
 
-	log.Infof("[Lyrics] Fetching TTML via %s for track: %s", account.NameID, trackID)
+	log.Infof("%s Fetching TTML via %s for track: %s", logcolors.LogLyrics, account.NameID, trackID)
 	resp, _, err := makeAPIRequestWithAccount(lyricsURL, account, 0)
 	if err != nil {
 		return "", fmt.Errorf("lyrics request failed: %v", err)
@@ -458,24 +463,24 @@ func fetchLyricsTTML(trackID string, storefront string, account MusicAccount) (s
 		return "", fmt.Errorf("failed to parse lyrics response: %v", err)
 	}
 
-	log.Debugf("[TTML Fetch] Parsed lyrics response, data entries: %d", len(lyricsResp.Data))
+	log.Debugf("%s Parsed lyrics response, data entries: %d", logcolors.LogLyrics, len(lyricsResp.Data))
 
 	if len(lyricsResp.Data) == 0 {
 		return "", fmt.Errorf("no lyrics data found")
 	}
 
 	ttml := lyricsResp.Data[0].Attributes.TTML
-	log.Debugf("[TTML Fetch] TTML field length: %d", len(ttml))
+	log.Debugf("%s TTML field length: %d", logcolors.LogLyrics, len(ttml))
 
 	if ttml == "" {
 		ttml = lyricsResp.Data[0].Attributes.TTMLLocalizations
-		log.Debugf("[TTML Fetch] Using TTMLLocalizations instead, length: %d", len(ttml))
+		log.Debugf("%s Using TTMLLocalizations instead, length: %d", logcolors.LogLyrics, len(ttml))
 	}
 
 	if ttml == "" {
 		return "", fmt.Errorf("TTML content is empty")
 	}
 
-	log.Debugf("[TTML Fetch] Successfully fetched TTML content, length: %d bytes", len(ttml))
+	log.Debugf("%s Successfully fetched TTML content, length: %d bytes", logcolors.LogLyrics, len(ttml))
 	return ttml, nil
 }

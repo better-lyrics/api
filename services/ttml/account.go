@@ -2,6 +2,7 @@ package ttml
 
 import (
 	"lyrics-api-go/config"
+	"lyrics-api-go/logcolors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,7 +79,7 @@ func (m *AccountManager) getNextAccount() MusicAccount {
 		if !m.isQuarantined(accountIdx, now) {
 			return m.accounts[accountIdx]
 		}
-		log.Debugf("[Quarantine] Skipping %s (quarantined)", m.accounts[accountIdx].NameID)
+		log.Debugf("%s Skipping %s (quarantined)", logcolors.LogQuarantine, m.accounts[accountIdx].NameID)
 	}
 
 	// All accounts quarantined - find the one with shortest remaining time
@@ -103,8 +104,8 @@ func (m *AccountManager) getNextAccount() MusicAccount {
 	quarantineMutex.RUnlock()
 
 	if shortestTime > 0 {
-		log.Warnf("[Quarantine] All accounts quarantined! Using %s (shortest wait: %ds)",
-			m.accounts[shortestIdx].NameID, shortestTime)
+		log.Warnf("%s All accounts quarantined! Using %s (shortest wait: %ds)",
+			logcolors.LogQuarantine, m.accounts[shortestIdx].NameID, shortestTime)
 	}
 
 	return m.accounts[shortestIdx]
@@ -134,7 +135,7 @@ func (m *AccountManager) quarantineAccount(account MusicAccount) {
 	}
 
 	if accountIdx == -1 {
-		log.Warnf("[Quarantine] Could not find account %s to quarantine", account.NameID)
+		log.Warnf("%s Could not find account %s to quarantine", logcolors.LogQuarantine, account.NameID)
 		return
 	}
 
@@ -142,7 +143,7 @@ func (m *AccountManager) quarantineAccount(account MusicAccount) {
 	m.quarantineTime[accountIdx] = time.Now().Add(QuarantineDuration).Unix()
 	quarantineMutex.Unlock()
 
-	log.Warnf("[Quarantine] Account %s quarantined for %v due to rate limit", account.NameID, QuarantineDuration)
+	log.Warnf("%s Account %s quarantined for %v due to rate limit", logcolors.LogQuarantine, account.NameID, QuarantineDuration)
 }
 
 // clearQuarantine removes quarantine from an account (called on successful request)
@@ -163,7 +164,7 @@ func (m *AccountManager) clearQuarantine(account MusicAccount) {
 	quarantineMutex.Lock()
 	if _, exists := m.quarantineTime[accountIdx]; exists {
 		delete(m.quarantineTime, accountIdx)
-		log.Infof("[Quarantine] Account %s quarantine cleared (successful request)", account.NameID)
+		log.Infof("%s Account %s quarantine cleared (successful request)", logcolors.LogQuarantine, account.NameID)
 	}
 	quarantineMutex.Unlock()
 }

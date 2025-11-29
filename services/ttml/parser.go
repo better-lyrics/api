@@ -3,6 +3,7 @@ package ttml
 import (
 	"encoding/xml"
 	"fmt"
+	"lyrics-api-go/logcolors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -51,11 +52,11 @@ func parseTTMLTime(timeStr string) (int64, error) {
 // Parse TTML directly to Lines (handles word-level TTML)
 // Returns: lines, timingType, error
 func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
-	log.Debugf("[TTML Parser] Starting to parse TTML content (length: %d bytes)", len(ttmlContent))
+	log.Debugf("%s Starting to parse TTML content (length: %d bytes)", logcolors.LogTTMLParser, len(ttmlContent))
 
 	var ttml TTML
 	if err := xml.Unmarshal([]byte(ttmlContent), &ttml); err != nil {
-		log.Errorf("[TTML Parser] Failed to unmarshal XML: %v", err)
+		log.Errorf("%s Failed to unmarshal XML: %v", logcolors.LogTTMLParser, err)
 		return nil, "", fmt.Errorf("failed to parse TTML XML: %v", err)
 	}
 
@@ -67,24 +68,24 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 	if timingType == "" {
 		timingType = "line" // Default to line if not specified
 	}
-	log.Debugf("[TTML Parser] Timing type: %s", timingType)
+	log.Debugf("%s Timing type: %s", logcolors.LogTTMLParser, timingType)
 
 	agentMap := make(map[string]string)
 	for _, agent := range ttml.Head.Metadata.Agents {
 		agentMap[agent.ID] = agent.Type
 	}
-	log.Debugf("[TTML Parser] Found %d agents in metadata", len(agentMap))
+	log.Debugf("%s Found %d agents in metadata", logcolors.LogTTMLParser, len(agentMap))
 
-	log.Debugf("[TTML Parser] Successfully parsed XML structure")
-	log.Debugf("[TTML Parser] Number of div sections found: %d", len(ttml.Body.Divs))
+	log.Debugf("%s Successfully parsed XML structure", logcolors.LogTTMLParser)
+	log.Debugf("%s Number of div sections found: %d", logcolors.LogTTMLParser, len(ttml.Body.Divs))
 
 	var lines []Line
 
 	// Handle unsynced lyrics (timing="none")
 	if timingType == "none" {
-		log.Debugf("[TTML Parser] Processing unsynced lyrics")
+		log.Debugf("%s Processing unsynced lyrics", logcolors.LogTTMLParser)
 		for divIdx, div := range ttml.Body.Divs {
-			log.Debugf("[TTML Parser] Processing div %d with %d paragraphs", divIdx, len(div.Paragraphs))
+			log.Debugf("%s Processing div %d with %d paragraphs", logcolors.LogTTMLParser, divIdx, len(div.Paragraphs))
 
 			for i, para := range div.Paragraphs {
 				// Remove HTML tags from paragraph text
@@ -93,7 +94,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 				lineText = strings.TrimSpace(lineText)
 
 				if lineText == "" {
-					log.Debugf("[TTML Parser] Skipping empty paragraph %d", i)
+					log.Debugf("%s Skipping empty paragraph %d", logcolors.LogTTMLParser, i)
 					continue
 				}
 
@@ -106,20 +107,20 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					Syllables:   []Syllable{}, // Empty for unsynced lyrics
 				}
 
-				log.Debugf("[TTML Parser] Created unsynced line %d: '%s'", i, lineText)
+				log.Debugf("%s Created unsynced line %d: '%s'", logcolors.LogTTMLParser, i, lineText)
 				lines = append(lines, line)
 			}
 		}
-		log.Infof("[TTML Parser] Successfully extracted %d unsynced lines from TTML", len(lines))
+		log.Infof("%s Successfully extracted %d unsynced lines from TTML", logcolors.LogTTMLParser, len(lines))
 		return lines, timingType, nil
 	}
 
 	// Handle synced lyrics (word-level or line-level)
 	for divIdx, div := range ttml.Body.Divs {
-		log.Debugf("[TTML Parser] Processing div %d (songPart: %s) with %d paragraphs", divIdx, div.SongPart, len(div.Paragraphs))
+		log.Debugf("%s Processing div %d (songPart: %s) with %d paragraphs", logcolors.LogTTMLParser, divIdx, div.SongPart, len(div.Paragraphs))
 
 		for i, para := range div.Paragraphs {
-			log.Debugf("[TTML Parser]   Processing paragraph %d: begin=%s, end=%s, spans=%d", i, para.Begin, para.End, len(para.Spans))
+			log.Debugf("%s   Processing paragraph %d: begin=%s, end=%s, spans=%d", logcolors.LogTTMLParser, i, para.Begin, para.End, len(para.Spans))
 
 			if len(para.Spans) > 0 {
 				// Extract full paragraph text (with HTML tags removed)
@@ -144,13 +145,13 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 
 							startMs, err := parseTTMLTime(nestedSpan.Begin)
 							if err != nil {
-								log.Warnf("[TTML Parser] Failed to parse nested span start time %s: %v", nestedSpan.Begin, err)
+								log.Warnf("%s Failed to parse nested span start time %s: %v", logcolors.LogTTMLParser, nestedSpan.Begin, err)
 								continue
 							}
 
 							endMs, err := parseTTMLTime(nestedSpan.End)
 							if err != nil {
-								log.Warnf("[TTML Parser] Failed to parse nested span end time %s: %v", nestedSpan.End, err)
+								log.Warnf("%s Failed to parse nested span end time %s: %v", logcolors.LogTTMLParser, nestedSpan.End, err)
 								continue
 							}
 
@@ -164,7 +165,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 							// Find where this syllable appears in the full text
 							nextWordIndex := strings.Index(fullText[wordsIndex:], syllableText)
 							if nextWordIndex < 0 {
-								log.Errorf("[TTML Parser] Error parsing timings in paragraph %d, span %d, nested %d: syllable '%s' not found in remaining text starting at index %d", i, j, k, syllableText, wordsIndex)
+								log.Errorf("%s Error parsing timings in paragraph %d, span %d, nested %d: syllable '%s' not found in remaining text starting at index %d", logcolors.LogTTMLParser, i, j, k, syllableText, wordsIndex)
 								break
 							}
 							nextWordIndex += wordsIndex // Convert relative index to absolute
@@ -172,7 +173,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 							// If there's gap text before this syllable, add it as zero-duration
 							if nextWordIndex-wordsIndex > 0 {
 								extraText := fullText[wordsIndex:nextWordIndex]
-								log.Debugf("[TTML Parser]   Found gap text: '%s'", extraText)
+								log.Debugf("%s   Found gap text: '%s'", logcolors.LogTTMLParser, extraText)
 
 								// Use timing and background status from first syllable or current if first
 								var gapStartTime int64
@@ -197,7 +198,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 								syllables = append(syllables, gapSyllable)
 								wordsIndex = nextWordIndex
 							} else {
-								log.Debugf("[TTML Parser]   No gap text before syllable")
+								log.Debugf("%s   No gap text before syllable", logcolors.LogTTMLParser)
 							}
 
 							// Add the actual syllable with background flag
@@ -210,7 +211,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 							syllables = append(syllables, syllable)
 							wordsIndex += len(syllableText)
 
-							log.Debugf("[TTML Parser]   Nested span %d.%d: '%s' [%s - %s] bg=true", j, k, syllableText, nestedSpan.Begin, nestedSpan.End)
+							log.Debugf("%s   Nested span %d.%d: '%s' [%s - %s] bg=true", logcolors.LogTTMLParser, j, k, syllableText, nestedSpan.Begin, nestedSpan.End)
 						}
 						continue
 					}
@@ -223,13 +224,13 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 
 					startMs, err := parseTTMLTime(span.Begin)
 					if err != nil {
-						log.Warnf("[TTML Parser] Failed to parse span start time %s: %v", span.Begin, err)
+						log.Warnf("%s Failed to parse span start time %s: %v", logcolors.LogTTMLParser, span.Begin, err)
 						continue
 					}
 
 					endMs, err := parseTTMLTime(span.End)
 					if err != nil {
-						log.Warnf("[TTML Parser] Failed to parse span end time %s: %v", span.End, err)
+						log.Warnf("%s Failed to parse span end time %s: %v", logcolors.LogTTMLParser, span.End, err)
 						continue
 					}
 
@@ -246,7 +247,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					// Find where this syllable appears in the full text
 					nextWordIndex := strings.Index(fullText[wordsIndex:], syllableText)
 					if nextWordIndex < 0 {
-						log.Errorf("[TTML Parser] Error parsing timings in paragraph %d, span %d: syllable '%s' not found in remaining text starting at index %d", i, j, syllableText, wordsIndex)
+						log.Errorf("%s Error parsing timings in paragraph %d, span %d: syllable '%s' not found in remaining text starting at index %d", logcolors.LogTTMLParser, i, j, syllableText, wordsIndex)
 						break
 					}
 					nextWordIndex += wordsIndex // Convert relative index to absolute
@@ -254,7 +255,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					// If there's gap text before this syllable, add it as zero-duration
 					if nextWordIndex-wordsIndex > 0 {
 						extraText := fullText[wordsIndex:nextWordIndex]
-						log.Debugf("[TTML Parser]   Found gap text: '%s'", extraText)
+						log.Debugf("%s   Found gap text: '%s'", logcolors.LogTTMLParser, extraText)
 
 						// Use timing and background status from first syllable or current if first
 						var gapStartTime int64
@@ -279,7 +280,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 						syllables = append(syllables, gapSyllable)
 						wordsIndex = nextWordIndex
 					} else {
-						log.Debugf("[TTML Parser]   No gap text before syllable")
+						log.Debugf("%s   No gap text before syllable", logcolors.LogTTMLParser)
 					}
 
 					// Add the actual syllable
@@ -292,11 +293,11 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					syllables = append(syllables, syllable)
 					wordsIndex += len(syllableText)
 
-					log.Debugf("[TTML Parser]   Span %d: '%s' [%s - %s] role='%s' bg=%v", j, syllableText, span.Begin, span.End, span.Role, isBackground)
+					log.Debugf("%s   Span %d: '%s' [%s - %s] role='%s' bg=%v", logcolors.LogTTMLParser, j, syllableText, span.Begin, span.End, span.Role, isBackground)
 				}
 
 				if len(syllables) == 0 {
-					log.Warnf("[TTML Parser] Skipping paragraph %d - no valid syllables extracted", i)
+					log.Warnf("%s Skipping paragraph %d - no valid syllables extracted", logcolors.LogTTMLParser, i)
 					continue
 				}
 
@@ -318,7 +319,7 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					Agent:       agent,
 				}
 
-				log.Debugf("[TTML Parser]   Created line %d: startMs=%s, endMs=%s, words='%s', syllables=%d, agent=%s", i, line.StartTimeMs, line.EndTimeMs, line.Words, len(line.Syllables), agent)
+				log.Debugf("%s   Created line %d: startMs=%s, endMs=%s, words='%s', syllables=%d, agent=%s", logcolors.LogTTMLParser, i, line.StartTimeMs, line.EndTimeMs, line.Words, len(line.Syllables), agent)
 				lines = append(lines, line)
 			} else {
 				// Line-level TTML without spans
@@ -327,19 +328,19 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 				lineText = strings.TrimSpace(lineText)
 
 				if lineText == "" {
-					log.Warnf("[TTML Parser] Skipping paragraph %d - empty text", i)
+					log.Warnf("%s Skipping paragraph %d - empty text", logcolors.LogTTMLParser, i)
 					continue
 				}
 
 				startMs, err := parseTTMLTime(para.Begin)
 				if err != nil {
-					log.Warnf("[TTML Parser] Failed to parse line start time %s: %v", para.Begin, err)
+					log.Warnf("%s Failed to parse line start time %s: %v", logcolors.LogTTMLParser, para.Begin, err)
 					continue
 				}
 
 				endMs, err := parseTTMLTime(para.End)
 				if err != nil {
-					log.Warnf("[TTML Parser] Failed to parse line end time %s: %v", para.End, err)
+					log.Warnf("%s Failed to parse line end time %s: %v", logcolors.LogTTMLParser, para.End, err)
 					continue
 				}
 
@@ -361,12 +362,12 @@ func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {
 					Agent:       agent,
 				}
 
-				log.Debugf("[TTML Parser]   Created line-level line %d: startMs=%s, endMs=%s, words='%s', agent=%s", i, line.StartTimeMs, line.EndTimeMs, line.Words, agent)
+				log.Debugf("%s   Created line-level line %d: startMs=%s, endMs=%s, words='%s', agent=%s", logcolors.LogTTMLParser, i, line.StartTimeMs, line.EndTimeMs, line.Words, agent)
 				lines = append(lines, line)
 			}
 		}
 	}
 
-	log.Infof("[TTML Parser] Successfully extracted %d lines from TTML (type: %s)", len(lines), timingType)
+	log.Infof("%s Successfully extracted %d lines from TTML (type: %s)", logcolors.LogTTMLParser, len(lines), timingType)
 	return lines, timingType, nil
 }

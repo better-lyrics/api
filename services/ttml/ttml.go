@@ -2,6 +2,7 @@ package ttml
 
 import (
 	"fmt"
+	"lyrics-api-go/logcolors"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -35,9 +36,9 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 
 	if durationMs > 0 {
-		log.Infof("[Request] Starting with account %s | Query: %s (duration: %dms)", account.NameID, query, durationMs)
+		log.Infof("%s Starting with account %s | Query: %s (duration: %dms)", logcolors.LogRequest, account.NameID, query, durationMs)
 	} else {
-		log.Infof("[Request] Starting with account %s | Query: %s", account.NameID, query)
+		log.Infof("%s Starting with account %s | Query: %s", logcolors.LogRequest, account.NameID, query)
 	}
 
 	// Search returns the account that succeeded (may differ if retry occurred)
@@ -57,12 +58,12 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		if durationDiff < 0 {
 			durationDiff = -durationDiff
 		}
-		log.Infof("[Match] %s - %s (ID: %s, duration: %dms, diff: %dms, score: %.3f)",
-			track.Attributes.Name, track.Attributes.ArtistName, track.ID,
+		log.Infof("%s %s - %s (ID: %s, duration: %dms, diff: %dms, score: %.3f)",
+			logcolors.LogMatch, track.Attributes.Name, track.Attributes.ArtistName, track.ID,
 			trackDurationMs, durationDiff, score)
 	} else {
-		log.Infof("[Match] %s - %s (ID: %s, duration: %dms, score: %.3f)",
-			track.Attributes.Name, track.Attributes.ArtistName, track.ID, trackDurationMs, score)
+		log.Infof("%s %s - %s (ID: %s, duration: %dms, score: %.3f)",
+			logcolors.LogMatch, track.Attributes.Name, track.Attributes.ArtistName, track.ID, trackDurationMs, score)
 	}
 
 	// Use the same account that succeeded for search to fetch lyrics
@@ -76,8 +77,8 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		return "", 0, 0.0, fmt.Errorf("TTML content is empty")
 	}
 
-	log.Infof("[Success] Fetched TTML via %s for: %s - %s (%d bytes)",
-		workingAccount.NameID, track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
+	log.Infof("%s Fetched TTML via %s for: %s - %s (%d bytes)",
+		logcolors.LogSuccess, workingAccount.NameID, track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
 
 	return ttml, trackDurationMs, score, nil
 }

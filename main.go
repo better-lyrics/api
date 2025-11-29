@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"lyrics-api-go/cache"
 	"lyrics-api-go/config"
+	"lyrics-api-go/logcolors"
 	"lyrics-api-go/middleware"
 	"lyrics-api-go/services/notifier"
 	"lyrics-api-go/services/ttml"
@@ -224,7 +225,7 @@ func setNegativeCache(key, reason string) {
 	if err := persistentCache.Set(negativeKey, string(data)); err != nil {
 		log.Errorf("Error setting negative cache: %v", err)
 	}
-	log.Infof("[Cache:Negative] Cached 'no lyrics' for key: %s (reason: %s)", key, reason)
+	log.Infof("%s Cached 'no lyrics' for key: %s (reason: %s)", logcolors.LogCacheNegative, key, reason)
 }
 
 // shouldNegativeCache determines if an error should be stored in negative cache
@@ -272,7 +273,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	// Check cache first
 	if cachedTTML, _, ok := getCachedLyrics(cacheKey); ok {
-		log.Info("[Cache:Lyrics] Found cached TTML")
+		log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "HIT")
 		if rateLimitType != "" {
@@ -287,7 +288,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	// Check negative cache (known "no lyrics" responses)
 	if reason, found := getNegativeCache(cacheKey); found {
-		log.Infof("[Cache:Negative] Returning cached 'no lyrics' response for: %s", query)
+		log.Infof("%s Returning cached 'no lyrics' response for: %s", logcolors.LogCacheNegative, query)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "NEGATIVE_HIT")
 		if rateLimitType != "" {
@@ -302,7 +303,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	// If in cache-only mode and no cache found, return 429
 	if cacheOnlyMode {
-		log.Warnf("[Cache:Lyrics] Cache-only mode but no cache found for: %s", query)
+		log.Warnf("%s Cache-only mode but no cache found for: %s", logcolors.LogCacheLyrics, query)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		w.Header().Set("X-RateLimit-Type", "cached")
@@ -319,7 +320,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	req := inFlight.(*InFlightRequest)
 
 	if loaded {
-		log.Info("[Cache:Lyrics] Waiting for in-flight request to complete")
+		log.Infof("%s Waiting for in-flight request to complete", logcolors.LogCacheLyrics)
 		req.wg.Wait()
 
 		if req.err != nil {
@@ -377,7 +378,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		fallbackKeys := buildFallbackCacheKeys(songName, artistName, albumName, durationStr, cacheKey)
 		for _, fallbackKey := range fallbackKeys {
 			if cachedTTML, _, ok := getCachedLyrics(fallbackKey); ok {
-				log.Warnf("[Cache:Lyrics] Backend failed, serving stale cache from key: %s", fallbackKey)
+				log.Warnf("%s Backend failed, serving stale cache from key: %s", logcolors.LogCacheLyrics, fallbackKey)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Cache-Status", "STALE")
 				if rateLimitType != "" {
@@ -424,7 +425,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Infof("[Cache:Lyrics] Caching TTML for: %s (trackDuration: %dms)", query, trackDurationMs)
+	log.Infof("%s Caching TTML for: %s (trackDuration: %dms)", logcolors.LogCacheLyrics, query, trackDurationMs)
 	setCachedLyrics(cacheKey, ttmlString, trackDurationMs)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -540,13 +541,13 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 				"error":  err.Error(),
 			}
 			failCount++
-			log.Errorf("[Test Notifications] %s failed: %v", notifierType, err)
+			log.Errorf("%s %s failed: %v", logcolors.LogTestNotifications, notifierType, err)
 		} else {
 			results[notifierType] = map[string]string{
 				"status": "success",
 			}
 			successCount++
-			log.Infof("[Test Notifications] %s sent successfully", notifierType)
+			log.Infof("%s %s sent successfully", logcolors.LogTestNotifications, notifierType)
 		}
 	}
 
@@ -614,7 +615,7 @@ func backupCache(w http.ResponseWriter, r *http.Request) {
 
 	backupPath, err := persistentCache.Backup()
 	if err != nil {
-		log.Errorf("[Cache:Backup] Failed to create backup: %v", err)
+		log.Errorf("%s Failed to create backup: %v", logcolors.LogCacheBackup, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -623,7 +624,7 @@ func backupCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Infof("[Cache:Backup] Backup created successfully at: %s", backupPath)
+	log.Infof("%s Backup created successfully at: %s", logcolors.LogCacheBackup, backupPath)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":     "Backup created successfully",
@@ -639,7 +640,7 @@ func clearCache(w http.ResponseWriter, r *http.Request) {
 
 	backupPath, err := persistentCache.BackupAndClear()
 	if err != nil {
-		log.Errorf("[Cache:Clear] Failed to backup and clear cache: %v", err)
+		log.Errorf("%s Failed to backup and clear cache: %v", logcolors.LogCacheClear, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -648,7 +649,7 @@ func clearCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Infof("[Cache:Clear] Cache cleared successfully, backup at: %s", backupPath)
+	log.Infof("%s Cache cleared successfully, backup at: %s", logcolors.LogCacheClear, backupPath)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":     "Cache cleared successfully",
@@ -664,7 +665,7 @@ func listBackups(w http.ResponseWriter, r *http.Request) {
 
 	backups, err := persistentCache.ListBackups()
 	if err != nil {
-		log.Errorf("[Cache:Backups] Failed to list backups: %v", err)
+		log.Errorf("%s Failed to list backups: %v", logcolors.LogCacheBackups, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -699,7 +700,7 @@ func restoreCache(w http.ResponseWriter, r *http.Request) {
 
 	// Restore from the specified backup
 	if err := persistentCache.RestoreFromBackup(backupFileName); err != nil {
-		log.Errorf("[Cache:Restore] Failed to restore from backup %s: %v", backupFileName, err)
+		log.Errorf("%s Failed to restore from backup %s: %v", logcolors.LogCacheRestore, backupFileName, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -711,7 +712,7 @@ func restoreCache(w http.ResponseWriter, r *http.Request) {
 	// Get new cache stats after restore
 	numKeys, sizeKB := persistentCache.Stats()
 
-	log.Infof("[Cache:Restore] Cache restored from backup: %s", backupFileName)
+	log.Infof("%s Cache restored from backup: %s", logcolors.LogCacheRestore, backupFileName)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":        "Cache restored successfully",
@@ -874,7 +875,7 @@ func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.
 			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limiter.GetCachedLimit()))
 			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remainingCached))
 			w.Header().Set("X-RateLimit-Type", "cached")
-			log.Debugf("[RateLimit] IP %s exceeded normal tier, using cached tier", r.RemoteAddr)
+			log.Debugf("%s IP %s exceeded normal tier, using cached tier", logcolors.LogRateLimit, r.RemoteAddr)
 			ctx := context.WithValue(r.Context(), cacheOnlyModeKey, true)
 			ctx = context.WithValue(ctx, rateLimitTypeKey, "cached")
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -882,7 +883,7 @@ func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.
 		}
 
 		// Both tiers exceeded
-		log.Warnf("[RateLimit] IP %s exceeded both rate limit tiers", r.RemoteAddr)
+		log.Warnf("%s IP %s exceeded both rate limit tiers", logcolors.LogRateLimit, r.RemoteAddr)
 		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limiter.GetCachedLimit()))
 		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.Header().Set("X-RateLimit-Type", "exceeded")
@@ -894,20 +895,20 @@ func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.
 func startTokenMonitor() {
 	accounts, err := conf.GetTTMLAccounts()
 	if err != nil {
-		log.Warnf("[Token Monitor] Failed to get TTML accounts: %v", err)
+		log.Warnf("%s Failed to get TTML accounts: %v", logcolors.LogTokenMonitor, err)
 		return
 	}
 
 	if len(accounts) == 0 {
-		log.Warn("[Token Monitor] No TTML accounts configured, token monitoring disabled")
+		log.Warnf("%s No TTML accounts configured, token monitoring disabled", logcolors.LogTokenMonitor)
 		return
 	}
 
 	notifiers := setupNotifiers()
 
 	if len(notifiers) == 0 {
-		log.Info("[Token Monitor] No notifiers configured, token monitoring disabled")
-		log.Info("[Token Monitor] To enable notifications, configure at least one notifier (Email, Telegram, or Ntfy.sh)")
+		log.Infof("%s No notifiers configured, token monitoring disabled", logcolors.LogTokenMonitor)
+		log.Infof("%s To enable notifications, configure at least one notifier (Email, Telegram, or Ntfy.sh)", logcolors.LogTokenMonitor)
 		return
 	}
 
@@ -920,7 +921,7 @@ func startTokenMonitor() {
 		}
 	}
 
-	log.Infof("[Token Monitor] Starting with %d account(s) and %d notifier(s) configured", len(tokens), len(notifiers))
+	log.Infof("%s Starting with %d account(s) and %d notifier(s) configured", logcolors.LogTokenMonitor, len(tokens), len(notifiers))
 
 	monitor := notifier.NewTokenMonitor(notifier.MonitorConfig{
 		Tokens:           tokens,
@@ -946,7 +947,7 @@ func setupNotifiers() []notifier.Notifier {
 			ToEmail:      os.Getenv("NOTIFIER_TO_EMAIL"),
 		}
 		notifiers = append(notifiers, emailNotifier)
-		log.Info("[Token Monitor] Email notifier enabled")
+		log.Infof("%s Email notifier enabled", logcolors.LogTokenMonitor)
 	}
 
 	if botToken := os.Getenv("NOTIFIER_TELEGRAM_BOT_TOKEN"); botToken != "" {
@@ -955,7 +956,7 @@ func setupNotifiers() []notifier.Notifier {
 			ChatID:   os.Getenv("NOTIFIER_TELEGRAM_CHAT_ID"),
 		}
 		notifiers = append(notifiers, telegramNotifier)
-		log.Info("[Token Monitor] Telegram notifier enabled")
+		log.Infof("%s Telegram notifier enabled", logcolors.LogTokenMonitor)
 	}
 
 	if topic := os.Getenv("NOTIFIER_NTFY_TOPIC"); topic != "" {
@@ -964,7 +965,7 @@ func setupNotifiers() []notifier.Notifier {
 			Server: getEnvOrDefault("NOTIFIER_NTFY_SERVER", "https://ntfy.sh"),
 		}
 		notifiers = append(notifiers, ntfyNotifier)
-		log.Info("[Token Monitor] Ntfy.sh notifier enabled")
+		log.Infof("%s Ntfy.sh notifier enabled", logcolors.LogTokenMonitor)
 	}
 
 	return notifiers

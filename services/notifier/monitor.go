@@ -3,6 +3,7 @@ package notifier
 import (
 	"encoding/json"
 	"fmt"
+	"lyrics-api-go/logcolors"
 	"os"
 	"time"
 
@@ -131,11 +132,11 @@ func (m *TokenMonitor) Check() error {
 		}
 
 		if err != nil {
-			log.Warnf("[Token Monitor] Failed to check %s: %v", token.Name, err)
+			log.Warnf("%s Failed to check %s: %v", logcolors.LogTokenMonitor, token.Name, err)
 			continue
 		}
 
-		log.Debugf("[Token Monitor] %s: expiring_soon=%v, days_remaining=%d", token.Name, expiringSoon, daysRemaining)
+		log.Debugf("%s %s: expiring_soon=%v, days_remaining=%d", logcolors.LogTokenMonitor, token.Name, expiringSoon, daysRemaining)
 
 		if expiringSoon {
 			expiringTokens = append(expiringTokens, status)
@@ -147,13 +148,13 @@ func (m *TokenMonitor) Check() error {
 
 	// If no tokens are expiring soon, nothing to do
 	if len(expiringTokens) == 0 {
-		log.Debugf("[Token Monitor] All tokens are healthy")
+		log.Debugf("%s All tokens are healthy", logcolors.LogTokenMonitor)
 		return nil
 	}
 
 	// Check if we should send notification (based on the most urgent token)
 	if !m.shouldSendNotification(minDaysRemaining) {
-		log.Debugf("[Token Monitor] Skipping notification (too soon since last notification)")
+		log.Debugf("%s Skipping notification (too soon since last notification)", logcolors.LogTokenMonitor)
 		return nil
 	}
 
