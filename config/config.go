@@ -89,7 +89,7 @@ func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
 		}
 		return []TTMLAccount{
 			{
-				Name:           "Freddie",
+				Name:           "Billie",
 				BearerToken:    c.Configuration.TTMLBearerToken,
 				MediaUserToken: c.Configuration.TTMLMediaUserToken,
 			},
@@ -108,18 +108,18 @@ func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
 		)
 	}
 
-	// Legendary artist names for account logging
+	// Artist names for account logging
 	funNames := []string{
-		"Freddie", "Bowie", "Prince", "Madonna", "Elvis",
-		"Hendrix", "Lennon", "Marley", "Aretha", "Whitney",
-		"MJ", "Beyoncé", "Adele", "Drake", "Taylor",
-		"Rihanna", "Kanye", "Eminem", "Cardi", "Kendrick",
-		"Sinatra", "Stevie", "Elton", "Billy", "Bruce",
-		"Cher", "Tina", "Diana", "Janet", "Mariah",
-		"Kurt", "Eddie", "Mick", "Keith", "Axl",
-		"Tupac", "Biggie", "Snoop", "Dre", "Jay",
-		"Gaga", "Katy", "Ariana", "Dua", "Billie",
-		"Abel", "Bruno", "Pharrell", "Cudi", "Frank",
+		"Billie", "Toliver", "Taylor", "Dua", "Olivia",
+		"Charli", "Halsey", "Tyler", "Gunna", "Future",
+		"Offset", "Metro", "Burna", "Phoebe", "Mitski",
+		"Finneas", "Clairo", "Raye", "Hozier", "Gracie",
+		"Adele", "Ye", "Abel", "Keem", "Yeat",
+		"Cannons", "Roosevelt", "Kygo", "Uchis", "Laufey",
+		"Impala", "Denzel", "Garrix", "Illenium", "June",
+		"Winona", "Carti", "Sivan", "Larsson", "Midnight",
+		"Marias", "Lanez", "Odesza", "Flume", "Mura",
+		"Gryffin", "Rüfüs", "Jai", "Disclosure", "Kaytranada",
 	}
 
 	accounts := make([]TTMLAccount, len(bearerList))
