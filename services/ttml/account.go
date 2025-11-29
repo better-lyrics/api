@@ -11,7 +11,7 @@ import (
 
 const (
 	// QuarantineDuration is how long an account is quarantined after a 429
-	QuarantineDuration = 60 * time.Second
+	QuarantineDuration = 5 * time.Minute
 )
 
 var (

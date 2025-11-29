@@ -323,8 +323,8 @@ func TestAccountManager_QuarantineStatus(t *testing.T) {
 	}
 	if remaining, exists := status["Account1"]; !exists {
 		t.Error("Account1 should be in quarantine status")
-	} else if remaining <= 0 || remaining > 60 {
-		t.Errorf("Expected remaining time between 0-60 seconds, got %d", remaining)
+	} else if remaining <= 0 || remaining > 300 {
+		t.Errorf("Expected remaining time between 0-300 seconds, got %d", remaining)
 	}
 }
 
