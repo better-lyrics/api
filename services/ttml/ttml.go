@@ -36,9 +36,9 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 
 	if durationMs > 0 {
-		log.Infof("%s Starting with account %s | Query: %s (duration: %dms)", logcolors.LogRequest, account.NameID, query, durationMs)
+		log.Infof("%s Starting with account %s | Query: %s (duration: %dms)", logcolors.LogRequest, logcolors.Account(account.NameID), query, durationMs)
 	} else {
-		log.Infof("%s Starting with account %s | Query: %s", logcolors.LogRequest, account.NameID, query)
+		log.Infof("%s Starting with account %s | Query: %s", logcolors.LogRequest, logcolors.Account(account.NameID), query)
 	}
 
 	// Search returns the account that succeeded (may differ if retry occurred)
@@ -78,7 +78,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 
 	log.Infof("%s Fetched TTML via %s for: %s - %s (%d bytes)",
-		logcolors.LogSuccess, workingAccount.NameID, track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
+		logcolors.LogSuccess, logcolors.Account(workingAccount.NameID), track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
 
 	return ttml, trackDurationMs, score, nil
 }

@@ -7,6 +7,16 @@ const (
 	Blue   = "\033[34m"
 	Purple = "\033[35m"
 	Cyan   = "\033[36m"
+
+	// Bright variants for more color variety
+	BrightGreen   = "\033[92m"
+	BrightBlue    = "\033[94m"
+	BrightMagenta = "\033[95m"
+	BrightCyan    = "\033[96m"
+
+	// Red variants (for account names only)
+	Red       = "\033[31m"
+	BrightRed = "\033[91m"
 )
 
 // Cache-related log prefixes
@@ -30,6 +40,25 @@ const (
 // CircuitBreakerPrefix returns a colored circuit breaker prefix with the given name
 func CircuitBreakerPrefix(name string) string {
 	return Purple + "[CircuitBreaker:" + name + "]" + Reset
+}
+
+// accountColors are the colors used for account names (rotating based on hash)
+// 10 colors to distribute ~50 account names
+var accountColors = []string{
+	Green, Blue, Purple, Cyan, Red,
+	BrightGreen, BrightBlue, BrightMagenta, BrightCyan, BrightRed,
+}
+
+// Account returns a colored account name for log messages
+// Same account name always gets the same color
+func Account(name string) string {
+	// Simple hash: sum of bytes mod number of colors
+	hash := 0
+	for _, c := range name {
+		hash += int(c)
+	}
+	color := accountColors[hash%len(accountColors)]
+	return color + name + Reset
 }
 
 // Test/debug log prefixes
