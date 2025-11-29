@@ -2,12 +2,22 @@ package ttml
 
 import (
 	"lyrics-api-go/config"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
 
-var accountManager *AccountManager
+const (
+	// QuarantineDuration is how long an account is quarantined after a 429
+	QuarantineDuration = 60 * time.Second
+)
+
+var (
+	accountManager  *AccountManager
+	quarantineMutex sync.RWMutex // Protects quarantineTime map
+)
 
 func initAccountManager() {
 	conf := config.Get()
@@ -19,8 +29,9 @@ func initAccountManager() {
 	if len(configAccounts) == 0 {
 		log.Warn("No TTML accounts configured")
 		accountManager = &AccountManager{
-			accounts:     []MusicAccount{},
-			currentIndex: 0,
+			accounts:       []MusicAccount{},
+			currentIndex:   0,
+			quarantineTime: make(map[int]int64),
 		}
 		return
 	}
@@ -41,35 +52,138 @@ func initAccountManager() {
 	}
 
 	accountManager = &AccountManager{
-		accounts:     accounts,
-		currentIndex: 0,
+		accounts:       accounts,
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
 	}
 
 	log.Infof("Initialized %d TTML account(s) with round-robin load balancing", len(accounts))
 }
 
-// getNextAccount returns the next account in round-robin fashion (thread-safe)
-// This distributes requests evenly across all accounts
+// getNextAccount returns the next non-quarantined account in round-robin fashion (thread-safe)
+// If all accounts are quarantined, returns the one with the shortest remaining quarantine
 func (m *AccountManager) getNextAccount() MusicAccount {
 	if len(m.accounts) == 0 {
 		return MusicAccount{}
 	}
-	// Atomically increment and get the index
-	idx := atomic.AddUint64(&m.currentIndex, 1) - 1
-	return m.accounts[idx%uint64(len(m.accounts))]
+
+	now := time.Now().Unix()
+	numAccounts := len(m.accounts)
+
+	// Try to find a non-quarantined account
+	for i := 0; i < numAccounts; i++ {
+		idx := atomic.AddUint64(&m.currentIndex, 1) - 1
+		accountIdx := int(idx % uint64(numAccounts))
+
+		if !m.isQuarantined(accountIdx, now) {
+			return m.accounts[accountIdx]
+		}
+		log.Debugf("[Quarantine] Skipping %s (quarantined)", m.accounts[accountIdx].NameID)
+	}
+
+	// All accounts quarantined - find the one with shortest remaining time
+	shortestIdx := 0
+	shortestTime := int64(^uint64(0) >> 1) // Max int64
+
+	quarantineMutex.RLock()
+	for i := 0; i < numAccounts; i++ {
+		if endTime, exists := m.quarantineTime[i]; exists {
+			remaining := endTime - now
+			if remaining < shortestTime {
+				shortestTime = remaining
+				shortestIdx = i
+			}
+		} else {
+			// Not quarantined, use this one
+			shortestIdx = i
+			shortestTime = 0
+			break
+		}
+	}
+	quarantineMutex.RUnlock()
+
+	if shortestTime > 0 {
+		log.Warnf("[Quarantine] All accounts quarantined! Using %s (shortest wait: %ds)",
+			m.accounts[shortestIdx].NameID, shortestTime)
+	}
+
+	return m.accounts[shortestIdx]
 }
 
-// getCurrentAccount returns the current account without rotating (for retries on same account)
-func (m *AccountManager) getCurrentAccount() MusicAccount {
-	if len(m.accounts) == 0 {
-		return MusicAccount{}
+// isQuarantined checks if an account is currently quarantined
+func (m *AccountManager) isQuarantined(accountIdx int, now int64) bool {
+	quarantineMutex.RLock()
+	defer quarantineMutex.RUnlock()
+
+	endTime, exists := m.quarantineTime[accountIdx]
+	if !exists {
+		return false
 	}
-	idx := atomic.LoadUint64(&m.currentIndex)
-	// Subtract 1 because getNextAccount increments before returning
-	if idx == 0 {
-		return m.accounts[0]
+	return now < endTime
+}
+
+// quarantineAccount puts an account in quarantine for QuarantineDuration
+func (m *AccountManager) quarantineAccount(account MusicAccount) {
+	// Find the account index
+	accountIdx := -1
+	for i, acc := range m.accounts {
+		if acc.NameID == account.NameID {
+			accountIdx = i
+			break
+		}
 	}
-	return m.accounts[(idx-1)%uint64(len(m.accounts))]
+
+	if accountIdx == -1 {
+		log.Warnf("[Quarantine] Could not find account %s to quarantine", account.NameID)
+		return
+	}
+
+	quarantineMutex.Lock()
+	m.quarantineTime[accountIdx] = time.Now().Add(QuarantineDuration).Unix()
+	quarantineMutex.Unlock()
+
+	log.Warnf("[Quarantine] Account %s quarantined for %v due to rate limit", account.NameID, QuarantineDuration)
+}
+
+// clearQuarantine removes quarantine from an account (called on successful request)
+func (m *AccountManager) clearQuarantine(account MusicAccount) {
+	// Find the account index
+	accountIdx := -1
+	for i, acc := range m.accounts {
+		if acc.NameID == account.NameID {
+			accountIdx = i
+			break
+		}
+	}
+
+	if accountIdx == -1 {
+		return
+	}
+
+	quarantineMutex.Lock()
+	if _, exists := m.quarantineTime[accountIdx]; exists {
+		delete(m.quarantineTime, accountIdx)
+		log.Infof("[Quarantine] Account %s quarantine cleared (successful request)", account.NameID)
+	}
+	quarantineMutex.Unlock()
+}
+
+// getQuarantineStatus returns a map of account names to remaining quarantine seconds
+func (m *AccountManager) getQuarantineStatus() map[string]int64 {
+	now := time.Now().Unix()
+	status := make(map[string]int64)
+
+	quarantineMutex.RLock()
+	defer quarantineMutex.RUnlock()
+
+	for idx, endTime := range m.quarantineTime {
+		remaining := endTime - now
+		if remaining > 0 && idx < len(m.accounts) {
+			status[m.accounts[idx].NameID] = remaining
+		}
+	}
+
+	return status
 }
 
 func (m *AccountManager) hasAccounts() bool {
@@ -80,13 +194,14 @@ func (m *AccountManager) accountCount() int {
 	return len(m.accounts)
 }
 
-// skipCurrentAccount advances to the next account (used when current account fails)
-// This is called on 401/429 errors to try a different account
-func (m *AccountManager) skipCurrentAccount() {
-	if len(m.accounts) <= 1 {
-		return // No other accounts to try
+// availableAccountCount returns the number of non-quarantined accounts
+func (m *AccountManager) availableAccountCount() int {
+	now := time.Now().Unix()
+	count := 0
+	for i := range m.accounts {
+		if !m.isQuarantined(i, now) {
+			count++
+		}
 	}
-	atomic.AddUint64(&m.currentIndex, 1)
-	idx := atomic.LoadUint64(&m.currentIndex)
-	log.Warnf("Skipping to next TTML API account: %s", m.accounts[(idx-1)%uint64(len(m.accounts))].NameID)
+	return count
 }

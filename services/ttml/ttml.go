@@ -18,7 +18,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		return "", 0, 0.0, fmt.Errorf("no TTML accounts configured")
 	}
 
-	// Select account once for the entire request (search + fetch lyrics)
+	// Select initial account for the request
 	account := accountManager.getNextAccount()
 	storefront := account.Storefront
 	if storefront == "" {
@@ -35,12 +35,13 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 
 	if durationMs > 0 {
-		log.Infof("[Request] Using account %s | Query: %s (duration: %dms)", account.NameID, query, durationMs)
+		log.Infof("[Request] Starting with account %s | Query: %s (duration: %dms)", account.NameID, query, durationMs)
 	} else {
-		log.Infof("[Request] Using account %s | Query: %s", account.NameID, query)
+		log.Infof("[Request] Starting with account %s | Query: %s", account.NameID, query)
 	}
 
-	track, score, err := searchTrack(query, storefront, songName, artistName, albumName, durationMs, account)
+	// Search returns the account that succeeded (may differ if retry occurred)
+	track, score, workingAccount, err := searchTrack(query, storefront, songName, artistName, albumName, durationMs, account)
 	if err != nil {
 		return "", 0, 0.0, fmt.Errorf("search failed: %v", err)
 	}
@@ -64,7 +65,9 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 			track.Attributes.Name, track.Attributes.ArtistName, track.ID, trackDurationMs, score)
 	}
 
-	ttml, err := fetchLyricsTTML(track.ID, storefront, account)
+	// Use the same account that succeeded for search to fetch lyrics
+	// This ensures we don't hit a quarantined account
+	ttml, err := fetchLyricsTTML(track.ID, storefront, workingAccount)
 	if err != nil {
 		return "", 0, 0.0, fmt.Errorf("failed to fetch TTML: %v", err)
 	}
@@ -74,7 +77,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 
 	log.Infof("[Success] Fetched TTML via %s for: %s - %s (%d bytes)",
-		account.NameID, track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
+		workingAccount.NameID, track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
 
 	return ttml, trackDurationMs, score, nil
 }

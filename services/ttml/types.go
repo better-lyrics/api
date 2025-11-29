@@ -36,8 +36,9 @@ type MusicAccount struct {
 }
 
 type AccountManager struct {
-	accounts     []MusicAccount
-	currentIndex uint64 // Use uint64 for atomic operations
+	accounts       []MusicAccount
+	currentIndex   uint64 // Use uint64 for atomic operations
+	quarantineTime map[int]int64 // account index -> unix timestamp when quarantine ends
 }
 
 // =============================================================================

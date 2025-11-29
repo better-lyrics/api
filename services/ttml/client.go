@@ -179,7 +179,9 @@ func scoreTrack(track *Track, targetSongName, targetArtistName, targetAlbumName 
 // HTTP REQUEST HANDLING
 // =============================================================================
 
-func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int) (*http.Response, error) {
+// makeAPIRequestWithAccount makes an HTTP request using the specified account.
+// Returns the response, the account that succeeded (may differ from input if retried), and error.
+func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int) (*http.Response, MusicAccount, error) {
 	if apiCircuitBreaker == nil {
 		initCircuitBreaker()
 	}
@@ -188,16 +190,16 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	if !apiCircuitBreaker.Allow() {
 		timeUntilRetry := apiCircuitBreaker.TimeUntilRetry()
 		log.Warnf("[CircuitBreaker] Request blocked, circuit is OPEN (retry in %v)", timeUntilRetry)
-		return nil, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
+		return nil, account, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
 	}
 
-	if retries > 0 {
-		log.Warnf("[TTML API] Retrying with account: %s (attempt %d)", account.NameID, retries+1)
-	}
+	attemptNum := retries + 1
+	log.Infof("[HTTP] Making request via %s (attempt %d)...", account.NameID, attemptNum)
 
 	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
-		return nil, err
+		log.Errorf("[HTTP] Failed to create request: %v", err)
+		return nil, account, err
 	}
 
 	// Set headers for web auth
@@ -213,14 +215,25 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	resp, err := client.Do(req)
 	if err != nil {
 		apiCircuitBreaker.RecordFailure()
-		return nil, err
+		log.Errorf("[HTTP] Request failed via %s: %v", account.NameID, err)
+		return nil, account, err
 	}
 
-	// Handle rate limiting - record failure for circuit breaker
-	if resp.StatusCode == 429 {
-		apiCircuitBreaker.RecordFailure()
+	log.Infof("[HTTP] Response from %s: status %d", account.NameID, resp.StatusCode)
 
-		// Still attempt retry with different account if we have retries left
+	// Handle rate limiting - quarantine account and retry with different one
+	if resp.StatusCode == 429 {
+		accountManager.quarantineAccount(account)
+
+		// Only count toward circuit breaker if no healthy accounts remain
+		// This prevents circuit breaker from opening when we still have working accounts
+		availableAccounts := accountManager.availableAccountCount()
+		if availableAccounts == 0 {
+			apiCircuitBreaker.RecordFailure()
+			log.Warnf("[Rate Limit] All accounts quarantined, recording circuit breaker failure")
+		}
+
+		// Get next available (non-quarantined) account and retry
 		maxRetries := accountManager.accountCount()
 		if maxRetries > 3 {
 			maxRetries = 3 // Cap at 3 retries even with more accounts
@@ -228,15 +241,17 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 		if retries < maxRetries {
 			resp.Body.Close()
 			nextAccount := accountManager.getNextAccount()
-			log.Warnf("TTML API returned 429 on %s, trying %s (attempt %d/%d)...",
-				account.NameID, nextAccount.NameID, retries+1, maxRetries)
-			time.Sleep(time.Second * time.Duration(retries+1))
+			sleepDuration := time.Duration(retries+1) * time.Second
+			log.Warnf("[Rate Limit] 429 on %s (quarantined), switching to %s (attempt %d/%d, sleeping %v, %d accounts available)...",
+				account.NameID, nextAccount.NameID, attemptNum, maxRetries, sleepDuration, availableAccounts)
+			time.Sleep(sleepDuration)
 			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)
 		}
 
 		body, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("TTML API returned status 429: %s", string(body))
+		log.Errorf("[Rate Limit] All %d retries exhausted, last account: %s", maxRetries, account.NameID)
+		return nil, account, fmt.Errorf("TTML API returned status 429: %s", string(body))
 	}
 
 	// Handle auth errors (don't count as circuit breaker failure, just retry)
@@ -247,29 +262,36 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	if resp.StatusCode == 401 && retries < maxRetries {
 		resp.Body.Close()
 		nextAccount := accountManager.getNextAccount()
-		log.Warnf("TTML API returned 401 on %s, trying %s...", account.NameID, nextAccount.NameID)
-		time.Sleep(time.Second * time.Duration(retries+1))
+		sleepDuration := time.Duration(retries+1) * time.Second
+		log.Warnf("[Auth Error] 401 on %s, switching to %s (attempt %d/%d, sleeping %v)...",
+			account.NameID, nextAccount.NameID, attemptNum, maxRetries, sleepDuration)
+		time.Sleep(sleepDuration)
 		return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("TTML API returned status %d: %s", resp.StatusCode, string(body))
+		log.Errorf("[HTTP] Unexpected status %d from %s: %s", resp.StatusCode, account.NameID, string(body))
+		return nil, account, fmt.Errorf("TTML API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Success! Record it
+	// Success! Record it and clear any quarantine
 	apiCircuitBreaker.RecordSuccess()
-	return resp, nil
+	accountManager.clearQuarantine(account)
+	log.Infof("[HTTP] Request successful via %s", account.NameID)
+	return resp, account, nil
 }
 
 // =============================================================================
 // API FUNCTIONS
 // =============================================================================
 
-func searchTrack(query string, storefront string, songName, artistName, albumName string, durationMs int, account MusicAccount) (*Track, float64, error) {
+// searchTrack searches for a track and returns the best match, score, the account that succeeded, and any error.
+// The returned account may differ from the input if a retry occurred due to rate limiting.
+func searchTrack(query string, storefront string, songName, artistName, albumName string, durationMs int, account MusicAccount) (*Track, float64, MusicAccount, error) {
 	if query == "" {
-		return nil, 0.0, fmt.Errorf("empty search query")
+		return nil, 0.0, account, fmt.Errorf("empty search query")
 	}
 
 	if storefront == "" {
@@ -284,28 +306,28 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 	)
 
 	log.Infof("[Search] Querying TTML API via %s: %s", account.NameID, query)
-	resp, err := makeAPIRequestWithAccount(searchURL, account, 0)
+	resp, successAccount, err := makeAPIRequestWithAccount(searchURL, account, 0)
 	if err != nil {
-		return nil, 0.0, fmt.Errorf("search request failed: %v", err)
+		return nil, 0.0, successAccount, fmt.Errorf("search request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, 0.0, fmt.Errorf("failed to read search response: %v", err)
+		return nil, 0.0, successAccount, fmt.Errorf("failed to read search response: %v", err)
 	}
 
 	if len(body) == 0 {
-		return nil, 0.0, fmt.Errorf("empty search response body")
+		return nil, 0.0, successAccount, fmt.Errorf("empty search response body")
 	}
 
 	var searchResp SearchResponse
 	if err := json.Unmarshal(body, &searchResp); err != nil {
-		return nil, 0.0, fmt.Errorf("failed to parse search response: %v", err)
+		return nil, 0.0, successAccount, fmt.Errorf("failed to parse search response: %v", err)
 	}
 
 	if len(searchResp.Results.Songs.Data) == 0 {
-		return nil, 0.0, fmt.Errorf("no tracks found for query: %s", query)
+		return nil, 0.0, successAccount, fmt.Errorf("no tracks found for query: %s", query)
 	}
 
 	tracks := searchResp.Results.Songs.Data
@@ -334,7 +356,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 		}
 
 		if len(filteredTracks) == 0 {
-			return nil, 0.0, fmt.Errorf("no tracks found within %dms of requested duration %dms", deltaMs, durationMs)
+			return nil, 0.0, successAccount, fmt.Errorf("no tracks found within %dms of requested duration %dms", deltaMs, durationMs)
 		}
 
 		log.Infof("[Duration Filter] %d/%d tracks passed duration filter (delta: %dms)", len(filteredTracks), len(tracks), deltaMs)
@@ -376,20 +398,20 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 					minScore,
 					bestScore.Track.Attributes.Name,
 					bestScore.Track.Attributes.ArtistName)
-				return nil, 0.0, fmt.Errorf("no matching tracks found (best match score %.3f below threshold %.3f)", bestScore.TotalScore, minScore)
+				return nil, 0.0, successAccount, fmt.Errorf("no matching tracks found (best match score %.3f below threshold %.3f)", bestScore.TotalScore, minScore)
 			}
 
 			log.Infof("[Best Match] %s - %s (Score: %.3f)",
 				bestScore.Track.Attributes.Name,
 				bestScore.Track.Attributes.ArtistName,
 				bestScore.TotalScore)
-			return bestScore.Track, bestScore.TotalScore, nil
+			return bestScore.Track, bestScore.TotalScore, successAccount, nil
 		}
 	}
 
 	// Fallback: return the first (best) match from API (no score calculated)
 	log.Debugf("[Fallback] Using first search result")
-	return &tracks[0], 1.0, nil
+	return &tracks[0], 1.0, successAccount, nil
 }
 
 func fetchLyricsTTML(trackID string, storefront string, account MusicAccount) (string, error) {
@@ -401,7 +423,7 @@ func fetchLyricsTTML(trackID string, storefront string, account MusicAccount) (s
 	)
 
 	log.Infof("[Lyrics] Fetching TTML via %s for track: %s", account.NameID, trackID)
-	resp, err := makeAPIRequestWithAccount(lyricsURL, account, 0)
+	resp, _, err := makeAPIRequestWithAccount(lyricsURL, account, 0)
 	if err != nil {
 		return "", fmt.Errorf("lyrics request failed: %v", err)
 	}
