@@ -338,11 +338,22 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 		deltaMs := conf.Configuration.DurationMatchDeltaMs
 		var filteredTracks []Track
 
-		for _, track := range tracks {
+		// Track closest match for error reporting
+		var closestTrack *Track
+		closestDiff := int(^uint(0) >> 1) // Max int
+
+		for i, track := range tracks {
 			diff := track.Attributes.DurationInMillis - durationMs
 			if diff < 0 {
 				diff = -diff
 			}
+
+			// Track closest match
+			if diff < closestDiff {
+				closestDiff = diff
+				closestTrack = &tracks[i]
+			}
+
 			if diff <= deltaMs {
 				filteredTracks = append(filteredTracks, track)
 			} else {
@@ -356,6 +367,14 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 		}
 
 		if len(filteredTracks) == 0 {
+			if closestTrack != nil {
+				return nil, 0.0, successAccount, fmt.Errorf("no tracks within %dms of duration %dms (closest: %s - %s at %dms, diff: %dms)",
+					deltaMs, durationMs,
+					closestTrack.Attributes.Name,
+					closestTrack.Attributes.ArtistName,
+					closestTrack.Attributes.DurationInMillis,
+					closestDiff)
+			}
 			return nil, 0.0, successAccount, fmt.Errorf("no tracks found within %dms of requested duration %dms", deltaMs, durationMs)
 		}
 
