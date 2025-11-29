@@ -63,7 +63,7 @@ func (m *TokenMonitor) loadState() {
 	}
 
 	if err := json.Unmarshal(data, &m.state); err != nil {
-		log.Warnf("Failed to load state file: %v", err)
+		log.Warnf("%s Failed to load state file: %v", logcolors.LogTokenMonitor, err)
 	}
 }
 
@@ -75,12 +75,12 @@ func (m *TokenMonitor) saveState() {
 
 	data, err := json.Marshal(m.state)
 	if err != nil {
-		log.Errorf("Failed to marshal state: %v", err)
+		log.Errorf("%s Failed to marshal state: %v", logcolors.LogTokenMonitor, err)
 		return
 	}
 
 	if err := os.WriteFile(m.config.StateFile, data, 0644); err != nil {
-		log.Errorf("Failed to write state file: %v", err)
+		log.Errorf("%s Failed to write state file: %v", logcolors.LogTokenMonitor, err)
 	}
 }
 
@@ -226,14 +226,14 @@ func (m *TokenMonitor) sendNotifications(expiringTokens []TokenStatus) error {
 			tokenWord, tokenDetails)
 	}
 
-	log.Infof("Sending notifications: %s", subject)
+	log.Infof("%s Sending notifications: %s", logcolors.LogNotifier, subject)
 
 	var lastErr error
 	successCount := 0
 
 	for _, notifier := range m.config.Notifiers {
 		if err := notifier.Send(subject, message); err != nil {
-			log.Errorf("Notifier failed: %v", err)
+			log.Errorf("%s Notifier failed: %v", logcolors.LogNotifier, err)
 			lastErr = err
 		} else {
 			successCount++
@@ -244,18 +244,18 @@ func (m *TokenMonitor) sendNotifications(expiringTokens []TokenStatus) error {
 		return fmt.Errorf("all notifiers failed, last error: %v", lastErr)
 	}
 
-	log.Infof("Successfully sent %d/%d notifications", successCount, len(m.config.Notifiers))
+	log.Infof("%s Successfully sent %d/%d notifications", logcolors.LogNotifier, successCount, len(m.config.Notifiers))
 	return nil
 }
 
 // Run starts the monitor in a loop, checking at the specified interval
 func (m *TokenMonitor) Run(checkInterval time.Duration) {
-	log.Infof("Starting TTML token monitor (tokens: %d, check interval: %v, warning threshold: %d days, reminder interval: %d hours)",
-		len(m.config.Tokens), checkInterval, m.config.WarningThreshold, m.config.ReminderInterval)
+	log.Infof("%s Starting (tokens: %d, check interval: %v, warning threshold: %d days, reminder interval: %d hours)",
+		logcolors.LogTokenMonitor, len(m.config.Tokens), checkInterval, m.config.WarningThreshold, m.config.ReminderInterval)
 
 	// Do an immediate check
 	if err := m.Check(); err != nil {
-		log.Errorf("Initial token check failed: %v", err)
+		log.Errorf("%s Initial token check failed: %v", logcolors.LogTokenMonitor, err)
 	}
 
 	// Then check periodically
@@ -264,7 +264,7 @@ func (m *TokenMonitor) Run(checkInterval time.Duration) {
 
 	for range ticker.C {
 		if err := m.Check(); err != nil {
-			log.Errorf("Token check failed: %v", err)
+			log.Errorf("%s Token check failed: %v", logcolors.LogTokenMonitor, err)
 		}
 	}
 }

@@ -72,7 +72,7 @@ func init() {
 
 	err := godotenv.Load()
 	if err != nil {
-		log.Warn("Error loading .env file, using environment variables")
+		log.Warnf("%s Error loading .env file, using environment variables", logcolors.LogConfig)
 	}
 }
 
@@ -136,7 +136,7 @@ func main() {
 	corsHandler := c.Handler(loggedRouter)
 	handler := limitMiddleware(corsHandler, limiter)
 
-	log.Infof("Server listening on port %s", port)
+	log.Infof("%s Listening on port %s", logcolors.LogServer, port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
@@ -146,7 +146,7 @@ func getCache(key string) (string, bool) {
 
 func setCache(key, value string) {
 	if err := persistentCache.Set(key, value); err != nil {
-		log.Errorf("Error setting cache value: %v", err)
+		log.Errorf("%s Error setting cache value: %v", logcolors.LogCache, err)
 	}
 }
 
@@ -176,11 +176,11 @@ func setCachedLyrics(key, ttml string, trackDurationMs int) {
 	}
 	data, err := json.Marshal(cachedLyrics)
 	if err != nil {
-		log.Errorf("Error marshaling cached lyrics: %v", err)
+		log.Errorf("%s Error marshaling cached lyrics: %v", logcolors.LogCacheLyrics, err)
 		return
 	}
 	if err := persistentCache.Set(key, string(data)); err != nil {
-		log.Errorf("Error setting cache value: %v", err)
+		log.Errorf("%s Error setting cache value: %v", logcolors.LogCacheLyrics, err)
 	}
 }
 
@@ -219,11 +219,11 @@ func setNegativeCache(key, reason string) {
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {
-		log.Errorf("Error marshaling negative cache entry: %v", err)
+		log.Errorf("%s Error marshaling negative cache entry: %v", logcolors.LogCacheNegative, err)
 		return
 	}
 	if err := persistentCache.Set(negativeKey, string(data)); err != nil {
-		log.Errorf("Error setting negative cache: %v", err)
+		log.Errorf("%s Error setting negative cache: %v", logcolors.LogCacheNegative, err)
 	}
 	log.Infof("%s Cached 'no lyrics' for key: %s (reason: %s)", logcolors.LogCacheNegative, key, reason)
 }
@@ -372,7 +372,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		log.Errorf("Error fetching TTML: %v", err)
+		log.Errorf("%s Error fetching TTML: %v", logcolors.LogLyrics, err)
 
 		// Try fallback cache keys before returning error
 		fallbackKeys := buildFallbackCacheKeys(songName, artistName, albumName, durationStr, cacheKey)

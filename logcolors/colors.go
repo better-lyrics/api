@@ -66,6 +66,17 @@ const (
 	LogTestNotifications = Cyan + "[Test Notifications]" + Reset
 )
 
+// Server/Init log prefixes
+const (
+	LogServer = Green + "[Server]" + Reset
+	LogConfig = Cyan + "[Config]" + Reset
+)
+
+// Notification log prefixes
+const (
+	LogNotifier = Cyan + "[Notifier]" + Reset
+)
+
 // TTML service log prefixes
 const (
 	LogRequest        = Purple + "[Request]" + Reset

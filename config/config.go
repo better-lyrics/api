@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"lyrics-api-go/logcolors"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -47,7 +48,7 @@ type Config struct {
 func load() (Config, error) {
 	err := godotenv.Load()
 	if err != nil {
-		log.Warnf("Error loading env config: %v", err)
+		log.Warnf("%s Error loading env config: %v", logcolors.LogConfig, err)
 	}
 
 	cfg := Config{}

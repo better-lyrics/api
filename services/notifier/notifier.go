@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"lyrics-api-go/logcolors"
 	"net/http"
 	"net/smtp"
 	"time"
@@ -44,7 +45,7 @@ func (e *EmailNotifier) Send(subject, message string) error {
 		return fmt.Errorf("failed to send email: %v", err)
 	}
 
-	log.Infof("Email notification sent to %s", e.ToEmail)
+	log.Infof("%s Email notification sent to %s", logcolors.LogNotifier, e.ToEmail)
 	return nil
 }
 
@@ -83,7 +84,7 @@ func (t *TelegramNotifier) Send(subject, message string) error {
 		return fmt.Errorf("telegram API returned status %d", resp.StatusCode)
 	}
 
-	log.Infof("Telegram notification sent to chat %s", t.ChatID)
+	log.Infof("%s Telegram notification sent to chat %s", logcolors.LogNotifier, t.ChatID)
 	return nil
 }
 
@@ -124,6 +125,6 @@ func (n *NtfyNotifier) Send(subject, message string) error {
 		return fmt.Errorf("ntfy returned status %d", resp.StatusCode)
 	}
 
-	log.Infof("Ntfy notification sent to topic %s", n.Topic)
+	log.Infof("%s Ntfy notification sent to topic %s", logcolors.LogNotifier, n.Topic)
 	return nil
 }
