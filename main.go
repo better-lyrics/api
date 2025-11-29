@@ -10,6 +10,7 @@ import (
 	"lyrics-api-go/middleware"
 	"lyrics-api-go/services/notifier"
 	"lyrics-api-go/services/ttml"
+	"lyrics-api-go/stats"
 	"net/http"
 	"os"
 	"strings"
@@ -40,10 +41,20 @@ var (
 
 type CacheDump map[string]cache.CacheEntry
 
+type CachePerformance struct {
+	Hits         int64   `json:"hits"`
+	Misses       int64   `json:"misses"`
+	NegativeHits int64   `json:"negative_hits"`
+	StaleHits    int64   `json:"stale_hits"`
+	HitRate      float64 `json:"hit_rate_percent"`
+}
+
 type CacheDumpResponse struct {
-	NumberOfKeys int
-	SizeInKB     int
-	Cache        CacheDump
+	NumberOfKeys int              `json:"number_of_keys"`
+	SizeInKB     int              `json:"size_kb"`
+	SizeInMB     float64          `json:"size_mb"`
+	Performance  CachePerformance `json:"performance"`
+	Cache        CacheDump        `json:"cache"`
 }
 
 type InFlightRequest struct {
@@ -97,6 +108,7 @@ func main() {
 	router.HandleFunc("/cache/restore", restoreCache)
 	router.HandleFunc("/cache/clear", clearCache)
 	router.HandleFunc("/health", getHealthStatus)
+	router.HandleFunc("/stats", getStats)
 	router.HandleFunc("/circuit-breaker", getCircuitBreakerStatus)
 	router.HandleFunc("/circuit-breaker/reset", resetCircuitBreaker)
 	router.HandleFunc("/circuit-breaker/simulate-failure", simulateCircuitBreakerFailure)
@@ -273,6 +285,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	// Check cache first
 	if cachedTTML, _, ok := getCachedLyrics(cacheKey); ok {
+		stats.Get().RecordCacheHit()
 		log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "HIT")
@@ -288,6 +301,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	// Check negative cache (known "no lyrics" responses)
 	if reason, found := getNegativeCache(cacheKey); found {
+		stats.Get().RecordNegativeCacheHit()
 		log.Infof("%s Returning cached 'no lyrics' response for: %s", logcolors.LogCacheNegative, query)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "NEGATIVE_HIT")
@@ -303,6 +317,8 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	// If in cache-only mode and no cache found, return 429
 	if cacheOnlyMode {
+		stats.Get().RecordCacheMiss()
+		stats.Get().RecordRateLimit("exceeded")
 		log.Warnf("%s Cache-only mode but no cache found for: %s", logcolors.LogCacheLyrics, query)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
@@ -378,6 +394,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		fallbackKeys := buildFallbackCacheKeys(songName, artistName, albumName, durationStr, cacheKey)
 		for _, fallbackKey := range fallbackKeys {
 			if cachedTTML, _, ok := getCachedLyrics(fallbackKey); ok {
+				stats.Get().RecordStaleCacheHit()
 				log.Warnf("%s Backend failed, serving stale cache from key: %s", logcolors.LogCacheLyrics, fallbackKey)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-Cache-Status", "STALE")
@@ -397,6 +414,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// No fallback found (or skipped due to duration), return the error
+		stats.Get().RecordCacheMiss()
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		if rateLimitType != "" {
@@ -410,6 +428,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if ttmlString == "" {
+		stats.Get().RecordCacheMiss()
 		log.Warnf("No TTML found for: %s", query)
 		// Cache this negative result to avoid repeated API calls
 		setNegativeCache(cacheKey, "Lyrics not available for this track")
@@ -425,6 +444,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	stats.Get().RecordCacheMiss()
 	log.Infof("%s Caching TTML for: %s (trackDuration: %dms)", logcolors.LogCacheLyrics, query, trackDurationMs)
 	setCachedLyrics(cacheKey, ttmlString, trackDurationMs)
 
@@ -580,6 +600,35 @@ func getNotifierTypeName(n notifier.Notifier) string {
 	}
 }
 
+func getStats(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	s := stats.Get()
+	snapshot := s.Snapshot()
+
+	// Add cache storage info
+	numKeys, sizeInKB := persistentCache.Stats()
+	snapshot["cache_storage"] = map[string]interface{}{
+		"keys":       numKeys,
+		"size_kb":    sizeInKB,
+		"size_mb":    float64(sizeInKB) / 1024,
+	}
+
+	// Add circuit breaker status
+	cbState, failures, cooldownRemaining := ttml.GetCircuitBreakerStats()
+	snapshot["circuit_breaker"] = map[string]interface{}{
+		"state":             cbState,
+		"failures":          failures,
+		"cooldown_remaining": cooldownRemaining.String(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(snapshot)
+}
+
 func getCacheDump(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -596,11 +645,20 @@ func getCacheDump(w http.ResponseWriter, r *http.Request) {
 	})
 
 	numKeys, sizeInKB := persistentCache.Stats()
+	s := stats.Get()
 
 	cacheDumpResponse := CacheDumpResponse{
 		NumberOfKeys: numKeys,
 		SizeInKB:     sizeInKB,
-		Cache:        cacheDump,
+		SizeInMB:     float64(sizeInKB) / 1024,
+		Performance: CachePerformance{
+			Hits:         s.CacheHits.Load(),
+			Misses:       s.CacheMisses.Load(),
+			NegativeHits: s.NegativeCacheHits.Load(),
+			StaleHits:    s.StaleCacheHits.Load(),
+			HitRate:      s.CacheHitRate(),
+		},
+		Cache: cacheDump,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -859,6 +917,7 @@ func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.
 		// Try normal tier first
 		if limiters.Normal.Allow() {
 			// Normal tier allows this request
+			stats.Get().RecordRateLimit("normal")
 			remainingNormal := limiters.GetNormalTokens()
 			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limiter.GetNormalLimit()))
 			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remainingNormal))
@@ -871,6 +930,7 @@ func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.
 		// Normal tier exceeded, try cached tier
 		if limiters.Cached.Allow() {
 			// Cached tier allows, but only for cached responses
+			stats.Get().RecordRateLimit("cached")
 			remainingCached := limiters.GetCachedTokens()
 			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limiter.GetCachedLimit()))
 			w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remainingCached))
@@ -883,6 +943,7 @@ func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.
 		}
 
 		// Both tiers exceeded
+		stats.Get().RecordRateLimit("exceeded")
 		log.Warnf("%s IP %s exceeded both rate limit tiers", logcolors.LogRateLimit, r.RemoteAddr)
 		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", limiter.GetCachedLimit()))
 		w.Header().Set("X-RateLimit-Remaining", "0")

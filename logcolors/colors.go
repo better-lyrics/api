@@ -70,6 +70,7 @@ const (
 const (
 	LogServer = Green + "[Server]" + Reset
 	LogConfig = Cyan + "[Config]" + Reset
+	LogStats  = Blue + "[Stats]" + Reset
 )
 
 // Notification log prefixes
