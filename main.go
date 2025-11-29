@@ -95,6 +95,7 @@ func main() {
 	router.HandleFunc("/cache/backups", listBackups)
 	router.HandleFunc("/cache/restore", restoreCache)
 	router.HandleFunc("/cache/clear", clearCache)
+	router.HandleFunc("/health", getHealthStatus)
 	router.HandleFunc("/circuit-breaker", getCircuitBreakerStatus)
 	router.HandleFunc("/circuit-breaker/reset", resetCircuitBreaker)
 	router.HandleFunc("/circuit-breaker/simulate-failure", simulateCircuitBreakerFailure)
@@ -463,44 +464,56 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 	var tokenInfo string
 	var tokenDetails map[string]interface{}
 
-	if conf.Configuration.TTMLBearerToken != "" {
-		expirationDate, err := notifier.GetExpirationDate(conf.Configuration.TTMLBearerToken)
-		if err != nil {
-			tokenInfo = fmt.Sprintf("Error reading token expiration: %v", err)
-			tokenDetails = map[string]interface{}{
-				"error": err.Error(),
-			}
-		} else {
-			now := time.Now()
-			daysUntilExpiration := int(time.Until(expirationDate).Hours() / 24)
-			warningDate := expirationDate.AddDate(0, 0, -7)
-
-			tokenInfo = fmt.Sprintf(
-				"Current date:         %s\n"+
-					"Token expires:        %s\n"+
-					"Days remaining:       %d days\n"+
-					"Warning threshold:    7 days before expiration\n"+
-					"First notification:   %s\n"+
-					"Reminder frequency:   Daily until updated",
-				now.Format("2006-01-02 15:04:05"),
-				expirationDate.Format("2006-01-02 15:04:05"),
-				daysUntilExpiration,
-				warningDate.Format("2006-01-02 15:04:05"),
-			)
-
-			tokenDetails = map[string]interface{}{
-				"current_date":           now.Format("2006-01-02 15:04:05"),
-				"token_expires":          expirationDate.Format("2006-01-02 15:04:05"),
-				"days_until_expiration":  daysUntilExpiration,
-				"first_notification":     warningDate.Format("2006-01-02 15:04:05"),
-				"notification_frequency": "Daily",
-			}
-		}
-	} else {
+	accounts, accErr := conf.GetTTMLAccounts()
+	if accErr != nil || len(accounts) == 0 {
 		tokenInfo = "Status:               Not configured\n" +
-			"TTML_BEARER_TOKEN:    Missing from .env file"
+			"TTML_BEARER_TOKENS:   Missing from environment"
 		tokenDetails = map[string]interface{}{
 			"configured": false,
+		}
+		if accErr != nil {
+			tokenDetails["error"] = accErr.Error()
+		}
+	} else {
+		now := time.Now()
+		var accountInfos []map[string]interface{}
+		var infoLines []string
+
+		for _, acc := range accounts {
+			expirationDate, err := notifier.GetExpirationDate(acc.BearerToken)
+			if err != nil {
+				infoLines = append(infoLines, fmt.Sprintf("%s: Error - %v", acc.Name, err))
+				accountInfos = append(accountInfos, map[string]interface{}{
+					"name":  acc.Name,
+					"error": err.Error(),
+				})
+			} else {
+				daysUntilExpiration := int(time.Until(expirationDate).Hours() / 24)
+				infoLines = append(infoLines, fmt.Sprintf("%s: %d days remaining (expires %s)",
+					acc.Name, daysUntilExpiration, expirationDate.Format("2006-01-02")))
+				accountInfos = append(accountInfos, map[string]interface{}{
+					"name":                  acc.Name,
+					"token_expires":         expirationDate.Format("2006-01-02 15:04:05"),
+					"days_until_expiration": daysUntilExpiration,
+				})
+			}
+		}
+
+		tokenInfo = fmt.Sprintf(
+			"Current date:         %s\n"+
+				"Accounts configured:  %d\n\n"+
+				"Account Status:\n  %s\n\n"+
+				"Warning threshold:    7 days before expiration\n"+
+				"Reminder frequency:   Daily until updated",
+			now.Format("2006-01-02 15:04:05"),
+			len(accounts),
+			strings.Join(infoLines, "\n  "),
+		)
+
+		tokenDetails = map[string]interface{}{
+			"current_date":        now.Format("2006-01-02 15:04:05"),
+			"accounts_configured": len(accounts),
+			"accounts":            accountInfos,
 		}
 	}
 
@@ -708,6 +721,84 @@ func restoreCache(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func getHealthStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	// Get circuit breaker status
+	cbState, cbFailures, cbTimeUntilRetry := ttml.GetCircuitBreakerStats()
+
+	// Get account info
+	accounts, accErr := conf.GetTTMLAccounts()
+	accountCount := 0
+	if accErr == nil {
+		accountCount = len(accounts)
+	}
+
+	// Basic health response (always available)
+	health := map[string]interface{}{
+		"status":           "ok",
+		"accounts":         accountCount,
+		"circuit_breaker":  cbState,
+	}
+
+	// If circuit breaker is open, mark as degraded
+	if cbState == "OPEN" {
+		health["status"] = "degraded"
+		health["circuit_breaker_retry_in"] = cbTimeUntilRetry.String()
+	}
+
+	// If no accounts configured, mark as unhealthy
+	if accountCount == 0 {
+		health["status"] = "unhealthy"
+		health["error"] = "no TTML accounts configured"
+	}
+
+	// If authenticated, include detailed token status
+	if r.Header.Get("Authorization") == conf.Configuration.CacheAccessToken && conf.Configuration.CacheAccessToken != "" {
+		var tokenStatuses []map[string]interface{}
+		overallHealthy := true
+		warningThreshold := 7
+
+		for _, acc := range accounts {
+			tokenStatus := map[string]interface{}{
+				"name": acc.Name,
+			}
+
+			expirationDate, err := notifier.GetExpirationDate(acc.BearerToken)
+			if err != nil {
+				tokenStatus["status"] = "error"
+				tokenStatus["error"] = err.Error()
+				overallHealthy = false
+			} else {
+				daysRemaining := int(time.Until(expirationDate).Hours() / 24)
+				tokenStatus["expires"] = expirationDate.Format("2006-01-02 15:04:05")
+				tokenStatus["days_remaining"] = daysRemaining
+
+				if daysRemaining <= 0 {
+					tokenStatus["status"] = "expired"
+					overallHealthy = false
+				} else if daysRemaining <= warningThreshold {
+					tokenStatus["status"] = "expiring_soon"
+				} else {
+					tokenStatus["status"] = "healthy"
+				}
+			}
+
+			tokenStatuses = append(tokenStatuses, tokenStatus)
+		}
+
+		health["tokens"] = tokenStatuses
+		health["circuit_breaker_failures"] = cbFailures
+
+		// Update overall status based on token health
+		if !overallHealthy && health["status"] == "ok" {
+			health["status"] = "degraded"
+		}
+	}
+
+	json.NewEncoder(w).Encode(health)
+}
+
 func getCircuitBreakerStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -801,8 +892,14 @@ func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.
 }
 
 func startTokenMonitor() {
-	if conf.Configuration.TTMLBearerToken == "" {
-		log.Warn("[Token Monitor] TTML_BEARER_TOKEN not set, token monitoring disabled")
+	accounts, err := conf.GetTTMLAccounts()
+	if err != nil {
+		log.Warnf("[Token Monitor] Failed to get TTML accounts: %v", err)
+		return
+	}
+
+	if len(accounts) == 0 {
+		log.Warn("[Token Monitor] No TTML accounts configured, token monitoring disabled")
 		return
 	}
 
@@ -814,10 +911,19 @@ func startTokenMonitor() {
 		return
 	}
 
-	log.Infof("[Token Monitor] Starting with %d notifier(s) configured", len(notifiers))
+	// Convert accounts to TokenInfo for the monitor
+	tokens := make([]notifier.TokenInfo, len(accounts))
+	for i, acc := range accounts {
+		tokens[i] = notifier.TokenInfo{
+			Name:        acc.Name,
+			BearerToken: acc.BearerToken,
+		}
+	}
+
+	log.Infof("[Token Monitor] Starting with %d account(s) and %d notifier(s) configured", len(tokens), len(notifiers))
 
 	monitor := notifier.NewTokenMonitor(notifier.MonitorConfig{
-		BearerToken:      conf.Configuration.TTMLBearerToken,
+		Tokens:           tokens,
 		WarningThreshold: 7,
 		ReminderInterval: 24,
 		StateFile:        "/tmp/ttml-pager.state",

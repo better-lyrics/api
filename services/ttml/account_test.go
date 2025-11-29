@@ -1,38 +1,11 @@
 package ttml
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
-func TestAccountManager_GetCurrentAccount(t *testing.T) {
-	accounts := []MusicAccount{
-		{
-			NameID:         "Account1",
-			BearerToken:    "token1",
-			MediaUserToken: "media1",
-			Storefront:     "us",
-		},
-		{
-			NameID:         "Account2",
-			BearerToken:    "token2",
-			MediaUserToken: "media2",
-			Storefront:     "jp",
-		},
-	}
-
-	manager := &AccountManager{
-		accounts:     accounts,
-		currentIndex: 0,
-	}
-
-	current := manager.getCurrentAccount()
-	if current.NameID != "Account1" {
-		t.Errorf("Expected current account 'Account1', got %q", current.NameID)
-	}
-	if current.BearerToken != "token1" {
-		t.Errorf("Expected bearer token 'token1', got %q", current.BearerToken)
-	}
-}
-
-func TestAccountManager_SwitchToNextAccount(t *testing.T) {
+func TestAccountManager_GetNextAccount_RoundRobin(t *testing.T) {
 	accounts := []MusicAccount{
 		{NameID: "Account1", BearerToken: "token1"},
 		{NameID: "Account2", BearerToken: "token2"},
@@ -44,27 +17,66 @@ func TestAccountManager_SwitchToNextAccount(t *testing.T) {
 		currentIndex: 0,
 	}
 
-	// Initially on Account1
-	if manager.getCurrentAccount().NameID != "Account1" {
-		t.Errorf("Expected Account1 initially")
+	// Should rotate through accounts
+	expectedSequence := []string{"Account1", "Account2", "Account3", "Account1", "Account2"}
+	for i, expected := range expectedSequence {
+		acc := manager.getNextAccount()
+		if acc.NameID != expected {
+			t.Errorf("Iteration %d: expected %q, got %q", i, expected, acc.NameID)
+		}
+	}
+}
+
+func TestAccountManager_GetCurrentAccount(t *testing.T) {
+	accounts := []MusicAccount{
+		{NameID: "Account1", BearerToken: "token1"},
+		{NameID: "Account2", BearerToken: "token2"},
 	}
 
-	// Switch to Account2
-	manager.switchToNextAccount()
-	if manager.getCurrentAccount().NameID != "Account2" {
-		t.Errorf("Expected Account2 after first switch")
+	manager := &AccountManager{
+		accounts:     accounts,
+		currentIndex: 0,
 	}
 
-	// Switch to Account3
-	manager.switchToNextAccount()
-	if manager.getCurrentAccount().NameID != "Account3" {
-		t.Errorf("Expected Account3 after second switch")
+	// Before any getNextAccount, getCurrentAccount should return first account
+	current := manager.getCurrentAccount()
+	if current.NameID != "Account1" {
+		t.Errorf("Expected Account1 initially, got %q", current.NameID)
 	}
 
-	// Should wrap around to Account1
-	manager.switchToNextAccount()
-	if manager.getCurrentAccount().NameID != "Account1" {
-		t.Errorf("Expected Account1 after wrapping around")
+	// After getNextAccount, getCurrentAccount should return the same account
+	next := manager.getNextAccount()
+	current = manager.getCurrentAccount()
+	if current.NameID != next.NameID {
+		t.Errorf("getCurrentAccount should return same as last getNextAccount, got %q vs %q", current.NameID, next.NameID)
+	}
+}
+
+func TestAccountManager_SkipCurrentAccount(t *testing.T) {
+	accounts := []MusicAccount{
+		{NameID: "Account1", BearerToken: "token1"},
+		{NameID: "Account2", BearerToken: "token2"},
+		{NameID: "Account3", BearerToken: "token3"},
+	}
+
+	manager := &AccountManager{
+		accounts:     accounts,
+		currentIndex: 0,
+	}
+
+	// Get first account
+	first := manager.getNextAccount()
+	if first.NameID != "Account1" {
+		t.Errorf("Expected Account1, got %q", first.NameID)
+	}
+
+	// Skip to next (simulating a 429 error)
+	manager.skipCurrentAccount()
+
+	// Next getNextAccount should give Account3 (skipped Account2)
+	next := manager.getNextAccount()
+	if next.NameID != "Account3" {
+		t.Errorf("Expected Account3 after skip, got %q", next.NameID)
 	}
 }
 
@@ -78,48 +90,71 @@ func TestAccountManager_SingleAccount(t *testing.T) {
 		currentIndex: 0,
 	}
 
-	// Should stay on the same account
-	initial := manager.getCurrentAccount()
-	manager.switchToNextAccount()
-	afterSwitch := manager.getCurrentAccount()
+	// With single account, should always return the same account
+	for i := 0; i < 5; i++ {
+		acc := manager.getNextAccount()
+		if acc.NameID != "OnlyAccount" {
+			t.Errorf("Iteration %d: expected OnlyAccount, got %q", i, acc.NameID)
+		}
+	}
 
-	if initial.NameID != afterSwitch.NameID {
-		t.Errorf("Expected to stay on same account with single account configuration")
+	// Skip should be no-op with single account
+	manager.skipCurrentAccount()
+	acc := manager.getNextAccount()
+	if acc.NameID != "OnlyAccount" {
+		t.Errorf("Expected OnlyAccount after skip, got %q", acc.NameID)
 	}
 }
 
-func TestAccountManager_MultipleAccountRotation(t *testing.T) {
-	accounts := []MusicAccount{
-		{NameID: "Account1"},
-		{NameID: "Account2"},
-	}
-
+func TestAccountManager_EmptyAccounts(t *testing.T) {
 	manager := &AccountManager{
-		accounts:     accounts,
+		accounts:     []MusicAccount{},
 		currentIndex: 0,
 	}
 
-	// Test multiple rotations
-	expectedSequence := []string{
-		"Account1", // Initial
-		"Account2", // After 1st switch
-		"Account1", // After 2nd switch (wrapped)
-		"Account2", // After 3rd switch
-		"Account1", // After 4th switch (wrapped again)
+	// Should return empty account without panicking
+	acc := manager.getNextAccount()
+	if acc.NameID != "" {
+		t.Errorf("Expected empty account, got %q", acc.NameID)
 	}
 
-	for i, expected := range expectedSequence {
-		current := manager.getCurrentAccount()
-		if current.NameID != expected {
-			t.Errorf("Iteration %d: expected %q, got %q", i, expected, current.NameID)
-		}
-		if i < len(expectedSequence)-1 {
-			manager.switchToNextAccount()
-		}
+	if manager.hasAccounts() {
+		t.Error("hasAccounts should return false for empty manager")
+	}
+
+	// Skip should not panic
+	manager.skipCurrentAccount()
+}
+
+func TestAccountManager_HasAccounts(t *testing.T) {
+	emptyManager := &AccountManager{accounts: []MusicAccount{}}
+	if emptyManager.hasAccounts() {
+		t.Error("hasAccounts should return false for empty manager")
+	}
+
+	manager := &AccountManager{
+		accounts: []MusicAccount{{NameID: "Account1"}},
+	}
+	if !manager.hasAccounts() {
+		t.Error("hasAccounts should return true when accounts exist")
 	}
 }
 
-func TestAccountManager_CurrentIndexBounds(t *testing.T) {
+func TestAccountManager_AccountCount(t *testing.T) {
+	manager := &AccountManager{
+		accounts: []MusicAccount{
+			{NameID: "Account1"},
+			{NameID: "Account2"},
+			{NameID: "Account3"},
+		},
+	}
+
+	if manager.accountCount() != 3 {
+		t.Errorf("Expected accountCount 3, got %d", manager.accountCount())
+	}
+}
+
+func TestAccountManager_ConcurrentAccess(t *testing.T) {
 	accounts := []MusicAccount{
 		{NameID: "Account1"},
 		{NameID: "Account2"},
@@ -131,18 +166,38 @@ func TestAccountManager_CurrentIndexBounds(t *testing.T) {
 		currentIndex: 0,
 	}
 
-	// Perform many switches to ensure index stays in bounds
+	// Simulate concurrent access
+	var wg sync.WaitGroup
+	results := make(chan string, 100)
+
 	for i := 0; i < 100; i++ {
-		manager.switchToNextAccount()
-		if manager.currentIndex < 0 || manager.currentIndex >= len(accounts) {
-			t.Fatalf("Index out of bounds after %d switches: %d", i+1, manager.currentIndex)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			acc := manager.getNextAccount()
+			results <- acc.NameID
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	// Count distribution
+	counts := make(map[string]int)
+	for name := range results {
+		counts[name]++
+	}
+
+	// Should have roughly equal distribution (with some variance)
+	for name, count := range counts {
+		if count < 20 || count > 50 {
+			t.Logf("Distribution might be uneven: %s=%d (expected ~33)", name, count)
 		}
 	}
 
-	// Verify index is still valid
-	current := manager.getCurrentAccount()
-	if current.NameID == "" {
-		t.Error("Got empty account after many switches")
+	// All accounts should have been used
+	if len(counts) != 3 {
+		t.Errorf("Expected all 3 accounts to be used, got %d", len(counts))
 	}
 }
 

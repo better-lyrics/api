@@ -9,11 +9,17 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// TokenInfo holds information about a single token for monitoring
+type TokenInfo struct {
+	Name        string // Account name (e.g., "Account-1")
+	BearerToken string
+}
+
 // MonitorConfig holds the configuration for the token monitor
 type MonitorConfig struct {
-	BearerToken       string
-	WarningThreshold  int // Days before expiration to start warning
-	ReminderInterval  int // Hours between reminders (to avoid spam)
+	Tokens            []TokenInfo // Multiple tokens to monitor
+	WarningThreshold  int         // Days before expiration to start warning
+	ReminderInterval  int         // Hours between reminders (to avoid spam)
 	StateFile         string
 	Notifiers         []Notifier
 }
@@ -97,67 +103,126 @@ func (m *TokenMonitor) shouldSendNotification(daysRemaining int) bool {
 	return false
 }
 
-// Check performs a single check of the token expiration
+// TokenStatus holds the status of a single token check
+type TokenStatus struct {
+	Name          string
+	ExpiringSoon  bool
+	DaysRemaining int
+	Error         error
+}
+
+// Check performs a single check of all token expirations
 func (m *TokenMonitor) Check() error {
-	expiringSoon, daysRemaining, err := IsExpiringSoon(m.config.BearerToken, m.config.WarningThreshold)
-	if err != nil {
-		return fmt.Errorf("failed to check token expiration: %v", err)
+	if len(m.config.Tokens) == 0 {
+		return fmt.Errorf("no tokens configured for monitoring")
 	}
 
-	log.Debugf("Token check: expiring_soon=%v, days_remaining=%d", expiringSoon, daysRemaining)
+	var expiringTokens []TokenStatus
+	minDaysRemaining := 999999
 
-	// If token is not expiring soon, nothing to do
-	if !expiringSoon {
-		log.Debugf("Token is healthy, %d days until expiration", daysRemaining)
+	// Check all tokens
+	for _, token := range m.config.Tokens {
+		expiringSoon, daysRemaining, err := IsExpiringSoon(token.BearerToken, m.config.WarningThreshold)
+		status := TokenStatus{
+			Name:          token.Name,
+			ExpiringSoon:  expiringSoon,
+			DaysRemaining: daysRemaining,
+			Error:         err,
+		}
+
+		if err != nil {
+			log.Warnf("[Token Monitor] Failed to check %s: %v", token.Name, err)
+			continue
+		}
+
+		log.Debugf("[Token Monitor] %s: expiring_soon=%v, days_remaining=%d", token.Name, expiringSoon, daysRemaining)
+
+		if expiringSoon {
+			expiringTokens = append(expiringTokens, status)
+			if daysRemaining < minDaysRemaining {
+				minDaysRemaining = daysRemaining
+			}
+		}
+	}
+
+	// If no tokens are expiring soon, nothing to do
+	if len(expiringTokens) == 0 {
+		log.Debugf("[Token Monitor] All tokens are healthy")
 		return nil
 	}
 
-	// Check if we should send notification
-	if !m.shouldSendNotification(daysRemaining) {
-		log.Debugf("Skipping notification (too soon since last notification)")
+	// Check if we should send notification (based on the most urgent token)
+	if !m.shouldSendNotification(minDaysRemaining) {
+		log.Debugf("[Token Monitor] Skipping notification (too soon since last notification)")
 		return nil
 	}
 
-	// Send notifications
-	if err := m.sendNotifications(daysRemaining); err != nil {
+	// Send notifications for all expiring tokens
+	if err := m.sendNotifications(expiringTokens); err != nil {
 		return fmt.Errorf("failed to send notifications: %v", err)
 	}
 
 	// Update state
 	m.state.LastNotificationSent = time.Now()
-	m.state.LastDaysRemaining = daysRemaining
+	m.state.LastDaysRemaining = minDaysRemaining
 	m.saveState()
 
 	return nil
 }
 
 // sendNotifications sends notifications through all configured notifiers
-func (m *TokenMonitor) sendNotifications(daysRemaining int) error {
+func (m *TokenMonitor) sendNotifications(expiringTokens []TokenStatus) error {
 	var subject, message string
 
-	if daysRemaining <= 0 {
-		subject = "🚨 URGENT: TTML Token EXPIRED"
-		message = "🚨 TTML TOKEN EXPIRED\n\n" +
-			"Your TTML bearer token has EXPIRED.\n\n" +
-			"⚠️ Action Required:\n\n" +
-			"The service will stop working until you update the token.\n\n" +
-			"Update TTML_BEARER_TOKEN in your .env file and restart the service immediately."
-	} else if daysRemaining == 1 {
-		subject = "⚠️ Alert: TTML Token Expires Tomorrow"
-		message = "⚠️ TTML TOKEN EXPIRATION WARNING\n\n" +
-			"Your TTML bearer token will expire in 1 day.\n\n" +
-			"📝 Action Required:\n\n" +
-			"Update TTML_BEARER_TOKEN in your .env file soon to avoid service interruption."
+	// Build token details
+	var tokenDetails string
+	for _, t := range expiringTokens {
+		if t.DaysRemaining <= 0 {
+			tokenDetails += fmt.Sprintf("  • %s: EXPIRED\n", t.Name)
+		} else if t.DaysRemaining == 1 {
+			tokenDetails += fmt.Sprintf("  • %s: expires tomorrow\n", t.Name)
+		} else {
+			tokenDetails += fmt.Sprintf("  • %s: %d days remaining\n", t.Name, t.DaysRemaining)
+		}
+	}
+
+	// Find the most urgent status
+	minDays := expiringTokens[0].DaysRemaining
+	for _, t := range expiringTokens {
+		if t.DaysRemaining < minDays {
+			minDays = t.DaysRemaining
+		}
+	}
+
+	tokenWord := "token"
+	if len(expiringTokens) > 1 {
+		tokenWord = "tokens"
+	}
+
+	if minDays <= 0 {
+		subject = fmt.Sprintf("🚨 URGENT: TTML %s EXPIRED", tokenWord)
+		message = fmt.Sprintf("🚨 TTML TOKEN(S) EXPIRED\n\n"+
+			"The following %s have EXPIRED:\n\n%s\n"+
+			"⚠️ Action Required:\n\n"+
+			"The service will stop working until you update the tokens.\n\n"+
+			"Update TTML_BEARER_TOKENS in your environment and restart the service immediately.",
+			tokenWord, tokenDetails)
+	} else if minDays == 1 {
+		subject = fmt.Sprintf("⚠️ Alert: TTML %s Expires Tomorrow", tokenWord)
+		message = fmt.Sprintf("⚠️ TTML TOKEN EXPIRATION WARNING\n\n"+
+			"The following %s need attention:\n\n%s\n"+
+			"📝 Action Required:\n\n"+
+			"Update TTML_BEARER_TOKENS in your environment soon to avoid service interruption.",
+			tokenWord, tokenDetails)
 	} else {
-		subject = fmt.Sprintf("⏰ Notice: TTML Token Expires in %d Days", daysRemaining)
+		subject = fmt.Sprintf("⏰ Notice: TTML %s Expiring Soon", tokenWord)
 		message = fmt.Sprintf(
 			"⏰ TTML TOKEN EXPIRATION NOTICE\n\n"+
-			"Your TTML bearer token will expire in %d days.\n\n"+
-			"📝 Action Required:\n\n"+
-			"Update TTML_BEARER_TOKEN in your .env file before expiration to maintain service availability.\n\n"+
-			"You will receive daily reminders until the token is updated.",
-			daysRemaining,
-		)
+				"The following %s need attention:\n\n%s\n"+
+				"📝 Action Required:\n\n"+
+				"Update TTML_BEARER_TOKENS in your environment before expiration to maintain service availability.\n\n"+
+				"You will receive daily reminders until the tokens are updated.",
+			tokenWord, tokenDetails)
 	}
 
 	log.Infof("Sending notifications: %s", subject)
@@ -184,8 +249,8 @@ func (m *TokenMonitor) sendNotifications(daysRemaining int) error {
 
 // Run starts the monitor in a loop, checking at the specified interval
 func (m *TokenMonitor) Run(checkInterval time.Duration) {
-	log.Infof("Starting TTML token monitor (check interval: %v, warning threshold: %d days, reminder interval: %d hours)",
-		checkInterval, m.config.WarningThreshold, m.config.ReminderInterval)
+	log.Infof("Starting TTML token monitor (tokens: %d, check interval: %v, warning threshold: %d days, reminder interval: %d hours)",
+		len(m.config.Tokens), checkInterval, m.config.WarningThreshold, m.config.ReminderInterval)
 
 	// Do an immediate check
 	if err := m.Check(); err != nil {

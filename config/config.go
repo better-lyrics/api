@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
 	log "github.com/sirupsen/logrus"
@@ -18,9 +21,13 @@ type Config struct {
 		LyricsCacheTTLInSeconds            int    `envconfig:"LYRICS_CACHE_TTL_IN_SECONDS" default:"86400"`
 		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
 		// TTML API Configuration
+		// Single account (backwards compatible)
 		TTMLBearerToken    string `envconfig:"TTML_BEARER_TOKEN" default:""`
 		TTMLMediaUserToken string `envconfig:"TTML_MEDIA_USER_TOKEN" default:""`
-		TTMLStorefront     string `envconfig:"TTML_STOREFRONT" default:"us"`
+		// Multi-account support (comma-separated)
+		TTMLBearerTokens    string `envconfig:"TTML_BEARER_TOKENS" default:""`
+		TTMLMediaUserTokens string `envconfig:"TTML_MEDIA_USER_TOKENS" default:""`
+		TTMLStorefront      string `envconfig:"TTML_STOREFRONT" default:"us"`
 		TTMLBaseURL        string `envconfig:"TTML_BASE_URL" default:""`
 		TTMLSearchPath     string `envconfig:"TTML_SEARCH_PATH" default:""`
 		TTMLLyricsPath       string  `envconfig:"TTML_LYRICS_PATH" default:""`
@@ -59,4 +66,104 @@ func mustLoad() Config {
 
 func Get() Config {
 	return conf
+}
+
+// TTMLAccount represents a single TTML API account
+type TTMLAccount struct {
+	Name           string
+	BearerToken    string
+	MediaUserToken string
+}
+
+// GetTTMLAccounts parses the comma-separated tokens and returns a slice of accounts.
+// Returns an error if the number of bearer tokens doesn't match media user tokens.
+// Falls back to single token env vars if multi-account vars are not set.
+func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
+	bearerTokens := c.Configuration.TTMLBearerTokens
+	mediaUserTokens := c.Configuration.TTMLMediaUserTokens
+
+	// If multi-account vars are empty, fall back to single account
+	if bearerTokens == "" {
+		if c.Configuration.TTMLBearerToken == "" {
+			return nil, nil // No accounts configured
+		}
+		return []TTMLAccount{
+			{
+				Name:           "Freddie",
+				BearerToken:    c.Configuration.TTMLBearerToken,
+				MediaUserToken: c.Configuration.TTMLMediaUserToken,
+			},
+		}, nil
+	}
+
+	// Parse comma-separated values
+	bearerList := splitAndTrim(bearerTokens)
+	mediaUserList := splitAndTrim(mediaUserTokens)
+
+	// Validate: must have same number of tokens
+	if len(bearerList) != len(mediaUserList) {
+		return nil, fmt.Errorf(
+			"TTML account mismatch: %d bearer tokens but %d media user tokens. Each account needs both tokens",
+			len(bearerList), len(mediaUserList),
+		)
+	}
+
+	// Legendary artist names for account logging
+	funNames := []string{
+		"Freddie", "Bowie", "Prince", "Madonna", "Elvis",
+		"Hendrix", "Lennon", "Marley", "Aretha", "Whitney",
+		"MJ", "Beyoncé", "Adele", "Drake", "Taylor",
+		"Rihanna", "Kanye", "Eminem", "Cardi", "Kendrick",
+		"Sinatra", "Stevie", "Elton", "Billy", "Bruce",
+		"Cher", "Tina", "Diana", "Janet", "Mariah",
+		"Kurt", "Eddie", "Mick", "Keith", "Axl",
+		"Tupac", "Biggie", "Snoop", "Dre", "Jay",
+		"Gaga", "Katy", "Ariana", "Dua", "Billie",
+		"Abel", "Bruno", "Pharrell", "Cudi", "Frank",
+	}
+
+	accounts := make([]TTMLAccount, len(bearerList))
+	for i := range bearerList {
+		name := fmt.Sprintf("Account-%d", i+1)
+		if i < len(funNames) {
+			name = funNames[i]
+		}
+		accounts[i] = TTMLAccount{
+			Name:           name,
+			BearerToken:    bearerList[i],
+			MediaUserToken: mediaUserList[i],
+		}
+	}
+
+	return accounts, nil
+}
+
+// GetAllBearerTokens returns all configured bearer tokens (for monitoring purposes)
+func (c *Config) GetAllBearerTokens() []string {
+	accounts, err := c.GetTTMLAccounts()
+	if err != nil || len(accounts) == 0 {
+		return nil
+	}
+
+	tokens := make([]string, len(accounts))
+	for i, acc := range accounts {
+		tokens[i] = acc.BearerToken
+	}
+	return tokens
+}
+
+// splitAndTrim splits a comma-separated string and trims whitespace from each element
+func splitAndTrim(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }

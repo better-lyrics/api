@@ -37,7 +37,7 @@ type MusicAccount struct {
 
 type AccountManager struct {
 	accounts     []MusicAccount
-	currentIndex int
+	currentIndex uint64 // Use uint64 for atomic operations
 }
 
 // =============================================================================
