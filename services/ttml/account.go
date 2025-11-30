@@ -3,6 +3,7 @@ package ttml
 import (
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
+	"lyrics-api-go/services/notifier"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -144,6 +145,44 @@ func (m *AccountManager) quarantineAccount(account MusicAccount) {
 	quarantineMutex.Unlock()
 
 	log.Warnf("%s Account %s quarantined for %v due to rate limit", logcolors.LogQuarantine, logcolors.Account(account.NameID), QuarantineDuration)
+
+	// Check quarantine thresholds and emit events
+	m.checkQuarantineThresholds()
+}
+
+// checkQuarantineThresholds checks if we've hit quarantine thresholds and emits events
+func (m *AccountManager) checkQuarantineThresholds() {
+	total := len(m.accounts)
+	if total == 0 {
+		return
+	}
+
+	quarantined := total - m.availableAccountCount()
+	status := m.getQuarantineStatus()
+
+	// All accounts quarantined
+	if quarantined == total {
+		notifier.PublishAllAccountsQuarantined(status)
+		return
+	}
+
+	// One account away from all quarantined
+	if quarantined == total-1 {
+		// Find the remaining healthy account
+		now := time.Now().Unix()
+		for i, acc := range m.accounts {
+			if !m.isQuarantined(i, now) {
+				notifier.PublishOneAwayFromQuarantine(acc.NameID, status)
+				return
+			}
+		}
+		return
+	}
+
+	// Half or more accounts quarantined
+	if quarantined >= total/2 && quarantined > 0 {
+		notifier.PublishHalfAccountsQuarantined(quarantined, total, status)
+	}
 }
 
 // clearQuarantine removes quarantine from an account (called on successful request)

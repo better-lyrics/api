@@ -7,6 +7,7 @@ import (
 	"lyrics-api-go/circuitbreaker"
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
+	"lyrics-api-go/services/notifier"
 	"lyrics-api-go/stats"
 	"net/http"
 	"net/url"
@@ -261,14 +262,21 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	if maxRetries > 3 {
 		maxRetries = 3
 	}
-	if resp.StatusCode == 401 && retries < maxRetries {
-		resp.Body.Close()
-		nextAccount := accountManager.getNextAccount()
-		sleepDuration := time.Duration(retries+1) * time.Second
-		log.Warnf("%s 401 on %s, switching to %s (attempt %d/%d, sleeping %v)...",
-			logcolors.LogAuthError, logcolors.Account(account.NameID), logcolors.Account(nextAccount.NameID), attemptNum, maxRetries, sleepDuration)
-		time.Sleep(sleepDuration)
-		return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)
+	if resp.StatusCode == 401 {
+		// Emit auth failure event (only on first occurrence per account to avoid spam during retries)
+		if retries == 0 {
+			notifier.PublishAccountAuthFailure(account.NameID, resp.StatusCode)
+		}
+
+		if retries < maxRetries {
+			resp.Body.Close()
+			nextAccount := accountManager.getNextAccount()
+			sleepDuration := time.Duration(retries+1) * time.Second
+			log.Warnf("%s 401 on %s, switching to %s (attempt %d/%d, sleeping %v)...",
+				logcolors.LogAuthError, logcolors.Account(account.NameID), logcolors.Account(nextAccount.NameID), attemptNum, maxRetries, sleepDuration)
+			time.Sleep(sleepDuration)
+			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)
+		}
 	}
 
 	if resp.StatusCode != http.StatusOK {

@@ -95,6 +95,7 @@ func main() {
 	backupPath := getEnvOrDefault("CACHE_BACKUP_PATH", "./backups")
 	persistentCache, err = cache.NewPersistentCache(cachePath, backupPath, conf.FeatureFlags.CacheCompression)
 	if err != nil {
+		notifier.PublishServerStartupFailed("cache", err)
 		log.Fatalf("Failed to initialize cache: %v", err)
 	}
 	defer persistentCache.Close()
@@ -103,6 +104,7 @@ func main() {
 	statsPath := getEnvOrDefault("STATS_DB_PATH", "./stats.db")
 	statsStore, err = stats.NewStore(statsPath)
 	if err != nil {
+		notifier.PublishServerStartupFailed("stats_store", err)
 		log.Fatalf("Failed to initialize stats store: %v", err)
 	}
 	defer statsStore.Close()
@@ -114,6 +116,17 @@ func main() {
 
 	// Start auto-saving stats every 5 minutes
 	statsStore.StartAutoSave(5 * time.Minute)
+
+	// Initialize alert handler for system notifications
+	alertNotifiers := setupNotifiers()
+	if len(alertNotifiers) > 0 {
+		alertHandler := notifier.NewAlertHandler(notifier.AlertConfig{
+			Notifiers:        alertNotifiers,
+			CooldownDuration: 15 * time.Minute,
+		})
+		alertHandler.Start()
+		log.Infof("%s Alert handler initialized with %d notifier(s)", logcolors.LogNotifier, len(alertNotifiers))
+	}
 
 	go startTokenMonitor()
 
@@ -165,7 +178,15 @@ func main() {
 	corsHandler := c.Handler(loggedRouter)
 	handler := limitMiddleware(corsHandler, limiter)
 
+	// Get account count for startup notification
+	accounts, _ := conf.GetTTMLAccounts()
+	accountCount := len(accounts)
+
 	log.Infof("%s Listening on port %s", logcolors.LogServer, port)
+
+	// Publish server started event
+	notifier.PublishServerStarted(port, accountCount)
+
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
@@ -691,6 +712,7 @@ func backupCache(w http.ResponseWriter, r *http.Request) {
 	backupPath, err := persistentCache.Backup()
 	if err != nil {
 		log.Errorf("%s Failed to create backup: %v", logcolors.LogCacheBackup, err)
+		notifier.PublishCacheBackupFailed(err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -716,6 +738,7 @@ func clearCache(w http.ResponseWriter, r *http.Request) {
 	backupPath, err := persistentCache.BackupAndClear()
 	if err != nil {
 		log.Errorf("%s Failed to backup and clear cache: %v", logcolors.LogCacheClear, err)
+		notifier.PublishCacheBackupFailed(err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -725,6 +748,7 @@ func clearCache(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Infof("%s Cache cleared successfully, backup at: %s", logcolors.LogCacheClear, backupPath)
+	notifier.PublishCacheCleared(backupPath)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":     "Cache cleared successfully",

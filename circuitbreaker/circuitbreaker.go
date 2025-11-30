@@ -3,6 +3,7 @@ package circuitbreaker
 import (
 	"errors"
 	"lyrics-api-go/logcolors"
+	"lyrics-api-go/services/notifier"
 	"sync"
 	"time"
 
@@ -112,6 +113,8 @@ func (cb *CircuitBreaker) RecordSuccess() {
 		cb.state = StateClosed
 		cb.failures = 0
 		log.Infof("%s Test request succeeded, transitioning to CLOSED", logcolors.CircuitBreakerPrefix(cb.name))
+		// Emit recovery event
+		notifier.PublishCircuitBreakerRecovered(cb.name)
 	} else if cb.state == StateClosed {
 		// Reset failure count on success
 		cb.failures = 0
@@ -130,13 +133,28 @@ func (cb *CircuitBreaker) RecordFailure() {
 		// Test request failed, back to open
 		cb.state = StateOpen
 		log.Warnf("%s Test request failed, transitioning back to OPEN", logcolors.CircuitBreakerPrefix(cb.name))
+		// Emit circuit open event
+		notifier.PublishCircuitBreakerOpen(cb.name, cb.failures, cb.cooldown)
 		return
 	}
 
-	if cb.state == StateClosed && cb.failures >= cb.threshold {
-		cb.state = StateOpen
-		log.Warnf("%s Threshold reached (%d failures), transitioning to OPEN (cooldown: %v)",
-			logcolors.CircuitBreakerPrefix(cb.name), cb.failures, cb.cooldown)
+	if cb.state == StateClosed {
+		// Check for high failure rate warning (at 60% of threshold)
+		warningThreshold := (cb.threshold * 3) / 5 // 60% of threshold
+		if warningThreshold < 2 {
+			warningThreshold = 2
+		}
+		if cb.failures == warningThreshold {
+			notifier.PublishHighFailureRate(cb.name, cb.failures, cb.threshold)
+		}
+
+		if cb.failures >= cb.threshold {
+			cb.state = StateOpen
+			log.Warnf("%s Threshold reached (%d failures), transitioning to OPEN (cooldown: %v)",
+				logcolors.CircuitBreakerPrefix(cb.name), cb.failures, cb.cooldown)
+			// Emit circuit open event
+			notifier.PublishCircuitBreakerOpen(cb.name, cb.failures, cb.cooldown)
+		}
 	}
 }
 
