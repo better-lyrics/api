@@ -112,7 +112,7 @@ func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
 	// Artist names for account logging
 	funNames := []string{
 		"Billie", "Toliver", "Taylor", "Dua", "Olivia",
-		"Charli", "Halsey", "Tyler", "Gunna", "Future",
+		"Charli", "Khalid", "Tyler", "Gunna", "Future",
 		"Offset", "Metro", "Burna", "Phoebe", "Mitski",
 		"Finneas", "Clairo", "Raye", "Hozier", "Gracie",
 		"Adele", "Ye", "Abel", "Keem", "Yeat",
