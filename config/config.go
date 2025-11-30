@@ -69,6 +69,16 @@ func Get() Config {
 	return conf
 }
 
+// AccountNameMigrations maps old account names to new names.
+// When stats are loaded, any usage recorded under old names will be
+// merged into the new name. This allows renaming accounts in funNames
+// without losing historical stats data.
+//
+// Format: oldName -> newName
+var AccountNameMigrations = map[string]string{
+	"Halsey": "Khalid",
+}
+
 // TTMLAccount represents a single TTML API account
 type TTMLAccount struct {
 	Name           string

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
 
 	log "github.com/sirupsen/logrus"
@@ -154,6 +155,9 @@ func (s *Store) Load() error {
 		stats.maxResponseTime.Store(persisted.MaxResponseTime)
 	}
 
+	// Apply account name migrations before restoring
+	persisted.AccountUsage = applyAccountMigrations(persisted.AccountUsage)
+
 	// Restore account usage
 	for name, count := range persisted.AccountUsage {
 		counter := &atomic.Int64{}
@@ -263,4 +267,42 @@ func (s *Store) Close() error {
 	}
 
 	return s.db.Close()
+}
+
+// applyAccountMigrations applies account name migrations to the usage map.
+// Old names are merged into new names (counts are added together).
+// This allows renaming accounts without losing historical stats.
+func applyAccountMigrations(usage map[string]int64) map[string]int64 {
+	if usage == nil {
+		return nil
+	}
+
+	migrations := config.AccountNameMigrations
+	if len(migrations) == 0 {
+		return usage
+	}
+
+	result := make(map[string]int64, len(usage))
+
+	// First, copy all entries
+	for name, count := range usage {
+		result[name] = count
+	}
+
+	// Apply migrations: merge old name counts into new names
+	for oldName, newName := range migrations {
+		oldCount, hasOld := result[oldName]
+		if !hasOld {
+			continue // No data under old name, nothing to migrate
+		}
+
+		// Merge old count into new name
+		result[newName] += oldCount
+		delete(result, oldName)
+
+		log.Infof("%s Migrated account stats: %s -> %s (transferred %d requests)",
+			logcolors.LogStats, oldName, newName, oldCount)
+	}
+
+	return result
 }
