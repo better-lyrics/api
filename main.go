@@ -36,6 +36,7 @@ var conf = config.Get()
 
 var (
 	persistentCache *cache.PersistentCache
+	statsStore      *stats.Store
 	inFlightReqs    sync.Map
 )
 
@@ -97,6 +98,22 @@ func main() {
 		log.Fatalf("Failed to initialize cache: %v", err)
 	}
 	defer persistentCache.Close()
+
+	// Initialize stats store (separate from cache to preserve stats across cache clears)
+	statsPath := getEnvOrDefault("STATS_DB_PATH", "./stats.db")
+	statsStore, err = stats.NewStore(statsPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize stats store: %v", err)
+	}
+	defer statsStore.Close()
+
+	// Load persisted stats from previous runs
+	if err := statsStore.Load(); err != nil {
+		log.Warnf("%s Failed to load persisted stats: %v", logcolors.LogStats, err)
+	}
+
+	// Start auto-saving stats every 5 minutes
+	statsStore.StartAutoSave(5 * time.Minute)
 
 	go startTokenMonitor()
 

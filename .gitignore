@@ -27,6 +27,7 @@ go.work.sum
 
 # Cache database
 cache.db
+stats.db
 
 lyrics-api-go
 test.xml
