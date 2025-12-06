@@ -21,6 +21,7 @@ type Config struct {
 		CacheInvalidationIntervalInSeconds int    `envconfig:"CACHE_INVALIDATION_INTERVAL_IN_SECONDS" default:"3600"`
 		LyricsCacheTTLInSeconds            int    `envconfig:"LYRICS_CACHE_TTL_IN_SECONDS" default:"86400"`
 		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
+		APIKey                             string `envconfig:"API_KEY" default:""`
 		// TTML API Configuration
 		// Single account (backwards compatible)
 		TTMLBearerToken    string `envconfig:"TTML_BEARER_TOKEN" default:""`

@@ -953,6 +953,15 @@ func simulateCircuitBreakerFailure(w http.ResponseWriter, r *http.Request) {
 
 func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check for API key to bypass rate limits
+		apiKey := r.Header.Get("X-API-Key")
+		if apiKey != "" && conf.Configuration.APIKey != "" && apiKey == conf.Configuration.APIKey {
+			w.Header().Set("X-RateLimit-Bypass", "true")
+			ctx := context.WithValue(r.Context(), rateLimitTypeKey, "bypass")
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
 		limiters := limiter.GetLimiter(r.RemoteAddr)
 
 		// Try normal tier first
