@@ -35,6 +35,7 @@ const (
 const (
 	LogRateLimit    = Purple + "[RateLimit]" + Reset
 	LogTokenMonitor = Cyan + "[Token Monitor]" + Reset
+	LogAPIKey       = Purple + "[APIKey]" + Reset
 )
 
 // CircuitBreakerPrefix returns a colored circuit breaker prefix with the given name

@@ -134,11 +134,32 @@ func main() {
 
 	loggedRouter := middleware.LoggingMiddleware(router)
 	corsHandler := c.Handler(loggedRouter)
-	handler := limitMiddleware(corsHandler, limiter)
+
+	// API key middleware - if API_KEY_REQUIRED is true, require X-API-Key header
+	// Public paths are accessible without API key
+	publicPaths := []string{"/", "/health", "/cache/help"}
+	apiKeyHandler := middleware.APIKeyMiddleware(
+		conf.Configuration.APIKey,
+		conf.Configuration.APIKeyRequired,
+		publicPaths,
+	)(corsHandler)
+
+	handler := limitMiddleware(apiKeyHandler, limiter)
 
 	// Get account count for startup notification
 	accounts, _ := conf.GetTTMLAccounts()
 	accountCount := len(accounts)
+
+	// Log API key status
+	if conf.Configuration.APIKeyRequired {
+		if conf.Configuration.APIKey != "" {
+			log.Infof("%s API key authentication enabled", logcolors.LogAPIKey)
+		} else {
+			log.Warnf("%s API key required but not configured!", logcolors.LogAPIKey)
+		}
+	} else if conf.Configuration.APIKey != "" {
+		log.Infof("%s API key configured for rate limit bypass only", logcolors.LogAPIKey)
+	}
 
 	log.Infof("%s Listening on port %s", logcolors.LogServer, port)
 
