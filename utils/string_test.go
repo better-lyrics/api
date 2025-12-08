@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -21,6 +22,17 @@ func TestCompressAndDecompressString(t *testing.T) {
 			name: "Empty string",
 			text: "",
 		},
+		{
+			name: "TTML-like content",
+			text: `<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml">
+  <body>
+    <div>
+      <p begin="00:00:01.000" end="00:00:05.000">Hello world</p>
+    </div>
+  </body>
+</tt>`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -39,6 +51,24 @@ func TestCompressAndDecompressString(t *testing.T) {
 				t.Errorf("Expected decompressed string %q, got %q", tt.text, decompressed)
 			}
 		})
+	}
+}
+
+func TestCompressionRatio(t *testing.T) {
+	// Repetitive TTML content should compress well
+	content := strings.Repeat(`<p begin="00:00:01.000" end="00:00:05.000">Hello world lyrics</p>`, 100)
+
+	compressed, err := CompressString(content)
+	if err != nil {
+		t.Fatalf("CompressString error: %v", err)
+	}
+
+	ratio := float64(len(compressed)) / float64(len(content))
+	t.Logf("Original: %d bytes, Compressed: %d bytes, Ratio: %.2f", len(content), len(compressed), ratio)
+
+	// Repetitive content should compress to less than 10% of original
+	if ratio > 0.1 {
+		t.Errorf("Expected compression ratio < 0.1 for repetitive content, got %.2f", ratio)
 	}
 }
 

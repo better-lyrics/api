@@ -188,12 +188,12 @@ func (pc *PersistentCache) Get(key string) (string, bool) {
 }
 
 // Set stores a value in cache (both memory and disk)
-// Compresses value if compression is enabled
+// Compresses value with BestCompression if compression is enabled
 func (pc *PersistentCache) Set(key, value string) error {
 	var finalValue string
 	var err error
 
-	// Compress if needed
+	// Compress if enabled (uses BestCompression level)
 	if pc.compressionEnabled {
 		finalValue, err = utils.CompressString(value)
 		if err != nil {

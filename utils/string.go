@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/base64"
-	"io/ioutil"
+	"io"
 )
 
-// CompressString compresses the input string using gzip and returns the base64 encoded string.
+// CompressString compresses the input string using gzip with BestCompression level.
+// Returns base64 encoded string for safe storage in JSON/BoltDB.
 func CompressString(input string) (string, error) {
 	var buf bytes.Buffer
-	gzipWriter := gzip.NewWriter(&buf)
-	_, err := gzipWriter.Write([]byte(input))
+	gzipWriter, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return "", err
+	}
+	_, err = gzipWriter.Write([]byte(input))
 	if err != nil {
 		return "", err
 	}
@@ -33,7 +37,7 @@ func DecompressString(input string) (string, error) {
 		return "", err
 	}
 	defer gzipReader.Close()
-	result, err := ioutil.ReadAll(gzipReader)
+	result, err := io.ReadAll(gzipReader)
 	if err != nil {
 		return "", err
 	}

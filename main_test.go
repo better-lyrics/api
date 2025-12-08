@@ -235,8 +235,8 @@ func TestBuildFallbackCacheKeys(t *testing.T) {
 			artistName:  "Ed Sheeran",
 			albumName:   "Divide",
 			durationStr: "234",
-			originalKey: "ttml_lyrics:Shape of You Ed Sheeran Divide 234s",
-			expected:    []string{"ttml_lyrics:Shape of You Ed Sheeran  234s"},
+			originalKey: "ttml_lyrics:shape of you ed sheeran divide 234s",
+			expected:    []string{"ttml_lyrics:shape of you ed sheeran 234s"},
 		},
 		{
 			name:        "With album, no duration",
@@ -244,8 +244,8 @@ func TestBuildFallbackCacheKeys(t *testing.T) {
 			artistName:  "Ed Sheeran",
 			albumName:   "Divide",
 			durationStr: "",
-			originalKey: "ttml_lyrics:Shape of You Ed Sheeran Divide",
-			expected:    []string{"ttml_lyrics:Shape of You Ed Sheeran "},
+			originalKey: "ttml_lyrics:shape of you ed sheeran divide",
+			expected:    []string{"ttml_lyrics:shape of you ed sheeran"},
 		},
 		{
 			name:        "No album - no fallback",
@@ -253,7 +253,7 @@ func TestBuildFallbackCacheKeys(t *testing.T) {
 			artistName:  "Ed Sheeran",
 			albumName:   "",
 			durationStr: "234",
-			originalKey: "ttml_lyrics:Shape of You Ed Sheeran  234s",
+			originalKey: "ttml_lyrics:shape of you ed sheeran 234s",
 			expected:    []string{},
 		},
 		{
@@ -262,7 +262,7 @@ func TestBuildFallbackCacheKeys(t *testing.T) {
 			artistName:  "Ed Sheeran",
 			albumName:   "",
 			durationStr: "",
-			originalKey: "ttml_lyrics:Shape of You Ed Sheeran ",
+			originalKey: "ttml_lyrics:shape of you ed sheeran",
 			expected:    []string{},
 		},
 	}
@@ -329,5 +329,119 @@ func TestCachedLyricsBackwardsCompatibility(t *testing.T) {
 	}
 	if retrievedDuration != 0 {
 		t.Errorf("Expected duration 0 for old format, got %d", retrievedDuration)
+	}
+}
+
+func TestBuildNormalizedCacheKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		songName    string
+		artistName  string
+		albumName   string
+		durationStr string
+		expected    string
+	}{
+		{
+			name:        "Basic case - lowercase and trimmed",
+			songName:    "Shape of You",
+			artistName:  "Ed Sheeran",
+			albumName:   "",
+			durationStr: "",
+			expected:    "ttml_lyrics:shape of you ed sheeran",
+		},
+		{
+			name:        "With album",
+			songName:    "Shape of You",
+			artistName:  "Ed Sheeran",
+			albumName:   "Divide",
+			durationStr: "",
+			expected:    "ttml_lyrics:shape of you ed sheeran divide",
+		},
+		{
+			name:        "With duration",
+			songName:    "Shape of You",
+			artistName:  "Ed Sheeran",
+			albumName:   "",
+			durationStr: "234",
+			expected:    "ttml_lyrics:shape of you ed sheeran 234s",
+		},
+		{
+			name:        "With album and duration",
+			songName:    "Shape of You",
+			artistName:  "Ed Sheeran",
+			albumName:   "Divide",
+			durationStr: "234",
+			expected:    "ttml_lyrics:shape of you ed sheeran divide 234s",
+		},
+		{
+			name:        "Whitespace trimming",
+			songName:    "  Shape of You  ",
+			artistName:  "  Ed Sheeran  ",
+			albumName:   "",
+			durationStr: "",
+			expected:    "ttml_lyrics:shape of you ed sheeran",
+		},
+		{
+			name:        "Mixed case",
+			songName:    "SHAPE OF YOU",
+			artistName:  "ED SHEERAN",
+			albumName:   "",
+			durationStr: "",
+			expected:    "ttml_lyrics:shape of you ed sheeran",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildNormalizedCacheKey(tt.songName, tt.artistName, tt.albumName, tt.durationStr)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestBuildLegacyCacheKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		songName    string
+		artistName  string
+		albumName   string
+		durationStr string
+		expected    string
+	}{
+		{
+			name:        "Without album - has trailing space",
+			songName:    "Shape of You",
+			artistName:  "Ed Sheeran",
+			albumName:   "",
+			durationStr: "",
+			expected:    "ttml_lyrics:Shape of You Ed Sheeran ",
+		},
+		{
+			name:        "With album",
+			songName:    "Shape of You",
+			artistName:  "Ed Sheeran",
+			albumName:   "Divide",
+			durationStr: "",
+			expected:    "ttml_lyrics:Shape of You Ed Sheeran Divide",
+		},
+		{
+			name:        "Without album, with duration - double space",
+			songName:    "Shape of You",
+			artistName:  "Ed Sheeran",
+			albumName:   "",
+			durationStr: "234",
+			expected:    "ttml_lyrics:Shape of You Ed Sheeran  234s",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildLegacyCacheKey(tt.songName, tt.artistName, tt.albumName, tt.durationStr)
+			if result != tt.expected {
+				t.Errorf("Expected %q, got %q", tt.expected, result)
+			}
+		})
 	}
 }
