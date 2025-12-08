@@ -90,6 +90,7 @@ func main() {
 	router.HandleFunc("/cache/restore", restoreCache)
 	router.HandleFunc("/cache/clear", clearCache)
 	router.HandleFunc("/cache/migrate", migrateCache)
+	router.HandleFunc("/cache/migrate/status", getMigrationStatus)
 	router.HandleFunc("/health", getHealthStatus)
 	router.HandleFunc("/stats", getStats)
 	router.HandleFunc("/circuit-breaker", getCircuitBreakerStatus)

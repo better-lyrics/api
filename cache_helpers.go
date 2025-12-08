@@ -180,13 +180,20 @@ func buildFallbackCacheKeys(songName, artistName, albumName, durationStr, origin
 
 // Migration handler
 
+// generateJobID creates a unique job ID
+func generateJobID() string {
+	return fmt.Sprintf("mig_%d", time.Now().UnixNano())
+}
+
 // migrateCache migrates legacy cache keys to the new normalized format and re-compresses data.
 // Legacy format: "ttml_lyrics:{song} {artist} {album}" with trailing space when album is empty
 // New format: "ttml_lyrics:{song} {artist}" (lowercase, trimmed, no trailing spaces)
 //
 // Query params:
 //   - recompress=true: Also re-compress entries that don't need key migration (optimizes storage)
-//   - dry_run=true: Preview changes without applying them
+//   - dry_run=true: Preview changes without applying them (runs synchronously)
+//
+// Returns immediately with a job ID. Use /cache/migrate/status?job_id=xxx to check progress.
 func migrateCache(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -196,81 +203,185 @@ func migrateCache(w http.ResponseWriter, r *http.Request) {
 	recompress := r.URL.Query().Get("recompress") == "true"
 	dryRun := r.URL.Query().Get("dry_run") == "true"
 
-	log.Infof("%s Starting cache migration (recompress=%v, dry_run=%v)...", logcolors.LogCache, recompress, dryRun)
+	// Dry run is synchronous (fast, just counts keys)
+	if dryRun {
+		runMigrationDryRun(w)
+		return
+	}
 
-	var migrated, recompressed, skipped, failed int
-	var totalSavings int64
-	var migratedKeys []string
+	// Check if a migration is already running
+	migrationJobs.RLock()
+	for _, job := range migrationJobs.jobs {
+		if job.Status == JobStatusRunning || job.Status == JobStatusPending {
+			migrationJobs.RUnlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":  "A migration is already in progress",
+				"job_id": job.ID,
+			})
+			return
+		}
+	}
+	migrationJobs.RUnlock()
+
+	// Create new job
+	job := &MigrationJob{
+		ID:         generateJobID(),
+		Status:     JobStatusPending,
+		StartedAt:  time.Now().Unix(),
+		Recompress: recompress,
+		Progress:   MigrationProgress{},
+	}
+
+	// Store job
+	migrationJobs.Lock()
+	migrationJobs.jobs[job.ID] = job
+	migrationJobs.Unlock()
+
+	// Start migration in background
+	go runMigrationAsync(job)
+
+	log.Infof("%s Started async cache migration job %s (recompress=%v)", logcolors.LogCache, job.ID, recompress)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":    "Migration started",
+		"job_id":     job.ID,
+		"status_url": fmt.Sprintf("/cache/migrate/status?job_id=%s", job.ID),
+	})
+}
+
+// runMigrationDryRun performs a dry run synchronously
+func runMigrationDryRun(w http.ResponseWriter) {
+	var skipped int
 	keysToDelete := make(map[string]bool)
-	keysToMigrate := make(map[string]string) // normalizedKey -> legacyKey
+	keysToMigrate := make(map[string]string)
 	keysToRecompress := []string{}
 
-	// First pass: identify keys that need migration or recompression
 	persistentCache.Range(func(key string, entry cache.CacheEntry) bool {
-		// Only process lyrics cache keys
 		if !strings.HasPrefix(key, "ttml_lyrics:") {
 			skipped++
 			return true
 		}
 
-		// Check if key has legacy format characteristics
 		query := strings.TrimPrefix(key, "ttml_lyrics:")
 		normalizedQuery := strings.ToLower(strings.TrimSpace(query))
-
-		// Collapse multiple spaces to single space
 		for strings.Contains(normalizedQuery, "  ") {
 			normalizedQuery = strings.ReplaceAll(normalizedQuery, "  ", " ")
 		}
-
 		normalizedKey := "ttml_lyrics:" + normalizedQuery
 
-		// If the normalized key is different, this is a legacy key
 		if normalizedKey != key {
-			// Check if normalized key already exists
 			if _, exists := persistentCache.Get(normalizedKey); !exists {
 				keysToMigrate[normalizedKey] = key
 			}
 			keysToDelete[key] = true
-		} else if recompress {
-			// Key is already normalized, but may need re-compression
+		} else {
 			keysToRecompress = append(keysToRecompress, key)
 		}
-
 		return true
 	})
 
-	if dryRun {
-		// Return preview without making changes
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message":            "Dry run - no changes made",
-			"dry_run":            true,
-			"keys_to_migrate":    len(keysToMigrate),
-			"keys_to_delete":     len(keysToDelete),
-			"keys_to_recompress": len(keysToRecompress),
-			"skipped":            skipped,
-		})
-		return
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":            "Dry run - no changes made",
+		"dry_run":            true,
+		"keys_to_migrate":    len(keysToMigrate),
+		"keys_to_delete":     len(keysToDelete),
+		"keys_to_recompress": len(keysToRecompress),
+		"skipped":            skipped,
+	})
+}
+
+// runMigrationAsync performs the actual migration in the background
+func runMigrationAsync(job *MigrationJob) {
+	// Update status to running
+	migrationJobs.Lock()
+	job.Status = JobStatusRunning
+	migrationJobs.Unlock()
+
+	defer func() {
+		if r := recover(); r != nil {
+			migrationJobs.Lock()
+			job.Status = JobStatusFailed
+			job.Error = fmt.Sprintf("panic: %v", r)
+			job.CompletedAt = time.Now().Unix()
+			migrationJobs.Unlock()
+			log.Errorf("%s Migration job %s panicked: %v", logcolors.LogCache, job.ID, r)
+		}
+	}()
+
+	var migrated, recompressed, skipped, failed int
+	var totalSavings int64
+	var migratedKeys []string
+	keysToDelete := make(map[string]bool)
+	keysToMigrate := make(map[string]string)
+	keysToRecompress := []string{}
+
+	// First pass: identify keys
+	var totalKeys int
+	persistentCache.Range(func(key string, entry cache.CacheEntry) bool {
+		totalKeys++
+		if !strings.HasPrefix(key, "ttml_lyrics:") {
+			skipped++
+			return true
+		}
+
+		query := strings.TrimPrefix(key, "ttml_lyrics:")
+		normalizedQuery := strings.ToLower(strings.TrimSpace(query))
+		for strings.Contains(normalizedQuery, "  ") {
+			normalizedQuery = strings.ReplaceAll(normalizedQuery, "  ", " ")
+		}
+		normalizedKey := "ttml_lyrics:" + normalizedQuery
+
+		if normalizedKey != key {
+			if _, exists := persistentCache.Get(normalizedKey); !exists {
+				keysToMigrate[normalizedKey] = key
+			}
+			keysToDelete[key] = true
+		} else if job.Recompress {
+			keysToRecompress = append(keysToRecompress, key)
+		}
+		return true
+	})
+
+	// Calculate total work
+	totalWork := len(keysToMigrate) + len(keysToRecompress) + len(keysToDelete)
+	processedWork := 0
+
+	updateProgress := func() {
+		migrationJobs.Lock()
+		job.Progress.TotalKeys = totalWork
+		job.Progress.ProcessedKeys = processedWork
+		if totalWork > 0 {
+			job.Progress.Percent = (processedWork * 100) / totalWork
+		}
+		migrationJobs.Unlock()
 	}
 
-	// Second pass: migrate keys (re-compresses during Set)
+	updateProgress()
+
+	// Second pass: migrate keys
 	for normalizedKey, legacyKey := range keysToMigrate {
 		if value, ok := persistentCache.Get(legacyKey); ok {
 			if err := persistentCache.Set(normalizedKey, value); err != nil {
 				log.Warnf("%s Failed to migrate key %s -> %s: %v", logcolors.LogCache, legacyKey, normalizedKey, err)
 				failed++
-				continue
+			} else {
+				migratedKeys = append(migratedKeys, fmt.Sprintf("%s -> %s", legacyKey, normalizedKey))
+				migrated++
 			}
-			migratedKeys = append(migratedKeys, fmt.Sprintf("%s -> %s", legacyKey, normalizedKey))
-			migrated++
 		}
+		processedWork++
+		updateProgress()
 	}
 
-	// Third pass: re-compress entries that don't need key migration
-	if recompress {
+	// Third pass: re-compress
+	if job.Recompress {
 		for _, key := range keysToRecompress {
 			if value, ok := persistentCache.Get(key); ok {
-				// Get original size from raw entry
 				originalSize := 0
 				persistentCache.Range(func(k string, entry cache.CacheEntry) bool {
 					if k == key {
@@ -280,29 +391,27 @@ func migrateCache(w http.ResponseWriter, r *http.Request) {
 					return true
 				})
 
-				// Re-set with optimized compression
 				if err := persistentCache.Set(key, value); err != nil {
 					log.Warnf("%s Failed to recompress key %s: %v", logcolors.LogCache, key, err)
 					failed++
-					continue
-				}
-
-				// Calculate savings
-				newSize := 0
-				persistentCache.Range(func(k string, entry cache.CacheEntry) bool {
-					if k == key {
-						newSize = len(entry.Value)
-						return false
+				} else {
+					newSize := 0
+					persistentCache.Range(func(k string, entry cache.CacheEntry) bool {
+						if k == key {
+							newSize = len(entry.Value)
+							return false
+						}
+						return true
+					})
+					savings := originalSize - newSize
+					if savings > 0 {
+						totalSavings += int64(savings)
+						recompressed++
 					}
-					return true
-				})
-
-				savings := originalSize - newSize
-				if savings > 0 {
-					totalSavings += int64(savings)
-					recompressed++
 				}
 			}
+			processedWork++
+			updateProgress()
 		}
 	}
 
@@ -314,20 +423,66 @@ func migrateCache(w http.ResponseWriter, r *http.Request) {
 		} else {
 			deleted++
 		}
+		processedWork++
+		updateProgress()
 	}
 
-	log.Infof("%s Cache migration complete: %d migrated, %d recompressed, %d deleted, %d skipped, %d failed, %d bytes saved",
-		logcolors.LogCache, migrated, recompressed, deleted, skipped, failed, totalSavings)
+	// Store results
+	migrationJobs.Lock()
+	job.Status = JobStatusCompleted
+	job.CompletedAt = time.Now().Unix()
+	job.Result = &MigrationResult{
+		Migrated:     migrated,
+		Recompressed: recompressed,
+		Deleted:      deleted,
+		Skipped:      skipped,
+		Failed:       failed,
+		BytesSaved:   totalSavings,
+		MigratedKeys: migratedKeys,
+	}
+	migrationJobs.Unlock()
+
+	log.Infof("%s Migration job %s complete: %d migrated, %d recompressed, %d deleted, %d skipped, %d failed, %d bytes saved",
+		logcolors.LogCache, job.ID, migrated, recompressed, deleted, skipped, failed, totalSavings)
+}
+
+// getMigrationStatus returns the status of a migration job
+func getMigrationStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	jobID := r.URL.Query().Get("job_id")
+	if jobID == "" {
+		// Return all jobs
+		migrationJobs.RLock()
+		jobs := make([]*MigrationJob, 0, len(migrationJobs.jobs))
+		for _, job := range migrationJobs.jobs {
+			jobs = append(jobs, job)
+		}
+		migrationJobs.RUnlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jobs": jobs,
+		})
+		return
+	}
+
+	migrationJobs.RLock()
+	job, exists := migrationJobs.jobs[jobID]
+	migrationJobs.RUnlock()
+
+	if !exists {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "Job not found",
+		})
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":       "Cache migration complete",
-		"migrated":      migrated,
-		"recompressed":  recompressed,
-		"deleted":       deleted,
-		"skipped":       skipped,
-		"failed":        failed,
-		"bytes_saved":   totalSavings,
-		"migrated_keys": migratedKeys,
-	})
+	json.NewEncoder(w).Encode(job)
 }
