@@ -1,3 +1,3 @@
 #!/bin/bash
 
-nodemon --exec go run . --signal SIGTERM
+nodemon --exec "go run ." --ext go,env --signal SIGTERM

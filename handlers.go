@@ -272,6 +272,11 @@ func getStats(w http.ResponseWriter, r *http.Request) {
 		"cooldown_remaining": cooldownRemaining.String(),
 	}
 
+	// Include user agent stats if requested via ?by=user_agent
+	if r.URL.Query().Get("by") == "user_agent" {
+		snapshot["user_agents"] = s.UserAgentSnapshot()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(snapshot)
 }

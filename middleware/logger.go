@@ -48,6 +48,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		s.RecordRequest(r.URL.Path)
 		s.RecordStatusCode(rec.StatusCode)
 		s.RecordResponseTime(duration, r.URL.Path)
+		s.RecordUserAgent(r.UserAgent())
 
 		statusColor := getStatusColor(rec.StatusCode)
 		resetColor := "\033[0m"

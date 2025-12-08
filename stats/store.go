@@ -61,6 +61,9 @@ type PersistedStats struct {
 	// Account usage
 	AccountUsage map[string]int64 `json:"account_usage"`
 
+	// User agent usage
+	UserAgentUsage map[string]int64 `json:"user_agent_usage,omitempty"`
+
 	// Metadata
 	LastSaved    time.Time `json:"last_saved"`
 	FirstStarted time.Time `json:"first_started"`
@@ -165,6 +168,13 @@ func (s *Store) Load() error {
 		stats.accountUsage.Store(name, counter)
 	}
 
+	// Restore user agent usage
+	for ua, count := range persisted.UserAgentUsage {
+		counter := &atomic.Int64{}
+		counter.Store(count)
+		stats.userAgentUsage.Store(ua, counter)
+	}
+
 	// Preserve the original first start time if available
 	if !persisted.FirstStarted.IsZero() {
 		stats.StartTime = persisted.FirstStarted
@@ -207,6 +217,7 @@ func (s *Store) Save() error {
 		LyricsResponseTime:  stats.lyricsResponseTime.Load(),
 		LyricsResponseCount: stats.lyricsResponseCount.Load(),
 		AccountUsage:        stats.AccountUsageSnapshot(),
+		UserAgentUsage:      stats.UserAgentSnapshot(),
 		LastSaved:           time.Now(),
 		FirstStarted:        stats.StartTime,
 	}

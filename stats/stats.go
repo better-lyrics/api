@@ -53,6 +53,9 @@ type Stats struct {
 
 	// Account usage tracking
 	accountUsage sync.Map // map[string]*atomic.Int64
+
+	// User agent tracking
+	userAgentUsage sync.Map // map[string]*atomic.Int64
 }
 
 // Global stats instance
@@ -136,6 +139,25 @@ func (s *Stats) RequestsPerHour() int64 {
 func (s *Stats) AccountUsageSnapshot() map[string]int64 {
 	result := make(map[string]int64)
 	s.accountUsage.Range(func(key, value interface{}) bool {
+		result[key.(string)] = value.(*atomic.Int64).Load()
+		return true
+	})
+	return result
+}
+
+// RecordUserAgent records a request from a specific user agent
+func (s *Stats) RecordUserAgent(userAgent string) {
+	if userAgent == "" {
+		userAgent = "(empty)"
+	}
+	counter, _ := s.userAgentUsage.LoadOrStore(userAgent, &atomic.Int64{})
+	counter.(*atomic.Int64).Add(1)
+}
+
+// UserAgentSnapshot returns a map of user agents to request counts
+func (s *Stats) UserAgentSnapshot() map[string]int64 {
+	result := make(map[string]int64)
+	s.userAgentUsage.Range(func(key, value interface{}) bool {
 		result[key.(string)] = value.(*atomic.Int64).Load()
 		return true
 	})
