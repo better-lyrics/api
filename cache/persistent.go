@@ -8,6 +8,7 @@ import (
 	"lyrics-api-go/utils"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -422,16 +423,29 @@ func (pc *PersistentCache) ListBackups() ([]BackupInfo, error) {
 // RestoreFromBackup replaces the current cache database with a backup
 // This will close the current database, replace the file, and reopen it
 func (pc *PersistentCache) RestoreFromBackup(backupFileName string) error {
+	// Validate it's a .db file
+	if filepath.Ext(backupFileName) != ".db" {
+		return fmt.Errorf("invalid backup file: must be a .db file")
+	}
+
 	backupFilePath := filepath.Join(pc.backupPath, backupFileName)
+
+	// Validate path traversal: ensure resolved path is within backup directory
+	absBackupPath, err := filepath.Abs(backupFilePath)
+	if err != nil {
+		return fmt.Errorf("invalid backup path: %v", err)
+	}
+	absBackupDir, err := filepath.Abs(pc.backupPath)
+	if err != nil {
+		return fmt.Errorf("invalid backup directory: %v", err)
+	}
+	if !strings.HasPrefix(absBackupPath, absBackupDir+string(os.PathSeparator)) {
+		return fmt.Errorf("invalid backup file: path traversal detected")
+	}
 
 	// Validate backup file exists
 	if _, err := os.Stat(backupFilePath); os.IsNotExist(err) {
 		return fmt.Errorf("backup file not found: %s", backupFileName)
-	}
-
-	// Validate it's a .db file
-	if filepath.Ext(backupFileName) != ".db" {
-		return fmt.Errorf("invalid backup file: must be a .db file")
 	}
 
 	log.Infof("%s Starting restore from backup: %s", logcolors.LogCacheRestore, backupFileName)
@@ -471,11 +485,24 @@ func (pc *PersistentCache) RestoreFromBackup(backupFileName string) error {
 
 // DeleteBackup deletes a specific backup file
 func (pc *PersistentCache) DeleteBackup(backupFileName string) error {
-	backupFilePath := filepath.Join(pc.backupPath, backupFileName)
-
 	// Validate it's a .db file
 	if filepath.Ext(backupFileName) != ".db" {
 		return fmt.Errorf("invalid backup file: must be a .db file")
+	}
+
+	backupFilePath := filepath.Join(pc.backupPath, backupFileName)
+
+	// Validate path traversal: ensure resolved path is within backup directory
+	absBackupPath, err := filepath.Abs(backupFilePath)
+	if err != nil {
+		return fmt.Errorf("invalid backup path: %v", err)
+	}
+	absBackupDir, err := filepath.Abs(pc.backupPath)
+	if err != nil {
+		return fmt.Errorf("invalid backup directory: %v", err)
+	}
+	if !strings.HasPrefix(absBackupPath, absBackupDir+string(os.PathSeparator)) {
+		return fmt.Errorf("invalid backup file: path traversal detected")
 	}
 
 	// Validate backup file exists

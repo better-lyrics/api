@@ -14,6 +14,10 @@ var conf = mustLoad()
 
 type Config struct {
 	Configuration struct {
+		// Provider Settings
+		DefaultProvider string `envconfig:"DEFAULT_PROVIDER" default:"ttml"` // Default lyrics provider (ttml, kugou, legacy)
+
+		// Rate Limiting
 		RateLimitPerSecond                 int    `envconfig:"RATE_LIMIT_PER_SECOND" default:"2"`
 		RateLimitBurstLimit                int    `envconfig:"RATE_LIMIT_BURST_LIMIT" default:"5"`
 		CachedRateLimitPerSecond           int    `envconfig:"CACHED_RATE_LIMIT_PER_SECOND" default:"10"`
@@ -23,6 +27,7 @@ type Config struct {
 		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
 		APIKey                             string `envconfig:"API_KEY" default:""`
 		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
+
 		// TTML API Configuration
 		// Single account (backwards compatible)
 		TTMLBearerToken    string `envconfig:"TTML_BEARER_TOKEN" default:""`
@@ -39,6 +44,21 @@ type Config struct {
 		NegativeCacheTTLInDays     int     `envconfig:"NEGATIVE_CACHE_TTL_DAYS" default:"7"`         // TTL for caching "no lyrics found" responses
 		CircuitBreakerThreshold    int     `envconfig:"CIRCUIT_BREAKER_THRESHOLD" default:"5"`       // Consecutive failures before circuit opens
 		CircuitBreakerCooldownSecs int     `envconfig:"CIRCUIT_BREAKER_COOLDOWN_SECS" default:"300"` // Seconds to wait before retrying (default: 5 minutes)
+
+		// Legacy Provider Configuration (Spotify-based)
+		LyricsUrl          string `envconfig:"LYRICS_URL" default:""`
+		TrackUrl           string `envconfig:"TRACK_URL" default:""`
+		TokenUrl           string `envconfig:"TOKEN_URL" default:""`
+		TokenKey           string `envconfig:"TOKEN_KEY" default:"sp_dc_token"`
+		AppPlatform        string `envconfig:"APP_PLATFORM" default:"WebPlayer"`
+		UserAgent          string `envconfig:"USER_AGENT" default:"Mozilla/5.0"`
+		CookieStringFormat string `envconfig:"COOKIE_STRING_FORMAT" default:"sp_dc=%s"`
+		CookieValue        string `envconfig:"COOKIE_VALUE" default:""`
+		ClientID           string `envconfig:"CLIENT_ID" default:""`
+		ClientSecret       string `envconfig:"CLIENT_SECRET" default:""`
+		OauthTokenUrl      string `envconfig:"OAUTH_TOKEN_URL" default:"https://accounts.spotify.com/api/token"`
+		OauthTokenKey      string `envconfig:"OAUTH_TOKEN_KEY" default:"oauth_token"`
+		TrackCacheTTLInSeconds int `envconfig:"TRACK_CACHE_TTL_IN_SECONDS" default:"86400"`
 	}
 
 	FeatureFlags struct {

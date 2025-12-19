@@ -292,20 +292,32 @@ func TestCachedLyricsJSONFormat(t *testing.T) {
 	cacheKey := "ttml_lyrics:Test Song Artist"
 	ttml := "<tt>test ttml content</tt>"
 	trackDurationMs := 234000
+	score := 0.95
+	language := "en"
+	isRTL := false
 
 	// Set cached lyrics
-	setCachedLyrics(cacheKey, ttml, trackDurationMs)
+	setCachedLyrics(cacheKey, ttml, trackDurationMs, score, language, isRTL)
 
 	// Get and verify
-	retrievedTTML, retrievedDuration, found := getCachedLyrics(cacheKey)
+	cached, found := getCachedLyrics(cacheKey)
 	if !found {
 		t.Error("Expected to find cached lyrics")
 	}
-	if retrievedTTML != ttml {
-		t.Errorf("Expected TTML %q, got %q", ttml, retrievedTTML)
+	if cached.TTML != ttml {
+		t.Errorf("Expected TTML %q, got %q", ttml, cached.TTML)
 	}
-	if retrievedDuration != trackDurationMs {
-		t.Errorf("Expected duration %d, got %d", trackDurationMs, retrievedDuration)
+	if cached.TrackDurationMs != trackDurationMs {
+		t.Errorf("Expected duration %d, got %d", trackDurationMs, cached.TrackDurationMs)
+	}
+	if cached.Score != score {
+		t.Errorf("Expected score %f, got %f", score, cached.Score)
+	}
+	if cached.Language != language {
+		t.Errorf("Expected language %q, got %q", language, cached.Language)
+	}
+	if cached.IsRTL != isRTL {
+		t.Errorf("Expected isRTL %v, got %v", isRTL, cached.IsRTL)
 	}
 }
 
@@ -320,15 +332,15 @@ func TestCachedLyricsBackwardsCompatibility(t *testing.T) {
 	persistentCache.Set(cacheKey, oldFormatTTML)
 
 	// Should still be retrievable
-	retrievedTTML, retrievedDuration, found := getCachedLyrics(cacheKey)
+	cached, found := getCachedLyrics(cacheKey)
 	if !found {
 		t.Error("Expected to find old format cached lyrics")
 	}
-	if retrievedTTML != oldFormatTTML {
-		t.Errorf("Expected TTML %q, got %q", oldFormatTTML, retrievedTTML)
+	if cached.TTML != oldFormatTTML {
+		t.Errorf("Expected TTML %q, got %q", oldFormatTTML, cached.TTML)
 	}
-	if retrievedDuration != 0 {
-		t.Errorf("Expected duration 0 for old format, got %d", retrievedDuration)
+	if cached.TrackDurationMs != 0 {
+		t.Errorf("Expected duration 0 for old format, got %d", cached.TrackDurationMs)
 	}
 }
 

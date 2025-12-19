@@ -1,6 +1,10 @@
 package ttml
 
-import "regexp"
+import (
+	"regexp"
+
+	"lyrics-api-go/services/providers"
+)
 
 // =============================================================================
 // UTILITY FUNCTIONS
@@ -19,19 +23,5 @@ func detectLanguageFromTTML(ttml string) string {
 	return "en"
 }
 
-// IsRTLLanguage checks if a language code is right-to-left
-func IsRTLLanguage(langCode string) bool {
-	rtlLanguages := map[string]bool{
-		"ar": true, // Arabic
-		"fa": true, // Persian (Farsi)
-		"he": true, // Hebrew
-		"ur": true, // Urdu
-		"ps": true, // Pashto
-		"sd": true, // Sindhi
-		"ug": true, // Uyghur
-		"yi": true, // Yiddish
-		"ku": true, // Kurdish (some dialects)
-		"dv": true, // Divehi (Maldivian)
-	}
-	return rtlLanguages[langCode]
-}
+// IsRTLLanguage is an alias for the shared providers.IsRTLLanguage function
+var IsRTLLanguage = providers.IsRTLLanguage

@@ -94,7 +94,7 @@ func (h *AlertHandler) formatAlert(event *Event) (subject, message string) {
 		message = fmt.Sprintf(
 			"The %s circuit breaker has tripped after %d consecutive failures.\n\n"+
 				"All requests will be blocked for %s.\n\n"+
-				"Action: Check Apple Music API status and account health.",
+				"Action: Check TTML API status and account health.",
 			name, failures, cooldown)
 
 	case EventAllAccountsQuarantine:

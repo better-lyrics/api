@@ -79,7 +79,7 @@ const (
 	LogNotifier = Cyan + "[Notifier]" + Reset
 )
 
-// TTML service log prefixes
+// Provider service log prefixes
 const (
 	LogRequest        = Purple + "[Request]" + Reset
 	LogSearch         = Blue + "[Search]" + Reset
@@ -95,4 +95,5 @@ const (
 	LogBestMatch      = Green + "[Best Match]" + Reset
 	LogTrackScore     = Cyan + "[Track Score]" + Reset
 	LogTTMLParser     = Cyan + "[TTML Parser]" + Reset
+	LogWarning        = Red + "[Warning]" + Reset
 )

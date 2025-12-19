@@ -1,28 +1,20 @@
 package ttml
 
-import "encoding/xml"
+import (
+	"encoding/xml"
+
+	"lyrics-api-go/services/providers"
+)
 
 // =============================================================================
-// DATA STRUCTURES
+// DATA STRUCTURES (use shared types from providers package)
 // =============================================================================
 
-// Syllable represents a single word/syllable with timing information
-type Syllable struct {
-	Text         string `json:"text"`
-	StartTime    string `json:"startTimeMs"`
-	EndTime      string `json:"endTimeMs"`
-	IsBackground bool   `json:"isBackground"`
-}
+// Line is an alias for the shared Line type
+type Line = providers.Line
 
-// Line represents a lyrics line with timing information
-type Line struct {
-	StartTimeMs string     `json:"startTimeMs"`
-	DurationMs  string     `json:"durationMs"`
-	Words       string     `json:"words"`
-	Syllables   []Syllable `json:"syllables"`
-	EndTimeMs   string     `json:"endTimeMs"`
-	Agent       string     `json:"agent,omitempty"`
-}
+// Syllable is an alias for the shared Syllable type
+type Syllable = providers.Syllable
 
 // =============================================================================
 // ACCOUNT MANAGEMENT TYPES

@@ -1,17 +1,24 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"lyrics-api-go/cache"
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/services/notifier"
-	"lyrics-api-go/services/ttml"
+	"lyrics-api-go/services/providers"
 	"lyrics-api-go/stats"
 	"net/http"
 	"strings"
 	"time"
 
+	// Import providers to trigger their init() registration
+	_ "lyrics-api-go/services/providers/kugou"
+	_ "lyrics-api-go/services/providers/legacy"
+	ttml "lyrics-api-go/services/providers/ttml"
+
+	"github.com/gorilla/mux"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -38,7 +45,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	rateLimitType, _ := r.Context().Value(rateLimitTypeKey).(string)
 
 	// Check cache first (normalized key, then legacy key for backwards compatibility)
-	if cachedTTML, _, ok := getCachedLyrics(cacheKey); ok {
+	if cached, ok := getCachedLyrics(cacheKey); ok {
 		stats.Get().RecordCacheHit()
 		log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
 		w.Header().Set("Content-Type", "application/json")
@@ -47,14 +54,14 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-RateLimit-Type", rateLimitType)
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ttml": cachedTTML,
+			"ttml": cached.TTML,
 		})
 		return
 	}
 
 	// Check legacy cache key (backwards compatibility - use /cache/migrate to convert)
 	if legacyCacheKey != cacheKey {
-		if cachedTTML, _, ok := getCachedLyrics(legacyCacheKey); ok {
+		if cached, ok := getCachedLyrics(legacyCacheKey); ok {
 			stats.Get().RecordCacheHit()
 			log.Infof("%s Found cached TTML under legacy key", logcolors.LogCacheLyrics)
 			w.Header().Set("Content-Type", "application/json")
@@ -63,7 +70,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("X-RateLimit-Type", rateLimitType)
 			}
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"ttml": cachedTTML,
+				"ttml": cached.TTML,
 			})
 			return
 		}
@@ -181,7 +188,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		// Try fallback cache keys before returning error
 		fallbackKeys := buildFallbackCacheKeys(songName, artistName, albumName, durationStr, cacheKey)
 		for _, fallbackKey := range fallbackKeys {
-			if cachedTTML, _, ok := getCachedLyrics(fallbackKey); ok {
+			if cached, ok := getCachedLyrics(fallbackKey); ok {
 				stats.Get().RecordStaleCacheHit()
 				log.Warnf("%s Backend failed, serving stale cache from key: %s", logcolors.LogCacheLyrics, fallbackKey)
 				w.Header().Set("Content-Type", "application/json")
@@ -190,7 +197,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("X-RateLimit-Type", rateLimitType)
 				}
 				json.NewEncoder(w).Encode(map[string]interface{}{
-					"ttml": cachedTTML,
+					"ttml": cached.TTML,
 				})
 				return
 			}
@@ -234,7 +241,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	stats.Get().RecordCacheMiss()
 	log.Infof("%s Caching TTML for: %s (trackDuration: %dms)", logcolors.LogCacheLyrics, query, trackDurationMs)
-	setCachedLyrics(cacheKey, ttmlString, trackDurationMs)
+	setCachedLyrics(cacheKey, ttmlString, trackDurationMs, score, "", false)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Cache-Status", "MISS")
@@ -245,6 +252,226 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		"ttml":  ttmlString,
 		"score": score,
 	})
+}
+
+// getLyricsWithProvider returns a handler for a specific provider
+func getLyricsWithProvider(providerName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		songName := r.URL.Query().Get("s") + r.URL.Query().Get("song") + r.URL.Query().Get("songName")
+		artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist") + r.URL.Query().Get("artistName")
+		albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album") + r.URL.Query().Get("albumName")
+		durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
+
+		if songName == "" && artistName == "" {
+			http.Error(w, "Song name or artist name not provided", http.StatusUnprocessableEntity)
+			return
+		}
+
+		// Get the provider
+		provider, err := providers.Get(providerName)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": fmt.Sprintf("Invalid provider: %s", providerName),
+			})
+			return
+		}
+
+		// Build cache key with provider prefix
+		cacheKey := buildProviderCacheKey(provider.CacheKeyPrefix(), songName, artistName, albumName, durationStr)
+		query := strings.ToLower(strings.TrimSpace(songName)) + " " + strings.ToLower(strings.TrimSpace(artistName))
+
+		// Check rate limit context
+		cacheOnlyMode, _ := r.Context().Value(cacheOnlyModeKey).(bool)
+		rateLimitType, _ := r.Context().Value(rateLimitTypeKey).(string)
+
+		// Check cache first
+		if cached, ok := getCachedLyrics(cacheKey); ok {
+			stats.Get().RecordCacheHit()
+			log.Infof("%s [%s] Found cached lyrics", logcolors.LogCacheLyrics, providerName)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Status", "HIT")
+			w.Header().Set("X-Provider", providerName)
+			if rateLimitType != "" {
+				w.Header().Set("X-RateLimit-Type", rateLimitType)
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"lyrics":   cached.TTML,
+				"provider": providerName,
+			})
+			return
+		}
+
+		// Check negative cache
+		negativeKey := provider.CacheKeyPrefix() + "_negative:" + query
+		if reason, found := getNegativeCache(negativeKey); found {
+			stats.Get().RecordNegativeCacheHit()
+			log.Infof("%s [%s] Returning cached 'no lyrics' response", logcolors.LogCacheNegative, providerName)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Status", "NEGATIVE_HIT")
+			w.Header().Set("X-Provider", providerName)
+			if rateLimitType != "" {
+				w.Header().Set("X-RateLimit-Type", rateLimitType)
+			}
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":    reason,
+				"provider": providerName,
+			})
+			return
+		}
+
+		// If in cache-only mode and no cache found, return 429
+		if cacheOnlyMode {
+			stats.Get().RecordCacheMiss()
+			stats.Get().RecordRateLimit("exceeded")
+			log.Warnf("%s [%s] Cache-only mode but no cache found for: %s", logcolors.LogCacheLyrics, providerName, query)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Status", "MISS")
+			w.Header().Set("X-RateLimit-Type", "cached")
+			w.Header().Set("X-Provider", providerName)
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":    "Rate limit exceeded. No cached data available.",
+				"provider": providerName,
+			})
+			return
+		}
+
+		// In-flight request deduplication
+		inFlight, loaded := inFlightReqs.LoadOrStore(cacheKey, &InFlightRequest{})
+		req := inFlight.(*InFlightRequest)
+
+		if loaded {
+			log.Infof("%s [%s] Waiting for in-flight request", logcolors.LogCacheLyrics, providerName)
+			req.wg.Wait()
+
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Provider", providerName)
+			if req.err != nil {
+				w.Header().Set("X-Cache-Status", "MISS")
+				if rateLimitType != "" {
+					w.Header().Set("X-RateLimit-Type", rateLimitType)
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":    req.err.Error(),
+					"provider": providerName,
+				})
+				return
+			}
+
+			w.Header().Set("X-Cache-Status", "HIT")
+			if rateLimitType != "" {
+				w.Header().Set("X-RateLimit-Type", rateLimitType)
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"lyrics":   req.result,
+				"provider": providerName,
+			})
+			return
+		}
+
+		req.wg.Add(1)
+		defer func() {
+			req.wg.Done()
+			time.AfterFunc(1*time.Second, func() {
+				inFlightReqs.Delete(cacheKey)
+			})
+		}()
+
+		// Parse duration
+		var durationMs int
+		if durationStr != "" {
+			fmt.Sscanf(durationStr, "%d", &durationMs)
+			// Duration comes in as seconds, convert to milliseconds
+			durationMs = durationMs * 1000
+		}
+
+		// Fetch lyrics from provider
+		ctx := context.Background()
+		result, err := provider.FetchLyrics(ctx, songName, artistName, albumName, durationMs)
+
+		req.err = err
+		if err == nil && result != nil {
+			req.result = result.RawLyrics
+			req.score = result.Score
+			req.language = result.Language
+			req.isRTL = result.IsRTL
+		}
+
+		if err != nil {
+			log.Errorf("%s [%s] Error fetching lyrics: %v", logcolors.LogLyrics, providerName, err)
+
+			// Cache negative result
+			if shouldNegativeCache(err) {
+				persistentCache.Set(negativeKey, err.Error())
+			}
+
+			stats.Get().RecordCacheMiss()
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Status", "MISS")
+			w.Header().Set("X-Provider", providerName)
+			if rateLimitType != "" {
+				w.Header().Set("X-RateLimit-Type", rateLimitType)
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":    err.Error(),
+				"provider": providerName,
+			})
+			return
+		}
+
+		if result == nil || result.RawLyrics == "" {
+			stats.Get().RecordCacheMiss()
+			log.Warnf("[%s] No lyrics found for: %s", providerName, query)
+			persistentCache.Set(negativeKey, "Lyrics not available")
+
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Status", "MISS")
+			w.Header().Set("X-Provider", providerName)
+			if rateLimitType != "" {
+				w.Header().Set("X-RateLimit-Type", rateLimitType)
+			}
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":    "Lyrics not available for this track",
+				"provider": providerName,
+			})
+			return
+		}
+
+		// Cache the result
+		stats.Get().RecordCacheMiss()
+		log.Infof("%s [%s] Caching lyrics for: %s", logcolors.LogCacheLyrics, providerName, query)
+		setCachedLyrics(cacheKey, result.RawLyrics, result.TrackDurationMs, result.Score, result.Language, result.IsRTL)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache-Status", "MISS")
+		w.Header().Set("X-Provider", providerName)
+		if rateLimitType != "" {
+			w.Header().Set("X-RateLimit-Type", rateLimitType)
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"lyrics":   result.RawLyrics,
+			"provider": providerName,
+		})
+	}
+}
+
+// buildProviderCacheKey builds a cache key with provider prefix
+func buildProviderCacheKey(prefix, song, artist, album, duration string) string {
+	key := prefix + ":" + strings.ToLower(strings.TrimSpace(song)) + " " + strings.ToLower(strings.TrimSpace(artist))
+	if album != "" {
+		key += " [" + strings.ToLower(strings.TrimSpace(album)) + "]"
+	}
+	if duration != "" {
+		key += " [" + duration + "s]"
+	}
+	return strings.TrimSpace(key)
 }
 
 func getStats(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +594,61 @@ func clearCache(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":     "Cache cleared successfully",
 		"backup_path": backupPath,
+	})
+}
+
+func clearProviderCache(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	providerName := vars["provider"]
+
+	// Map provider name to cache prefix
+	prefixMap := map[string]string{
+		"ttml":   "ttml_lyrics:",
+		"kugou":  "kugou_lyrics:",
+		"legacy": "legacy_lyrics:",
+	}
+
+	prefix, ok := prefixMap[providerName]
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":             fmt.Sprintf("Unknown provider: %s", providerName),
+			"valid_providers":   []string{"ttml", "kugou", "legacy"},
+		})
+		return
+	}
+
+	// Find and delete all keys with this prefix
+	var keysDeleted int
+	var keysToDelete []string
+
+	persistentCache.Range(func(key string, entry cache.CacheEntry) bool {
+		if strings.HasPrefix(key, prefix) || strings.HasPrefix(key, "no_lyrics:"+prefix) {
+			keysToDelete = append(keysToDelete, key)
+		}
+		return true
+	})
+
+	for _, key := range keysToDelete {
+		if err := persistentCache.Delete(key); err != nil {
+			log.Warnf("%s Failed to delete key %s: %v", logcolors.LogCacheClear, key, err)
+		} else {
+			keysDeleted++
+		}
+	}
+
+	log.Infof("%s Cleared %d cache entries for provider: %s", logcolors.LogCacheClear, keysDeleted, providerName)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":      fmt.Sprintf("Cleared cache for provider: %s", providerName),
+		"provider":     providerName,
+		"keys_deleted": keysDeleted,
 	})
 }
 
@@ -691,4 +973,26 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(response)
+}
+
+// helpHandler returns API documentation
+func helpHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"help": "Lyrics API with multiple provider support",
+		"endpoints": map[string]string{
+			"/getLyrics":        "Default provider (configurable via DEFAULT_PROVIDER env)",
+			"/ttml/getLyrics":   "TTML provider (word-level timing)",
+			"/kugou/getLyrics":  "Kugou provider (line-level timing)",
+			"/legacy/getLyrics": "Legacy Spotify-based provider",
+		},
+		"parameters": map[string]string{
+			"s, song, songName":     "Song name (required)",
+			"a, artist, artistName": "Artist name (required)",
+			"al, album, albumName":  "Album name (optional, improves matching)",
+			"d, duration":           "Duration in milliseconds (optional, improves matching)",
+		},
+		"example": "/getLyrics?s=Shape%20of%20You&a=Ed%20Sheeran",
+		"notes":   "The API uses provider-specific matching algorithms. Providing more parameters improves accuracy.",
+	})
 }

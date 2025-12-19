@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"lyrics-api-go/cache"
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
@@ -83,37 +82,7 @@ func main() {
 	go startTokenMonitor()
 
 	router := mux.NewRouter()
-	router.HandleFunc("/getLyrics", getLyrics)
-	router.HandleFunc("/cache", getCacheDump)
-	router.HandleFunc("/cache/help", cacheHelp)
-	router.HandleFunc("/cache/backup", backupCache)
-	router.HandleFunc("/cache/backups", listBackups)
-	router.HandleFunc("/cache/restore", restoreCache)
-	router.HandleFunc("/cache/clear", clearCache)
-	router.HandleFunc("/cache/migrate", migrateCache)
-	router.HandleFunc("/cache/migrate/status", getMigrationStatus)
-	router.HandleFunc("/cache/lookup", cacheLookup)
-	router.HandleFunc("/cache/debug", cacheDebug)
-	router.HandleFunc("/cache/keys", cacheKeys)
-	router.HandleFunc("/health", getHealthStatus)
-	router.HandleFunc("/stats", getStats)
-	router.HandleFunc("/circuit-breaker", getCircuitBreakerStatus)
-	router.HandleFunc("/circuit-breaker/reset", resetCircuitBreaker)
-	router.HandleFunc("/circuit-breaker/simulate-failure", simulateCircuitBreakerFailure)
-	router.HandleFunc("/test-notifications", testNotifications)
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"help": "Use /getLyrics to get the lyrics of a song. Provide the song name and artist name as query parameters. Example: /getLyrics?s=Shape%20of%20You&a=Ed%20Sheeran&d=234",
-			"parameters": map[string]string{
-				"s, song, songName":     "Song name (required)",
-				"a, artist, artistName": "Artist name (required)",
-				"al, album, albumName":  "Album name (optional, improves matching)",
-				"d, duration":           "Duration in seconds (optional, improves matching)",
-			},
-			"notes": "The API uses a weighted scoring system to find the best match based on song name, artist, album, and duration. Providing more parameters improves accuracy.",
-		})
-	})
+	setupRoutes(router)
 
 	port := os.Getenv("PORT")
 	if port == "" {

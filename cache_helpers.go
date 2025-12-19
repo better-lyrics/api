@@ -12,43 +12,34 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// Basic cache operations
-
-func getCache(key string) (string, bool) {
-	return persistentCache.Get(key)
-}
-
-func setCache(key, value string) {
-	if err := persistentCache.Set(key, value); err != nil {
-		log.Errorf("%s Error setting cache value: %v", logcolors.LogCache, err)
-	}
-}
-
 // Lyrics cache operations
 
-// getCachedLyrics retrieves and parses cached lyrics, returns ttml, trackDurationMs, found
-// Handles both old format (plain TTML string) and new format (JSON with duration)
-func getCachedLyrics(key string) (string, int, bool) {
+// getCachedLyrics retrieves and parses cached lyrics, returns the full CachedLyrics struct and found
+// Handles both old format (plain TTML string) and new format (JSON with metadata)
+func getCachedLyrics(key string) (*CachedLyrics, bool) {
 	cached, ok := persistentCache.Get(key)
 	if !ok {
-		return "", 0, false
+		return nil, false
 	}
 
-	// Try to parse as new JSON format
+	// Try to parse as JSON format
 	var cachedLyrics CachedLyrics
 	if err := json.Unmarshal([]byte(cached), &cachedLyrics); err == nil && cachedLyrics.TTML != "" {
-		return cachedLyrics.TTML, cachedLyrics.TrackDurationMs, true
+		return &cachedLyrics, true
 	}
 
-	// Fallback to old format (plain TTML string) - no duration info available
-	return cached, 0, true
+	// Fallback to old format (plain TTML string) - no metadata available
+	return &CachedLyrics{TTML: cached}, true
 }
 
-// setCachedLyrics stores lyrics with track duration for validation
-func setCachedLyrics(key, ttml string, trackDurationMs int) {
+// setCachedLyrics stores lyrics with full metadata
+func setCachedLyrics(key, lyrics string, trackDurationMs int, score float64, language string, isRTL bool) {
 	cachedLyrics := CachedLyrics{
-		TTML:            ttml,
+		TTML:            lyrics,
 		TrackDurationMs: trackDurationMs,
+		Score:           score,
+		Language:        language,
+		IsRTL:           isRTL,
 	}
 	data, err := json.Marshal(cachedLyrics)
 	if err != nil {
@@ -339,18 +330,24 @@ func cacheLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check normalized key
-	if ttml, trackDuration, ok := getCachedLyrics(normalizedKey); ok {
+	if cached, ok := getCachedLyrics(normalizedKey); ok {
 		result["found"] = true
 		result["found_in"] = "normalized"
-		result["track_duration_ms"] = trackDuration
-		result["ttml_length"] = len(ttml)
-		result["ttml_preview"] = truncateString(ttml, 200)
-	} else if ttml, trackDuration, ok := getCachedLyrics(legacyKey); ok {
+		result["track_duration_ms"] = cached.TrackDurationMs
+		result["score"] = cached.Score
+		result["language"] = cached.Language
+		result["isRTL"] = cached.IsRTL
+		result["ttml_length"] = len(cached.TTML)
+		result["ttml_preview"] = truncateString(cached.TTML, 200)
+	} else if cached, ok := getCachedLyrics(legacyKey); ok {
 		result["found"] = true
 		result["found_in"] = "legacy"
-		result["track_duration_ms"] = trackDuration
-		result["ttml_length"] = len(ttml)
-		result["ttml_preview"] = truncateString(ttml, 200)
+		result["track_duration_ms"] = cached.TrackDurationMs
+		result["score"] = cached.Score
+		result["language"] = cached.Language
+		result["isRTL"] = cached.IsRTL
+		result["ttml_length"] = len(cached.TTML)
+		result["ttml_preview"] = truncateString(cached.TTML, 200)
 		result["note"] = "Found in legacy key - run /cache/migrate to normalize"
 	} else {
 		result["found"] = false

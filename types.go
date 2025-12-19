@@ -35,16 +35,21 @@ type CacheDumpResponse struct {
 
 // InFlightRequest tracks concurrent requests for the same query
 type InFlightRequest struct {
-	wg     sync.WaitGroup
-	result string
-	score  float64
-	err    error
+	wg       sync.WaitGroup
+	result   string
+	score    float64
+	language string
+	isRTL    bool
+	err      error
 }
 
-// CachedLyrics stores TTML with track metadata for duration validation
+// CachedLyrics stores lyrics with track metadata
 type CachedLyrics struct {
-	TTML            string `json:"ttml"`
-	TrackDurationMs int    `json:"trackDurationMs"`
+	TTML            string  `json:"ttml"`
+	TrackDurationMs int     `json:"trackDurationMs"`
+	Score           float64 `json:"score,omitempty"`
+	Language        string  `json:"language,omitempty"`
+	IsRTL           bool    `json:"isRTL,omitempty"`
 }
 
 // NegativeCacheEntry stores info about failed lyrics lookups
