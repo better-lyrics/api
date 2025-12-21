@@ -735,6 +735,7 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 		"status":          "ok",
 		"accounts":        accountCount,
 		"circuit_breaker": cbState,
+		"cache_ready":     persistentCache.IsPreloadComplete(),
 	}
 
 	// If circuit breaker is open, mark as degraded

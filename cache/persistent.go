@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -25,6 +26,7 @@ type PersistentCache struct {
 	dbPath             string
 	backupPath         string
 	compressionEnabled bool
+	preloadComplete    atomic.Bool
 }
 
 // CacheEntry represents a cached value (can be compressed)
@@ -83,10 +85,8 @@ func NewPersistentCache(dbPath string, backupPath string, compressionEnabled boo
 		compressionEnabled: compressionEnabled,
 	}
 
-	// Load all entries into memory cache
-	if err := pc.loadToMemory(); err != nil {
-		log.Warnf("%s Failed to preload cache to memory: %v", logcolors.LogCache, err)
-	}
+	// Start background preload (non-blocking)
+	go pc.loadToMemoryAsync()
 
 	log.Infof("%s Persistent cache initialized at %s (compression: %v)", logcolors.LogCache, dbPath, compressionEnabled)
 	return pc, nil
@@ -125,6 +125,28 @@ func (pc *PersistentCache) loadToMemory() error {
 
 	log.Infof("%s Loaded %d entries from disk to memory", logcolors.LogCache, count)
 	return nil
+}
+
+// loadToMemoryAsync wraps loadToMemory for background execution
+func (pc *PersistentCache) loadToMemoryAsync() {
+	start := time.Now()
+	if err := pc.loadToMemory(); err != nil {
+		log.Warnf("%s Background preload failed: %v", logcolors.LogCache, err)
+	}
+	pc.preloadComplete.Store(true)
+
+	// Count entries for logging
+	count := 0
+	pc.memCache.Range(func(_, _ interface{}) bool {
+		count++
+		return true
+	})
+	log.Infof("%s Background preload complete: %d entries in %v", logcolors.LogCache, count, time.Since(start))
+}
+
+// IsPreloadComplete returns true if background cache loading has finished
+func (pc *PersistentCache) IsPreloadComplete() bool {
+	return pc.preloadComplete.Load()
 }
 
 // Get retrieves a value from cache (checks memory first, then disk)
@@ -334,10 +356,8 @@ func (pc *PersistentCache) reopenDatabase() error {
 	}
 	pc.db = db
 
-	// Reload memory cache
-	if err := pc.loadToMemory(); err != nil {
-		log.Warnf("%s Failed to reload cache to memory: %v", logcolors.LogCache, err)
-	}
+	// Reload memory cache in background
+	go pc.loadToMemoryAsync()
 
 	return nil
 }
