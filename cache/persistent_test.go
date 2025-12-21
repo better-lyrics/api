@@ -20,6 +20,9 @@ func setupTestCache(t *testing.T, compression bool) (*PersistentCache, string, f
 		t.Fatalf("Failed to create test cache: %v", err)
 	}
 
+	// Wait for background preload to complete
+	cache.WaitForPreload()
+
 	cleanup := func() {
 		cache.Close()
 	}
@@ -504,6 +507,7 @@ func TestRestoreFromBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create backup: %v", err)
 	}
+	cache.WaitForPreload() // Wait for preload after reopenDatabase
 	backupFileName := filepath.Base(backupPath)
 
 	// Modify data after backup
@@ -521,6 +525,7 @@ func TestRestoreFromBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to restore from backup: %v", err)
 	}
+	cache.WaitForPreload() // Wait for preload after reopenDatabase
 
 	// Verify data is restored to backup state
 	val, found := cache.Get("original_key")

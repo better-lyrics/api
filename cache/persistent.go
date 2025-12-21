@@ -86,6 +86,7 @@ func NewPersistentCache(dbPath string, backupPath string, compressionEnabled boo
 	}
 
 	// Start background preload (non-blocking)
+	pc.preloadComplete.Store(false)
 	go pc.loadToMemoryAsync()
 
 	log.Infof("%s Persistent cache initialized at %s (compression: %v)", logcolors.LogCache, dbPath, compressionEnabled)
@@ -94,12 +95,6 @@ func NewPersistentCache(dbPath string, backupPath string, compressionEnabled boo
 
 // loadToMemory loads all cache entries from disk to memory
 func (pc *PersistentCache) loadToMemory() error {
-	// Clear existing memory cache first
-	pc.memCache.Range(func(key, value interface{}) bool {
-		pc.memCache.Delete(key)
-		return true
-	})
-
 	count := 0
 	err := pc.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
@@ -108,12 +103,18 @@ func (pc *PersistentCache) loadToMemory() error {
 		}
 
 		return b.ForEach(func(k, v []byte) error {
+			key := string(k)
+			// Don't overwrite entries that were Set() during preload
+			if _, exists := pc.memCache.Load(key); exists {
+				return nil
+			}
+
 			var entry CacheEntry
 			if err := json.Unmarshal(v, &entry); err != nil {
-				log.Warnf("%s Failed to unmarshal cache entry for key %s: %v", logcolors.LogCache, string(k), err)
+				log.Warnf("%s Failed to unmarshal cache entry for key %s: %v", logcolors.LogCache, key, err)
 				return nil // Continue to next entry
 			}
-			pc.memCache.Store(string(k), entry)
+			pc.memCache.Store(key, entry)
 			count++
 			return nil
 		})
@@ -147,6 +148,13 @@ func (pc *PersistentCache) loadToMemoryAsync() {
 // IsPreloadComplete returns true if background cache loading has finished
 func (pc *PersistentCache) IsPreloadComplete() bool {
 	return pc.preloadComplete.Load()
+}
+
+// WaitForPreload blocks until background cache loading has finished
+func (pc *PersistentCache) WaitForPreload() {
+	for !pc.preloadComplete.Load() {
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // Get retrieves a value from cache (checks memory first, then disk)
@@ -265,6 +273,9 @@ func (pc *PersistentCache) Delete(key string) error {
 
 // Clear removes all entries from cache
 func (pc *PersistentCache) Clear() error {
+	// Wait for any pending preload to avoid race conditions
+	pc.WaitForPreload()
+
 	// Clear memory cache
 	pc.memCache.Range(func(key, value interface{}) bool {
 		pc.memCache.Delete(key)
@@ -272,13 +283,18 @@ func (pc *PersistentCache) Clear() error {
 	})
 
 	// Clear disk cache
-	return pc.db.Update(func(tx *bolt.Tx) error {
+	err := pc.db.Update(func(tx *bolt.Tx) error {
 		if err := tx.DeleteBucket([]byte(bucketName)); err != nil {
 			return err
 		}
 		_, err := tx.CreateBucket([]byte(bucketName))
 		return err
 	})
+
+	// Mark preload as complete (nothing to load after clear)
+	pc.preloadComplete.Store(true)
+
+	return err
 }
 
 // Range iterates over all cache entries
@@ -357,6 +373,7 @@ func (pc *PersistentCache) reopenDatabase() error {
 	pc.db = db
 
 	// Reload memory cache in background
+	pc.preloadComplete.Store(false)
 	go pc.loadToMemoryAsync()
 
 	return nil
@@ -493,6 +510,12 @@ func (pc *PersistentCache) RestoreFromBackup(backupFileName string) error {
 
 	// Remove the pre-restore backup on success
 	os.Remove(currentBackupPath)
+
+	// Clear memory cache so restored data takes precedence
+	pc.memCache.Range(func(key, value interface{}) bool {
+		pc.memCache.Delete(key)
+		return true
+	})
 
 	// Reopen the database with restored data
 	if err := pc.reopenDatabase(); err != nil {
