@@ -15,6 +15,22 @@ var (
 
 	// Metadata tags pattern: [tag:value]
 	metadataRegex = regexp.MustCompile(`^\[([a-zA-Z]+):([^\]]*)\]$`)
+
+	// Banned pattern for credit lines (e.g., "[00:05.00]Composed by：xxx")
+	// Reference: https://github.com/mostafaalagamy/Metrolist/blob/1152eb28a9c6c0e9f7fa63c87ef50e2e4fa1eae1/kugou/src/main/kotlin/com/metrolist/kugou/KuGou.kt#L149
+	bannedRegex = regexp.MustCompile(`^\[\d{2}:\d{2}[\.:]\d{2,3}\].+：.+`)
+
+)
+
+const (
+	// PureMusicText is the Chinese placeholder Kugou uses for instrumental tracks
+	PureMusicText = "纯音乐，请欣赏"
+
+	// InstrumentalText is the replacement text for pure music
+	InstrumentalText = "[Instrumental Only]"
+
+	// MaxHeadTailLines is the number of lines to scan from head/tail for banned patterns
+	MaxHeadTailLines = 30
 )
 
 // ParseLRC parses LRC format lyrics into Lines
@@ -207,6 +223,78 @@ func StripLRCMetadata(lrcContent string) string {
 	}
 
 	return strings.Join(cleanLines, "\n")
+}
+
+// NormalizeLyrics applies Metrolist-style normalization to LRC content.
+// This filters credit lines from head/tail and handles pure music placeholder.
+// Reference: https://github.com/mostafaalagamy/Metrolist/blob/1152eb28a9c6c0e9f7fa63c87ef50e2e4fa1eae1/kugou/src/main/kotlin/com/metrolist/kugou/KuGou.kt#L149
+func NormalizeLyrics(lrcContent string) string {
+	// Replace HTML entities
+	lrcContent = strings.ReplaceAll(lrcContent, "&apos;", "'")
+
+	// Check for pure music placeholder
+	if strings.Contains(lrcContent, PureMusicText) {
+		return "[00:00.00]" + InstrumentalText
+	}
+
+	// Split into lines and filter
+	rawLines := strings.Split(lrcContent, "\n")
+	var acceptedLines []string
+
+	for _, rawLine := range rawLines {
+		rawLine = strings.TrimSpace(rawLine)
+		if rawLine == "" {
+			continue
+		}
+
+		// Only accept lines with valid LRC timestamps
+		if lrcTimeRegex.MatchString(rawLine) {
+			acceptedLines = append(acceptedLines, rawLine)
+		}
+	}
+
+	if len(acceptedLines) == 0 {
+		return lrcContent
+	}
+
+	// Head trimming: find the LAST banned line in the first MaxHeadTailLines lines
+	// and drop everything up to and including it (this also removes title lines before credits)
+	// Reference: https://github.com/mostafaalagamy/Metrolist/blob/1152eb28a9c6c0e9f7fa63c87ef50e2e4fa1eae1/kugou/src/main/kotlin/com/metrolist/kugou/KuGou.kt#L149
+	headCutLine := 0
+	headLimit := MaxHeadTailLines
+	if headLimit > len(acceptedLines) {
+		headLimit = len(acceptedLines)
+	}
+	for i := headLimit - 1; i >= 0; i-- {
+		if bannedRegex.MatchString(acceptedLines[i]) {
+			headCutLine = i + 1
+			break
+		}
+	}
+
+	// Tail trimming: find the LAST banned line in the last MaxHeadTailLines lines
+	// and drop everything from that point to the end
+	tailCutLine := 0
+	for i := 0; i < MaxHeadTailLines && i < len(acceptedLines); i++ {
+		idx := len(acceptedLines) - 1 - i
+		if idx < headCutLine {
+			break
+		}
+		if bannedRegex.MatchString(acceptedLines[idx]) {
+			tailCutLine = i + 1
+			break
+		}
+	}
+
+	// Apply cuts
+	endIdx := len(acceptedLines) - tailCutLine
+	if endIdx < headCutLine {
+		endIdx = headCutLine
+	}
+
+	result := acceptedLines[headCutLine:endIdx]
+
+	return strings.Join(result, "\n")
 }
 
 // DetectLanguage tries to detect language from LRC metadata or content

@@ -115,6 +115,9 @@ func (p *KugouProvider) FetchLyrics(ctx context.Context, song, artist, album str
 		return nil, providers.NewProviderError(ProviderName, "failed to download lyrics", err)
 	}
 
+	// Normalize lyrics (remove credit lines, handle pure music placeholder)
+	lrcContent = NormalizeLyrics(lrcContent)
+
 	// Parse LRC content and extract metadata
 	lines, metadata, parseErr := ParseLRC(lrcContent)
 	if parseErr != nil {
