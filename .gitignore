@@ -24,3 +24,11 @@ go.work.sum
 # env file
 .env
 .idea/
+
+# Cache database
+cache.db
+stats.db
+
+lyrics-api-go
+test.xml
+/backups

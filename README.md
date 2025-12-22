@@ -17,6 +17,8 @@ This repository contains the source code for the official Better Lyrics API - pr
   - [Installation](#installation)
   - [Usage](#usage)
   - [API Endpoints](#api-endpoints)
+  - [Deployment](#deployment)
+    - [Railway](#railway)
   - [Contributing](#contributing)
   - [License](#license)
 
@@ -37,6 +39,42 @@ Once the server is running, you can access the API endpoints to retrieve lyrics 
 ## API Endpoints
 
 - `GET /getLyrics?a={artist}&s={song}`: Retrieves the lyrics for the specified artist and song.
+
+## Deployment
+
+### Railway
+
+This project uses Railway's persistent volumes to maintain the cache database across deployments.
+
+**Setup Steps:**
+
+1. Create a new project on [Railway](https://railway.app) and connect your GitHub repository
+
+2. **Create a Volume (CRITICAL):**
+   - Go to your service in Railway dashboard
+   - Click **Settings** → **Volumes** tab
+   - Click **+ New Volume**
+   - **Mount Path:** `/data`
+   - Click **Add**
+
+3. **Set Environment Variables:**
+   - Go to **Variables** tab
+   - Add: `CACHE_DB_PATH=/data/cache.db`
+   - Configure all other required variables from `.env.example`
+
+4. **Deploy!**
+
+**Verification:**
+After deployment, check your logs for:
+```
+[Cache] Loaded X entries from disk to memory
+```
+If you see `Loaded 0 entries` on subsequent deploys (after caching data), the volume isn't persisting.
+
+**Troubleshooting:**
+- Ensure the volume mount path is exactly `/data`
+- Verify `CACHE_DB_PATH=/data/cache.db` is set in Railway variables
+- The volume must be created BEFORE deploying with the updated env var
 
 ## Contributing
 

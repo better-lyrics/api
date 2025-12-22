@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"lyrics-api-go/stats"
 	"net/http"
 	"time"
 )
@@ -41,6 +42,13 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(rec, r)
 		duration := time.Since(start)
+
+		// Record stats
+		s := stats.Get()
+		s.RecordRequest(r.URL.Path)
+		s.RecordStatusCode(rec.StatusCode)
+		s.RecordResponseTime(duration, r.URL.Path)
+		s.RecordUserAgent(r.UserAgent())
 
 		statusColor := getStatusColor(rec.StatusCode)
 		resetColor := "\033[0m"

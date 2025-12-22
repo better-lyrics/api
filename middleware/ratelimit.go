@@ -2,40 +2,75 @@ package middleware
 
 import (
 	"golang.org/x/time/rate"
+	"math"
 	"sync"
 )
 
-// IPRateLimiter .
-type IPRateLimiter struct {
-	ips map[string]*rate.Limiter
-	mu  *sync.RWMutex
-	r   rate.Limit
-	b   int
+// LimiterPair holds both normal and cached tier limiters for an IP
+type LimiterPair struct {
+	Normal *rate.Limiter
+	Cached *rate.Limiter
 }
 
-func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
+// GetNormalTokens returns the number of tokens available in the normal tier
+func (lp *LimiterPair) GetNormalTokens() int {
+	return int(math.Floor(lp.Normal.Tokens()))
+}
+
+// GetCachedTokens returns the number of tokens available in the cached tier
+func (lp *LimiterPair) GetCachedTokens() int {
+	return int(math.Floor(lp.Cached.Tokens()))
+}
+
+// IPRateLimiter manages two-tier rate limiting per IP
+type IPRateLimiter struct {
+	ips         map[string]*LimiterPair
+	mu          *sync.RWMutex
+	normalRate  rate.Limit
+	normalBurst int
+	cachedRate  rate.Limit
+	cachedBurst int
+}
+
+// GetNormalLimit returns the normal tier burst limit
+func (i *IPRateLimiter) GetNormalLimit() int {
+	return i.normalBurst
+}
+
+// GetCachedLimit returns the cached tier burst limit
+func (i *IPRateLimiter) GetCachedLimit() int {
+	return i.cachedBurst
+}
+
+// NewIPRateLimiter creates a new two-tier rate limiter
+func NewIPRateLimiter(normalRate rate.Limit, normalBurst int, cachedRate rate.Limit, cachedBurst int) *IPRateLimiter {
 	i := &IPRateLimiter{
-		ips: make(map[string]*rate.Limiter),
-		mu:  &sync.RWMutex{},
-		r:   r,
-		b:   b,
+		ips:         make(map[string]*LimiterPair),
+		mu:          &sync.RWMutex{},
+		normalRate:  normalRate,
+		normalBurst: normalBurst,
+		cachedRate:  cachedRate,
+		cachedBurst: cachedBurst,
 	}
 
 	return i
 }
 
-func (i *IPRateLimiter) AddIP(ip string) *rate.Limiter {
+func (i *IPRateLimiter) AddIP(ip string) *LimiterPair {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	limiter := rate.NewLimiter(i.r, i.b)
+	pair := &LimiterPair{
+		Normal: rate.NewLimiter(i.normalRate, i.normalBurst),
+		Cached: rate.NewLimiter(i.cachedRate, i.cachedBurst),
+	}
 
-	i.ips[ip] = limiter
+	i.ips[ip] = pair
 
-	return limiter
+	return pair
 }
 
-func (i *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
+func (i *IPRateLimiter) GetLimiter(ip string) *LimiterPair {
 	i.mu.Lock()
 	limiter, exists := i.ips[ip]
 
