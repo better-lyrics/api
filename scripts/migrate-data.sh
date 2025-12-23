@@ -58,6 +58,7 @@ SKIP_STATS=false
 PROD_API_URL="${PROD_API_URL:-}"
 CACHE_ACCESS_TOKEN="${CACHE_ACCESS_TOKEN:-}"
 CACHE_DOWNLOAD_URL=""
+STATS_DOWNLOAD_URL=""
 
 for arg in "$@"; do
     case $arg in
@@ -92,6 +93,9 @@ for arg in "$@"; do
         --download-url=*)
             CACHE_DOWNLOAD_URL="${arg#*=}"
             ;;
+        --stats-url=*)
+            STATS_DOWNLOAD_URL="${arg#*=}"
+            ;;
         *)
             if [ -z "$PREVIEW_ENV" ]; then
                 PREVIEW_ENV="$arg"
@@ -103,7 +107,7 @@ for arg in "$@"; do
 done
 
 # Validate arguments
-if [ -z "$PREVIEW_ENV" ] && [ -z "$LOCAL_CACHE_FILE" ]; then
+if [ -z "$PREVIEW_ENV" ] && [ -z "$LOCAL_CACHE_FILE" ] && [ -z "$LOCAL_STATS_FILE" ]; then
     echo -e "${RED}Error: Preview environment name or local file required${NC}"
     echo ""
     echo "Usage: $0 <preview-env-name> [prod-env-name] [options]"
@@ -117,6 +121,7 @@ if [ -z "$PREVIEW_ENV" ] && [ -z "$LOCAL_CACHE_FILE" ]; then
     echo "  --skip-stats           Skip stats migration (only migrate cache)"
     echo "  --skip-restore         Only upload, don't call restore API"
     echo "  --download-url=<url>   Direct download URL for cache file (upload manually first)"
+    echo "  --stats-url=<url>      Direct download URL for stats file (upload manually first)"
     echo "  --url=<url>            Production API URL for restore calls"
     echo "  --token=<token>        CACHE_ACCESS_TOKEN for API auth"
     echo ""
@@ -204,8 +209,13 @@ fi
 
 # Determine mode
 USE_LOCAL_FILES=false
+USE_URLS_ONLY=false
 if [ -n "$LOCAL_CACHE_FILE" ] || [ -n "$LOCAL_STATS_FILE" ]; then
     USE_LOCAL_FILES=true
+fi
+# If download URLs provided, skip the download step entirely
+if [ -n "$CACHE_DOWNLOAD_URL" ] || [ -n "$STATS_DOWNLOAD_URL" ]; then
+    USE_URLS_ONLY=true
 fi
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
@@ -213,7 +223,11 @@ echo -e "${BLUE}║      Railway Data Migration: Preview → Production         
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-if [ "$USE_LOCAL_FILES" = true ]; then
+if [ "$USE_URLS_ONLY" = true ]; then
+    echo -e "${YELLOW}Mode:${NC}        Using download URLs"
+    [ -n "$CACHE_DOWNLOAD_URL" ] && echo -e "${YELLOW}Cache URL:${NC}   $CACHE_DOWNLOAD_URL"
+    [ -n "$STATS_DOWNLOAD_URL" ] && echo -e "${YELLOW}Stats URL:${NC}   $STATS_DOWNLOAD_URL"
+elif [ "$USE_LOCAL_FILES" = true ]; then
     echo -e "${YELLOW}Mode:${NC}        Using local files"
     [ -n "$LOCAL_CACHE_FILE" ] && echo -e "${YELLOW}Cache:${NC}       $LOCAL_CACHE_FILE"
     [ -n "$LOCAL_STATS_FILE" ] && echo -e "${YELLOW}Stats:${NC}       $LOCAL_STATS_FILE"
@@ -249,7 +263,9 @@ TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
 # Check if pv is available for progress display
 HAS_PV=$(command -v pv &> /dev/null && echo "yes" || echo "no")
 
-if [ "$USE_LOCAL_FILES" = true ]; then
+if [ "$USE_URLS_ONLY" = true ]; then
+    echo -e "${BLUE}[2/5]${NC} Using download URLs (skipping download step)..."
+elif [ "$USE_LOCAL_FILES" = true ]; then
     echo -e "${BLUE}[2/5]${NC} Using local files (skipping download)..."
 
     if [ -n "$LOCAL_CACHE_FILE" ] && [ -f "$LOCAL_CACHE_FILE" ]; then
@@ -464,7 +480,7 @@ else
 fi  # End USE_LOCAL_FILES else
 
 # Check if we have anything to migrate
-if [ -z "$LOCAL_CACHE" ] && [ -z "$LOCAL_STATS" ]; then
+if [ -z "$LOCAL_CACHE" ] && [ -z "$LOCAL_STATS" ] && [ -z "$CACHE_DOWNLOAD_URL" ] && [ -z "$STATS_DOWNLOAD_URL" ]; then
     echo -e "${RED}Error: No backup files found to migrate${NC}"
     echo ""
     echo "Make sure you've created backups first:"
@@ -509,19 +525,23 @@ download_to_prod() {
     fi
     echo -e "\r         [1/2] ${GREEN}✓${NC} Downloaded in ${DOWNLOAD_DURATION}s"
 
-    # Verify checksum
-    echo -ne "         [2/2] Verifying checksum..."
-    REMOTE_MD5=$(get_remote_md5 "$PROD_ENV" "$REMOTE_PATH")
+    # Verify checksum (only if local file provided)
+    if [ -n "$LOCAL_FILE" ] && [ -f "$LOCAL_FILE" ]; then
+        echo -ne "         [2/2] Verifying checksum..."
+        REMOTE_MD5=$(get_remote_md5 "$PROD_ENV" "$REMOTE_PATH")
 
-    if [ -z "$REMOTE_MD5" ]; then
-        echo -e "\r         [2/2] ${YELLOW}⚠${NC} Checksum unavailable"
-    elif [ "$LOCAL_MD5" = "$REMOTE_MD5" ]; then
-        echo -e "\r         [2/2] ${GREEN}✓${NC} Checksum verified ($LOCAL_MD5)"
+        if [ -z "$REMOTE_MD5" ]; then
+            echo -e "\r         [2/2] ${YELLOW}⚠${NC} Checksum unavailable"
+        elif [ "$LOCAL_MD5" = "$REMOTE_MD5" ]; then
+            echo -e "\r         [2/2] ${GREEN}✓${NC} Checksum verified ($LOCAL_MD5)"
+        else
+            echo -e "\r         [2/2] ${RED}✗${NC} CHECKSUM MISMATCH!"
+            echo -e "            Local:  $LOCAL_MD5"
+            echo -e "            Remote: $REMOTE_MD5"
+            return 1
+        fi
     else
-        echo -e "\r         [2/2] ${RED}✗${NC} CHECKSUM MISMATCH!"
-        echo -e "            Local:  $LOCAL_MD5"
-        echo -e "            Remote: $REMOTE_MD5"
-        return 1
+        echo -e "         [2/2] ${YELLOW}⚠${NC} Skipping checksum (no local file)"
     fi
 
     return 0
@@ -554,8 +574,17 @@ elif [ -n "$LOCAL_CACHE" ]; then
     LOCAL_CACHE=""
 fi
 
-if [ -n "$LOCAL_STATS" ] && [ -z "$UPLOAD_FAILED" ]; then
-    echo -e "      ${YELLOW}⚠${NC} Stats upload not implemented yet"
+if [ -n "$STATS_DOWNLOAD_URL" ]; then
+    echo -e "      ${YELLOW}→${NC} Using provided stats download URL"
+    # Stats goes to /data/stats.db (root), not backups folder
+    # LOCAL_STATS is optional - only used for checksum if provided
+    if ! download_to_prod "$STATS_DOWNLOAD_URL" "$DATA_DIR/stats.db" "${LOCAL_STATS:-}" "stats.db"; then
+        echo -e "      ${RED}✗${NC} Stats download failed"
+        UPLOAD_FAILED=true
+    fi
+elif [ -n "$LOCAL_STATS" ] && [ "$UPLOAD_FAILED" != true ]; then
+    echo -e "      ${YELLOW}⚠${NC} No --stats-url provided for stats"
+    echo -e "         Upload stats file and run with --stats-url=<url>"
 fi
 
 if [ "$UPLOAD_FAILED" = true ]; then
