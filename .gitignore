@@ -32,3 +32,4 @@ stats.db
 lyrics-api-go
 test.xml
 /backups
+/migration

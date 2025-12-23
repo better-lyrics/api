@@ -522,6 +522,9 @@ func (pc *PersistentCache) RestoreFromBackup(backupFileName string) error {
 		return fmt.Errorf("failed to reopen database after restore: %v", err)
 	}
 
+	// Wait for preload to complete so Stats() returns accurate count
+	pc.WaitForPreload()
+
 	log.Infof("%s Successfully restored from backup: %s", logcolors.LogCacheRestore, backupFileName)
 	return nil
 }
