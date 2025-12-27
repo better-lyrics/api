@@ -25,6 +25,9 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 	if !apiCircuitBreaker.Allow() {
 		timeUntilRetry := apiCircuitBreaker.TimeUntilRetry()
+		if apiCircuitBreaker.IsHalfOpen() {
+			return "", 0, 0.0, fmt.Errorf("circuit breaker is half-open, waiting for test request (retry in %v)", timeUntilRetry)
+		}
 		return "", 0, 0.0, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
 	}
 

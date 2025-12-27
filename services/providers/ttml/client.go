@@ -192,6 +192,10 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	// Check circuit breaker before making request
 	if !apiCircuitBreaker.Allow() {
 		timeUntilRetry := apiCircuitBreaker.TimeUntilRetry()
+		if apiCircuitBreaker.IsHalfOpen() {
+			log.Warnf("%s Request blocked, circuit is HALF-OPEN, waiting for test request (retry in %v)", logcolors.LogCircuitBreaker, timeUntilRetry)
+			return nil, account, fmt.Errorf("circuit breaker is half-open, waiting for test request (retry in %v)", timeUntilRetry)
+		}
 		log.Warnf("%s Request blocked, circuit is OPEN (retry in %v)", logcolors.LogCircuitBreaker, timeUntilRetry)
 		return nil, account, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
 	}

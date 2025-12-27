@@ -35,6 +35,9 @@ func TestNew_Defaults(t *testing.T) {
 	if cb.cooldown != 5*time.Minute {
 		t.Errorf("Expected default cooldown 5m, got %v", cb.cooldown)
 	}
+	if cb.halfOpenTimeout != 30*time.Second {
+		t.Errorf("Expected default halfOpenTimeout 30s, got %v", cb.halfOpenTimeout)
+	}
 	if cb.name != "default" {
 		t.Errorf("Expected default name 'default', got %q", cb.name)
 	}
@@ -328,5 +331,178 @@ func TestCircuitBreaker_ConcurrentAccess(t *testing.T) {
 	state := cb.State()
 	if state != StateClosed && state != StateOpen && state != StateHalfOpen {
 		t.Errorf("Invalid state after concurrent access: %v", state)
+	}
+}
+
+func TestCircuitBreaker_IsHalfOpen(t *testing.T) {
+	cb := New(Config{Threshold: 2, Cooldown: 50 * time.Millisecond})
+
+	// Should not be half-open initially
+	if cb.IsHalfOpen() {
+		t.Error("Expected IsHalfOpen() to return false initially")
+	}
+
+	// Trip the circuit
+	cb.RecordFailure()
+	cb.RecordFailure()
+
+	// Should not be half-open when open
+	if cb.IsHalfOpen() {
+		t.Error("Expected IsHalfOpen() to return false when OPEN")
+	}
+
+	// Wait for cooldown and transition to half-open
+	time.Sleep(60 * time.Millisecond)
+	cb.Allow()
+
+	// Should be half-open now
+	if !cb.IsHalfOpen() {
+		t.Error("Expected IsHalfOpen() to return true after transition")
+	}
+
+	// After success, should not be half-open
+	cb.RecordSuccess()
+	if cb.IsHalfOpen() {
+		t.Error("Expected IsHalfOpen() to return false after success")
+	}
+}
+
+func TestCircuitBreaker_HalfOpenTimeout(t *testing.T) {
+	cb := New(Config{
+		Threshold:       2,
+		Cooldown:        50 * time.Millisecond,
+		HalfOpenTimeout: 100 * time.Millisecond,
+	})
+
+	// Trip the circuit
+	cb.RecordFailure()
+	cb.RecordFailure()
+
+	if cb.State() != StateOpen {
+		t.Fatalf("Expected OPEN state, got %s", cb.State())
+	}
+
+	// Wait for cooldown and transition to half-open
+	time.Sleep(60 * time.Millisecond)
+
+	// First call should transition to HALF-OPEN and allow
+	if !cb.Allow() {
+		t.Error("Expected first Allow() after cooldown to return true")
+	}
+	if cb.State() != StateHalfOpen {
+		t.Fatalf("Expected HALF-OPEN state, got %s", cb.State())
+	}
+
+	// Second call should block (test request in progress)
+	if cb.Allow() {
+		t.Error("Expected second Allow() in HALF-OPEN to return false")
+	}
+
+	// Wait for half-open timeout to expire
+	time.Sleep(110 * time.Millisecond)
+
+	// Next Allow() should detect timeout, reset to OPEN, and return false
+	if cb.Allow() {
+		t.Error("Expected Allow() to return false after half-open timeout")
+	}
+	if cb.State() != StateOpen {
+		t.Errorf("Expected OPEN state after half-open timeout, got %s", cb.State())
+	}
+}
+
+func TestCircuitBreaker_HalfOpenTimeUntilRetry(t *testing.T) {
+	cb := New(Config{
+		Threshold:       2,
+		Cooldown:        50 * time.Millisecond,
+		HalfOpenTimeout: 100 * time.Millisecond,
+	})
+
+	// Trip the circuit
+	cb.RecordFailure()
+	cb.RecordFailure()
+
+	// Wait for cooldown and transition to half-open
+	time.Sleep(60 * time.Millisecond)
+	cb.Allow()
+
+	if cb.State() != StateHalfOpen {
+		t.Fatalf("Expected HALF-OPEN state, got %s", cb.State())
+	}
+
+	// TimeUntilRetry should return remaining half-open timeout
+	remaining := cb.TimeUntilRetry()
+	if remaining <= 0 || remaining > 100*time.Millisecond {
+		t.Errorf("Expected positive time until retry in HALF-OPEN, got %v", remaining)
+	}
+
+	// Wait for timeout to expire
+	time.Sleep(110 * time.Millisecond)
+
+	// TimeUntilRetry should return 0 after timeout
+	if cb.TimeUntilRetry() != 0 {
+		t.Errorf("Expected 0 time until retry after half-open timeout, got %v", cb.TimeUntilRetry())
+	}
+}
+
+func TestCircuitBreaker_HalfOpenTransitionRecordsStart(t *testing.T) {
+	cb := New(Config{
+		Threshold:       2,
+		Cooldown:        50 * time.Millisecond,
+		HalfOpenTimeout: 100 * time.Millisecond,
+	})
+
+	// Initially halfOpenStart should be zero
+	if !cb.halfOpenStart.IsZero() {
+		t.Error("Expected halfOpenStart to be zero initially")
+	}
+
+	// Trip the circuit
+	cb.RecordFailure()
+	cb.RecordFailure()
+
+	// halfOpenStart should still be zero in OPEN state
+	if !cb.halfOpenStart.IsZero() {
+		t.Error("Expected halfOpenStart to be zero in OPEN state")
+	}
+
+	// Wait for cooldown and transition to half-open
+	time.Sleep(60 * time.Millisecond)
+	beforeTransition := time.Now()
+	cb.Allow()
+	afterTransition := time.Now()
+
+	// halfOpenStart should be set after transition
+	if cb.halfOpenStart.IsZero() {
+		t.Error("Expected halfOpenStart to be set after transition to HALF-OPEN")
+	}
+
+	// halfOpenStart should be between before and after transition
+	if cb.halfOpenStart.Before(beforeTransition) || cb.halfOpenStart.After(afterTransition) {
+		t.Errorf("halfOpenStart %v not between %v and %v", cb.halfOpenStart, beforeTransition, afterTransition)
+	}
+}
+
+func TestCircuitBreaker_ResetClearsHalfOpenStart(t *testing.T) {
+	cb := New(Config{
+		Threshold:       2,
+		Cooldown:        50 * time.Millisecond,
+		HalfOpenTimeout: 100 * time.Millisecond,
+	})
+
+	// Trip the circuit and transition to half-open
+	cb.RecordFailure()
+	cb.RecordFailure()
+	time.Sleep(60 * time.Millisecond)
+	cb.Allow()
+
+	if cb.halfOpenStart.IsZero() {
+		t.Fatal("Expected halfOpenStart to be set")
+	}
+
+	// Reset should clear halfOpenStart
+	cb.Reset()
+
+	if !cb.halfOpenStart.IsZero() {
+		t.Error("Expected halfOpenStart to be cleared after Reset()")
 	}
 }

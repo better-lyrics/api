@@ -43,15 +43,18 @@ type CircuitBreaker struct {
 	failures        int           // consecutive failures
 	threshold       int           // failures before opening
 	cooldown        time.Duration // how long to stay open
+	halfOpenTimeout time.Duration // max time to wait in half-open state
 	lastFailureTime time.Time     // when circuit opened
+	halfOpenStart   time.Time     // when half-open state began
 	mu              sync.RWMutex
 }
 
 // Config holds circuit breaker configuration
 type Config struct {
-	Name      string        // Name for logging
-	Threshold int           // Number of consecutive failures before opening
-	Cooldown  time.Duration // How long to stay open before testing
+	Name            string        // Name for logging
+	Threshold       int           // Number of consecutive failures before opening
+	Cooldown        time.Duration // How long to stay open before testing
+	HalfOpenTimeout time.Duration // Max time to wait in half-open state before resetting to open
 }
 
 // New creates a new circuit breaker
@@ -62,15 +65,19 @@ func New(cfg Config) *CircuitBreaker {
 	if cfg.Cooldown <= 0 {
 		cfg.Cooldown = 5 * time.Minute // default: 5 minute cooldown
 	}
+	if cfg.HalfOpenTimeout <= 0 {
+		cfg.HalfOpenTimeout = 30 * time.Second // default: 30 second half-open timeout
+	}
 	if cfg.Name == "" {
 		cfg.Name = "default"
 	}
 
 	return &CircuitBreaker{
-		name:      cfg.Name,
-		state:     StateClosed,
-		threshold: cfg.Threshold,
-		cooldown:  cfg.Cooldown,
+		name:            cfg.Name,
+		state:           StateClosed,
+		threshold:       cfg.Threshold,
+		cooldown:        cfg.Cooldown,
+		halfOpenTimeout: cfg.HalfOpenTimeout,
 	}
 }
 
@@ -88,12 +95,21 @@ func (cb *CircuitBreaker) Allow() bool {
 		// Check if cooldown has passed
 		if time.Since(cb.lastFailureTime) >= cb.cooldown {
 			cb.state = StateHalfOpen
+			cb.halfOpenStart = time.Now()
 			log.Infof("%s Cooldown passed, transitioning to HALF-OPEN", logcolors.CircuitBreakerPrefix(cb.name))
 			return true // Allow one test request
 		}
 		return false
 
 	case StateHalfOpen:
+		// Check if half-open timeout has expired
+		if time.Since(cb.halfOpenStart) >= cb.halfOpenTimeout {
+			// Test request timed out, reset to OPEN
+			cb.state = StateOpen
+			cb.lastFailureTime = time.Now()
+			log.Warnf("%s Half-open timeout expired, transitioning back to OPEN", logcolors.CircuitBreakerPrefix(cb.name))
+			return false
+		}
 		// Only allow one request at a time in half-open state
 		// The first request is already in progress, block others
 		return false
@@ -186,6 +202,7 @@ func (cb *CircuitBreaker) Reset() {
 	cb.state = StateClosed
 	cb.failures = 0
 	cb.lastFailureTime = time.Time{}
+	cb.halfOpenStart = time.Time{}
 	log.Infof("%s Manually reset to CLOSED", logcolors.CircuitBreakerPrefix(cb.name))
 }
 
@@ -197,18 +214,36 @@ func (cb *CircuitBreaker) IsOpen() bool {
 }
 
 // TimeUntilRetry returns how long until the circuit will try again
-// Returns 0 if circuit is not open
+// For OPEN state: returns remaining cooldown time
+// For HALF-OPEN state: returns remaining timeout until reset to OPEN
+// Returns 0 if circuit is closed
 func (cb *CircuitBreaker) TimeUntilRetry() time.Duration {
 	cb.mu.RLock()
 	defer cb.mu.RUnlock()
 
-	if cb.state != StateOpen {
-		return 0
-	}
+	switch cb.state {
+	case StateOpen:
+		elapsed := time.Since(cb.lastFailureTime)
+		if elapsed >= cb.cooldown {
+			return 0
+		}
+		return cb.cooldown - elapsed
 
-	elapsed := time.Since(cb.lastFailureTime)
-	if elapsed >= cb.cooldown {
+	case StateHalfOpen:
+		elapsed := time.Since(cb.halfOpenStart)
+		if elapsed >= cb.halfOpenTimeout {
+			return 0
+		}
+		return cb.halfOpenTimeout - elapsed
+
+	default:
 		return 0
 	}
-	return cb.cooldown - elapsed
+}
+
+// IsHalfOpen returns true if the circuit is in half-open state
+func (cb *CircuitBreaker) IsHalfOpen() bool {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	return cb.state == StateHalfOpen
 }
