@@ -230,6 +230,20 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 
 	// Handle rate limiting - quarantine account and retry with different one
 	if resp.StatusCode == 429 {
+		// Log rate limit headers for debugging
+		retryAfter := resp.Header.Get("Retry-After")
+		xRateLimit := resp.Header.Get("X-Rate-Limit")
+		rateLimitReset := resp.Header.Get("X-RateLimit-Reset")
+		rateLimitRemaining := resp.Header.Get("X-RateLimit-Remaining")
+
+		if retryAfter != "" || xRateLimit != "" || rateLimitReset != "" || rateLimitRemaining != "" {
+			log.Warnf("%s Rate limit headers from %s: Retry-After=%q, X-Rate-Limit=%q, X-RateLimit-Reset=%q, X-RateLimit-Remaining=%q",
+				logcolors.LogRateLimit, logcolors.Account(account.NameID),
+				retryAfter, xRateLimit, rateLimitReset, rateLimitRemaining)
+		} else {
+			log.Warnf("%s No rate limit headers in 429 response from %s", logcolors.LogRateLimit, logcolors.Account(account.NameID))
+		}
+
 		accountManager.quarantineAccount(account)
 
 		// Only count toward circuit breaker if no healthy accounts remain
