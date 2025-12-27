@@ -282,6 +282,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	if resp.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
+		apiCircuitBreaker.RecordFailure()
 		log.Errorf("%s Unexpected status %d from %s: %s", logcolors.LogHTTP, resp.StatusCode, logcolors.Account(account.NameID), string(body))
 		return nil, account, fmt.Errorf("TTML API returned status %d: %s", resp.StatusCode, string(body))
 	}
