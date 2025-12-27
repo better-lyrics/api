@@ -19,6 +19,15 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		return "", 0, 0.0, fmt.Errorf("no TTML accounts configured")
 	}
 
+	// Check circuit breaker before selecting account to avoid unnecessary quarantine logs
+	if apiCircuitBreaker == nil {
+		initCircuitBreaker()
+	}
+	if !apiCircuitBreaker.Allow() {
+		timeUntilRetry := apiCircuitBreaker.TimeUntilRetry()
+		return "", 0, 0.0, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
+	}
+
 	// Select initial account for the request
 	account := accountManager.getNextAccount()
 	storefront := account.Storefront
