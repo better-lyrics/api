@@ -19,19 +19,8 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		return "", 0, 0.0, fmt.Errorf("no TTML accounts configured")
 	}
 
-	// Check circuit breaker before selecting account to avoid unnecessary quarantine logs
-	if apiCircuitBreaker == nil {
-		initCircuitBreaker()
-	}
-	if !apiCircuitBreaker.Allow() {
-		timeUntilRetry := apiCircuitBreaker.TimeUntilRetry()
-		if apiCircuitBreaker.IsHalfOpen() {
-			return "", 0, 0.0, fmt.Errorf("circuit breaker is half-open, waiting for test request (retry in %v)", timeUntilRetry)
-		}
-		return "", 0, 0.0, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
-	}
-
 	// Select initial account for the request
+	// Note: Circuit breaker check happens in makeAPIRequestWithAccount (client.go)
 	account := accountManager.getNextAccount()
 	storefront := account.Storefront
 	if storefront == "" {
