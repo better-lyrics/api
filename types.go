@@ -8,8 +8,11 @@ import (
 type contextKey string
 
 const (
-	cacheOnlyModeKey contextKey = "cacheOnlyMode"
-	rateLimitTypeKey contextKey = "rateLimitType"
+	cacheOnlyModeKey          contextKey = "cacheOnlyMode"
+	rateLimitTypeKey          contextKey = "rateLimitType"
+	apiKeyRequiredForFreshKey contextKey = "apiKeyRequiredForFresh"
+	apiKeyAuthenticatedKey    contextKey = "apiKeyAuthenticated"
+	apiKeyInvalidKey          contextKey = "apiKeyInvalid"
 )
 
 // CacheDump represents the full cache contents

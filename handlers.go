@@ -44,12 +44,24 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	cacheOnlyMode, _ := r.Context().Value(cacheOnlyModeKey).(bool)
 	rateLimitType, _ := r.Context().Value(rateLimitTypeKey).(string)
 
+	// Check if API key was required but not provided (cache-first mode)
+	apiKeyRequired, _ := r.Context().Value(apiKeyRequiredForFreshKey).(bool)
+	apiKeyAuthenticated, _ := r.Context().Value(apiKeyAuthenticatedKey).(bool)
+	apiKeyInvalid, _ := r.Context().Value(apiKeyInvalidKey).(bool)
+
 	// Check cache first (normalized key, then legacy key for backwards compatibility)
 	if cached, ok := getCachedLyrics(cacheKey); ok {
 		stats.Get().RecordCacheHit()
 		log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "HIT")
+		if apiKeyAuthenticated {
+			w.Header().Set("X-Auth-Mode", "authenticated")
+		} else if apiKeyInvalid {
+			w.Header().Set("X-Auth-Mode", "invalid")
+		} else if apiKeyRequired {
+			w.Header().Set("X-Auth-Mode", "cache")
+		}
 		if rateLimitType != "" {
 			w.Header().Set("X-RateLimit-Type", rateLimitType)
 		}
@@ -66,6 +78,13 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			log.Infof("%s Found cached TTML under legacy key", logcolors.LogCacheLyrics)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "HIT")
+			if apiKeyAuthenticated {
+				w.Header().Set("X-Auth-Mode", "authenticated")
+			} else if apiKeyInvalid {
+				w.Header().Set("X-Auth-Mode", "invalid")
+			} else if apiKeyRequired {
+				w.Header().Set("X-Auth-Mode", "cache")
+			}
 			if rateLimitType != "" {
 				w.Header().Set("X-RateLimit-Type", rateLimitType)
 			}
@@ -82,6 +101,13 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		log.Infof("%s Returning cached 'no lyrics' response for: %s", logcolors.LogCacheNegative, query)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "NEGATIVE_HIT")
+		if apiKeyAuthenticated {
+			w.Header().Set("X-Auth-Mode", "authenticated")
+		} else if apiKeyInvalid {
+			w.Header().Set("X-Auth-Mode", "invalid")
+		} else if apiKeyRequired {
+			w.Header().Set("X-Auth-Mode", "cache")
+		}
 		if rateLimitType != "" {
 			w.Header().Set("X-RateLimit-Type", rateLimitType)
 		}
@@ -99,6 +125,13 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			log.Infof("%s Returning cached 'no lyrics' (legacy key) for: %s", logcolors.LogCacheNegative, query)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "NEGATIVE_HIT")
+			if apiKeyAuthenticated {
+				w.Header().Set("X-Auth-Mode", "authenticated")
+			} else if apiKeyInvalid {
+				w.Header().Set("X-Auth-Mode", "invalid")
+			} else if apiKeyRequired {
+				w.Header().Set("X-Auth-Mode", "cache")
+			}
 			if rateLimitType != "" {
 				w.Header().Set("X-RateLimit-Type", rateLimitType)
 			}
@@ -108,6 +141,31 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+	}
+
+	// If API key is required for fresh fetch but not provided/invalid, return 401
+	// This allows cache hits to be served without API key
+	if apiKeyRequired {
+		stats.Get().RecordCacheMiss()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache-Status", "MISS")
+		if apiKeyInvalid {
+			log.Warnf("%s Invalid API key for uncached query: %s", logcolors.LogAPIKey, query)
+			w.Header().Set("X-Auth-Mode", "invalid")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":   "Invalid API key",
+				"message": "The provided API key is not valid",
+			})
+		} else {
+			log.Warnf("%s API key required for uncached query: %s", logcolors.LogAPIKey, query)
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":   "API key required",
+				"message": "Uncached queries require a valid API key via X-API-Key header",
+			})
+		}
+		return
 	}
 
 	// If in cache-only mode and no cache found, return 429
@@ -285,6 +343,9 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 		// Check rate limit context
 		cacheOnlyMode, _ := r.Context().Value(cacheOnlyModeKey).(bool)
 		rateLimitType, _ := r.Context().Value(rateLimitTypeKey).(string)
+		apiKeyRequired, _ := r.Context().Value(apiKeyRequiredForFreshKey).(bool)
+		apiKeyAuthenticated, _ := r.Context().Value(apiKeyAuthenticatedKey).(bool)
+		apiKeyInvalid, _ := r.Context().Value(apiKeyInvalidKey).(bool)
 
 		// Check cache first
 		if cached, ok := getCachedLyrics(cacheKey); ok {
@@ -293,6 +354,13 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "HIT")
 			w.Header().Set("X-Provider", providerName)
+			if apiKeyAuthenticated {
+				w.Header().Set("X-Auth-Mode", "authenticated")
+			} else if apiKeyInvalid {
+				w.Header().Set("X-Auth-Mode", "invalid")
+			} else if apiKeyRequired {
+				w.Header().Set("X-Auth-Mode", "cache")
+			}
 			if rateLimitType != "" {
 				w.Header().Set("X-RateLimit-Type", rateLimitType)
 			}
@@ -303,14 +371,20 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 			return
 		}
 
-		// Check negative cache
-		negativeKey := provider.CacheKeyPrefix() + "_negative:" + query
-		if reason, found := getNegativeCache(negativeKey); found {
+		// Check negative cache (uses same key format as positive cache, getNegativeCache adds "no_lyrics:" prefix)
+		if reason, found := getNegativeCache(cacheKey); found {
 			stats.Get().RecordNegativeCacheHit()
 			log.Infof("%s [%s] Returning cached 'no lyrics' response", logcolors.LogCacheNegative, providerName)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "NEGATIVE_HIT")
 			w.Header().Set("X-Provider", providerName)
+			if apiKeyAuthenticated {
+				w.Header().Set("X-Auth-Mode", "authenticated")
+			} else if apiKeyInvalid {
+				w.Header().Set("X-Auth-Mode", "invalid")
+			} else if apiKeyRequired {
+				w.Header().Set("X-Auth-Mode", "cache")
+			}
 			if rateLimitType != "" {
 				w.Header().Set("X-RateLimit-Type", rateLimitType)
 			}
@@ -319,6 +393,33 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 				"error":    reason,
 				"provider": providerName,
 			})
+			return
+		}
+
+		// If API key is required for fresh fetch but not provided/invalid, return 401
+		if apiKeyRequired {
+			stats.Get().RecordCacheMiss()
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Status", "MISS")
+			w.Header().Set("X-Provider", providerName)
+			if apiKeyInvalid {
+				log.Warnf("%s [%s] Invalid API key for uncached query: %s", logcolors.LogAPIKey, providerName, query)
+				w.Header().Set("X-Auth-Mode", "invalid")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":    "Invalid API key",
+					"message":  "The provided API key is not valid",
+					"provider": providerName,
+				})
+			} else {
+				log.Warnf("%s [%s] API key required for uncached query: %s", logcolors.LogAPIKey, providerName, query)
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":    "API key required",
+					"message":  "Uncached queries require a valid API key via X-API-Key header",
+					"provider": providerName,
+				})
+			}
 			return
 		}
 
@@ -407,7 +508,7 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 
 			// Cache negative result
 			if shouldNegativeCache(err) {
-				persistentCache.Set(negativeKey, err.Error())
+				setNegativeCache(cacheKey, err.Error())
 			}
 
 			stats.Get().RecordCacheMiss()
@@ -428,7 +529,7 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 		if result == nil || result.RawLyrics == "" {
 			stats.Get().RecordCacheMiss()
 			log.Warnf("[%s] No lyrics found for: %s", providerName, query)
-			persistentCache.Set(negativeKey, "Lyrics not available")
+			setNegativeCache(cacheKey, "Lyrics not available")
 
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Cache-Status", "MISS")

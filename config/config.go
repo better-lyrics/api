@@ -24,10 +24,9 @@ type Config struct {
 		CachedRateLimitBurstLimit          int    `envconfig:"CACHED_RATE_LIMIT_BURST_LIMIT" default:"20"`
 		CacheInvalidationIntervalInSeconds int    `envconfig:"CACHE_INVALIDATION_INTERVAL_IN_SECONDS" default:"3600"`
 		LyricsCacheTTLInSeconds            int    `envconfig:"LYRICS_CACHE_TTL_IN_SECONDS" default:"86400"`
-		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
-		APIKey                             string `envconfig:"API_KEY" default:""`
-		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
-		APIKeyProtectedPaths               string `envconfig:"API_KEY_PROTECTED_PATHS" default:"/getLyrics,/ttml/getLyrics"`
+		CacheAccessToken string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
+		APIKey           string `envconfig:"API_KEY" default:""`
+		APIKeyRequired   bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
 
 		// TTML API Configuration
 		// Single account (backwards compatible)
@@ -100,6 +99,13 @@ func Get() Config {
 // Format: oldName -> newName
 var AccountNameMigrations = map[string]string{
 	"Halsey": "Khalid",
+}
+
+// APIKeyProtectedPaths defines paths that require API key for cache misses (fresh fetches)
+// Cache hits on these paths are still served without API key
+var APIKeyProtectedPaths = []string{
+	"/getLyrics",
+	"/ttml/getLyrics",
 }
 
 // TTMLAccount represents a single TTML API account
@@ -184,11 +190,6 @@ func (c *Config) GetAllBearerTokens() []string {
 		tokens[i] = acc.BearerToken
 	}
 	return tokens
-}
-
-// GetAPIKeyProtectedPaths returns the protected paths as a slice
-func (c *Config) GetAPIKeyProtectedPaths() []string {
-	return SplitAndTrim(c.Configuration.APIKeyProtectedPaths)
 }
 
 // SplitAndTrim splits a comma-separated string and trims whitespace from each element

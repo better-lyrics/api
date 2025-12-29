@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"lyrics-api-go/logcolors"
 	"net/http"
 	"strings"
@@ -8,11 +9,17 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// APIKeyMiddleware creates middleware that requires X-API-Key header for protected paths.
-// If required is false, all requests pass through without authentication.
-// If required is true but apiKey is empty, logs a warning and allows all requests.
-// Only paths in protectedPaths require authentication (blacklist approach).
-func APIKeyMiddleware(apiKey string, required bool, protectedPaths []string) func(http.Handler) http.Handler {
+// APIKeyMiddleware creates middleware that handles API key authentication for protected paths.
+// When API key is required for a protected path but not provided, it sets a context flag
+// instead of blocking immediately - this allows handlers to serve cached responses without API key.
+//
+// Behavior:
+// - If required is false, all requests pass through
+// - If required is true but apiKey is empty, logs warning and allows (misconfiguration)
+// - If path is protected and no API key provided: sets requiredContextKey=true and proceeds (cache-first)
+// - If path is protected and wrong API key provided: sets invalidContextKey=true and proceeds (cache-first, but marked invalid)
+// - If path is protected and valid API key provided: sets authenticatedContextKey=true and proceeds
+func APIKeyMiddleware(apiKey string, required bool, protectedPaths []string, requiredContextKey interface{}, authenticatedContextKey interface{}, invalidContextKey interface{}) func(http.Handler) http.Handler {
 	// Build a map for O(1) lookup of protected paths
 	protectedPathMap := make(map[string]bool)
 	for _, path := range protectedPaths {
@@ -57,24 +64,27 @@ func APIKeyMiddleware(apiKey string, required bool, protectedPaths []string) fun
 
 			// Path is protected, check X-API-Key header
 			providedKey := r.Header.Get("X-API-Key")
+
+			// No API key provided - set context flag and proceed (handler will check cache first)
 			if providedKey == "" {
-				log.Warnf("%s Missing API key from %s for %s", logcolors.LogAPIKey, r.RemoteAddr, path)
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				w.Write([]byte(`{"error":"API key required","message":"Provide a valid API key via X-API-Key header"}`))
+				log.Debugf("%s No API key from %s for %s, setting cache-first mode", logcolors.LogAPIKey, r.RemoteAddr, path)
+				ctx := context.WithValue(r.Context(), requiredContextKey, true)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
+			// API key provided but invalid - set context flag and proceed (handler will check cache first)
 			if providedKey != apiKey {
-				log.Warnf("%s Invalid API key from %s for %s", logcolors.LogAPIKey, r.RemoteAddr, path)
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				w.Write([]byte(`{"error":"Invalid API key","message":"The provided API key is not valid"}`))
+				log.Debugf("%s Invalid API key from %s for %s, setting cache-first mode", logcolors.LogAPIKey, r.RemoteAddr, path)
+				ctx := context.WithValue(r.Context(), invalidContextKey, true)
+				ctx = context.WithValue(ctx, requiredContextKey, true)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
-			// Valid API key, proceed
-			next.ServeHTTP(w, r)
+			// Valid API key, proceed with authenticated flag
+			ctx := context.WithValue(r.Context(), authenticatedContextKey, true)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
