@@ -27,6 +27,7 @@ type Config struct {
 		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
 		APIKey                             string `envconfig:"API_KEY" default:""`
 		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
+		APIKeyProtectedPaths               string `envconfig:"API_KEY_PROTECTED_PATHS" default:"/getLyrics,/ttml/getLyrics"`
 
 		// TTML API Configuration
 		// Single account (backwards compatible)
@@ -130,8 +131,8 @@ func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
 	}
 
 	// Parse comma-separated values
-	bearerList := splitAndTrim(bearerTokens)
-	mediaUserList := splitAndTrim(mediaUserTokens)
+	bearerList := SplitAndTrim(bearerTokens)
+	mediaUserList := SplitAndTrim(mediaUserTokens)
 
 	// Validate: must have same number of tokens
 	if len(bearerList) != len(mediaUserList) {
@@ -185,8 +186,13 @@ func (c *Config) GetAllBearerTokens() []string {
 	return tokens
 }
 
-// splitAndTrim splits a comma-separated string and trims whitespace from each element
-func splitAndTrim(s string) []string {
+// GetAPIKeyProtectedPaths returns the protected paths as a slice
+func (c *Config) GetAPIKeyProtectedPaths() []string {
+	return SplitAndTrim(c.Configuration.APIKeyProtectedPaths)
+}
+
+// SplitAndTrim splits a comma-separated string and trims whitespace from each element
+func SplitAndTrim(s string) []string {
 	if s == "" {
 		return nil
 	}

@@ -8,15 +8,15 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// APIKeyMiddleware creates middleware that requires X-API-Key header when enabled.
+// APIKeyMiddleware creates middleware that requires X-API-Key header for protected paths.
 // If required is false, all requests pass through without authentication.
 // If required is true but apiKey is empty, logs a warning and allows all requests.
-// Public paths (like /health) are always allowed without authentication.
-func APIKeyMiddleware(apiKey string, required bool, publicPaths []string) func(http.Handler) http.Handler {
-	// Build a map for O(1) lookup of public paths
-	publicPathMap := make(map[string]bool)
-	for _, path := range publicPaths {
-		publicPathMap[path] = true
+// Only paths in protectedPaths require authentication (blacklist approach).
+func APIKeyMiddleware(apiKey string, required bool, protectedPaths []string) func(http.Handler) http.Handler {
+	// Build a map for O(1) lookup of protected paths
+	protectedPathMap := make(map[string]bool)
+	for _, path := range protectedPaths {
+		protectedPathMap[path] = true
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -34,27 +34,28 @@ func APIKeyMiddleware(apiKey string, required bool, publicPaths []string) func(h
 				return
 			}
 
-			// Check if path is public (exact match or prefix match for paths ending with *)
+			// Check if path is protected (exact match or prefix match for paths ending with *)
 			path := r.URL.Path
-			isPublic := publicPathMap[path]
-			if !isPublic {
-				for publicPath := range publicPathMap {
-					if strings.HasSuffix(publicPath, "*") {
-						prefix := strings.TrimSuffix(publicPath, "*")
+			isProtected := protectedPathMap[path]
+			if !isProtected {
+				for protectedPath := range protectedPathMap {
+					if strings.HasSuffix(protectedPath, "*") {
+						prefix := strings.TrimSuffix(protectedPath, "*")
 						if strings.HasPrefix(path, prefix) {
-							isPublic = true
+							isProtected = true
 							break
 						}
 					}
 				}
 			}
 
-			if isPublic {
+			// If path is not protected, allow without API key
+			if !isProtected {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// Check X-API-Key header
+			// Path is protected, check X-API-Key header
 			providedKey := r.Header.Get("X-API-Key")
 			if providedKey == "" {
 				log.Warnf("%s Missing API key from %s for %s", logcolors.LogAPIKey, r.RemoteAddr, path)

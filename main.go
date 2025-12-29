@@ -105,12 +105,12 @@ func main() {
 	corsHandler := c.Handler(loggedRouter)
 
 	// API key middleware - if API_KEY_REQUIRED is true, require X-API-Key header
-	// Public paths are accessible without API key
-	publicPaths := []string{"/", "/health", "/cache/help"}
+	// Only protected paths require API key (blacklist approach)
+	protectedPaths := conf.GetAPIKeyProtectedPaths()
 	apiKeyHandler := middleware.APIKeyMiddleware(
 		conf.Configuration.APIKey,
 		conf.Configuration.APIKeyRequired,
-		publicPaths,
+		protectedPaths,
 	)(corsHandler)
 
 	handler := limitMiddleware(apiKeyHandler, limiter)
@@ -122,7 +122,7 @@ func main() {
 	// Log API key status
 	if conf.Configuration.APIKeyRequired {
 		if conf.Configuration.APIKey != "" {
-			log.Infof("%s API key authentication enabled", logcolors.LogAPIKey)
+			log.Infof("%s API key authentication enabled for paths: %v", logcolors.LogAPIKey, protectedPaths)
 		} else {
 			log.Warnf("%s API key required but not configured!", logcolors.LogAPIKey)
 		}
