@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -19,14 +17,13 @@ import (
 
 const bucketName = "cache"
 
-// PersistentCache wraps BoltDB with an in-memory cache for fast access
+// PersistentCache wraps BoltDB for persistent storage
+// Note: No in-memory cache layer - BoltDB uses mmap so OS handles caching
 type PersistentCache struct {
 	db                 *bolt.DB
-	memCache           sync.Map
 	dbPath             string
 	backupPath         string
 	compressionEnabled bool
-	preloadComplete    atomic.Bool
 }
 
 // CacheEntry represents a cached value (can be compressed)
@@ -85,99 +82,25 @@ func NewPersistentCache(dbPath string, backupPath string, compressionEnabled boo
 		compressionEnabled: compressionEnabled,
 	}
 
-	// Start background preload (non-blocking)
-	pc.preloadComplete.Store(false)
-	go pc.loadToMemoryAsync()
-
 	log.Infof("%s Persistent cache initialized at %s (compression: %v)", logcolors.LogCache, dbPath, compressionEnabled)
 	return pc, nil
 }
 
-// loadToMemory loads all cache entries from disk to memory
-func (pc *PersistentCache) loadToMemory() error {
-	count := 0
-	err := pc.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(bucketName))
-		if b == nil {
-			return nil
-		}
-
-		return b.ForEach(func(k, v []byte) error {
-			key := string(k)
-			// Don't overwrite entries that were Set() during preload
-			if _, exists := pc.memCache.Load(key); exists {
-				return nil
-			}
-
-			var entry CacheEntry
-			if err := json.Unmarshal(v, &entry); err != nil {
-				log.Warnf("%s Failed to unmarshal cache entry for key %s: %v", logcolors.LogCache, key, err)
-				return nil // Continue to next entry
-			}
-			pc.memCache.Store(key, entry)
-			count++
-			return nil
-		})
-	})
-
-	if err != nil {
-		return err
-	}
-
-	log.Infof("%s Loaded %d entries from disk to memory", logcolors.LogCache, count)
-	return nil
-}
-
-// loadToMemoryAsync wraps loadToMemory for background execution
-func (pc *PersistentCache) loadToMemoryAsync() {
-	start := time.Now()
-	if err := pc.loadToMemory(); err != nil {
-		log.Warnf("%s Background preload failed: %v", logcolors.LogCache, err)
-	}
-	pc.preloadComplete.Store(true)
-
-	// Count entries for logging
-	count := 0
-	pc.memCache.Range(func(_, _ interface{}) bool {
-		count++
-		return true
-	})
-	log.Infof("%s Background preload complete: %d entries in %v", logcolors.LogCache, count, time.Since(start))
-}
-
-// IsPreloadComplete returns true if background cache loading has finished
+// IsPreloadComplete returns true - kept for backwards compatibility
+// No preloading is done anymore; BoltDB is always ready
 func (pc *PersistentCache) IsPreloadComplete() bool {
-	return pc.preloadComplete.Load()
+	return true
 }
 
-// WaitForPreload blocks until background cache loading has finished
+// WaitForPreload is a no-op - kept for backwards compatibility
+// No preloading is done anymore; BoltDB is always ready
 func (pc *PersistentCache) WaitForPreload() {
-	for !pc.preloadComplete.Load() {
-		time.Sleep(10 * time.Millisecond)
-	}
+	// No-op: nothing to wait for
 }
 
-// Get retrieves a value from cache (checks memory first, then disk)
+// Get retrieves a value from cache
 // Returns decompressed value if compression is enabled
 func (pc *PersistentCache) Get(key string) (string, bool) {
-	// Try memory cache first
-	if entry, ok := pc.memCache.Load(key); ok {
-		value := entry.(CacheEntry).Value
-
-		// Decompress if needed
-		if pc.compressionEnabled {
-			decompressed, err := utils.DecompressString(value)
-			if err != nil {
-				log.Errorf("%s Error decompressing cache value for key %s: %v", logcolors.LogCache, key, err)
-				return "", false
-			}
-			return decompressed, true
-		}
-
-		return value, true
-	}
-
-	// Try disk cache
 	var value string
 	err := pc.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
@@ -196,8 +119,6 @@ func (pc *PersistentCache) Get(key string) (string, bool) {
 		}
 
 		value = entry.Value
-		// Update memory cache with compressed value
-		pc.memCache.Store(key, entry)
 		return nil
 	})
 
@@ -218,7 +139,7 @@ func (pc *PersistentCache) Get(key string) (string, bool) {
 	return value, true
 }
 
-// Set stores a value in cache (both memory and disk)
+// Set stores a value in cache
 // Compresses value with BestCompression if compression is enabled
 func (pc *PersistentCache) Set(key, value string) error {
 	var finalValue string
@@ -239,10 +160,6 @@ func (pc *PersistentCache) Set(key, value string) error {
 		Value: finalValue,
 	}
 
-	// Store in memory (compressed)
-	pc.memCache.Store(key, entry)
-
-	// Store in disk (compressed)
 	return pc.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
 		if b == nil {
@@ -260,8 +177,6 @@ func (pc *PersistentCache) Set(key, value string) error {
 
 // Delete removes a key from cache
 func (pc *PersistentCache) Delete(key string) error {
-	pc.memCache.Delete(key)
-
 	return pc.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
 		if b == nil {
@@ -273,44 +188,49 @@ func (pc *PersistentCache) Delete(key string) error {
 
 // Clear removes all entries from cache
 func (pc *PersistentCache) Clear() error {
-	// Wait for any pending preload to avoid race conditions
-	pc.WaitForPreload()
-
-	// Clear memory cache
-	pc.memCache.Range(func(key, value interface{}) bool {
-		pc.memCache.Delete(key)
-		return true
-	})
-
-	// Clear disk cache
-	err := pc.db.Update(func(tx *bolt.Tx) error {
+	return pc.db.Update(func(tx *bolt.Tx) error {
 		if err := tx.DeleteBucket([]byte(bucketName)); err != nil {
 			return err
 		}
 		_, err := tx.CreateBucket([]byte(bucketName))
 		return err
 	})
-
-	// Mark preload as complete (nothing to load after clear)
-	pc.preloadComplete.Store(true)
-
-	return err
 }
 
 // Range iterates over all cache entries
 func (pc *PersistentCache) Range(fn func(key string, entry CacheEntry) bool) {
-	pc.memCache.Range(func(k, v interface{}) bool {
-		return fn(k.(string), v.(CacheEntry))
+	pc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketName))
+		if b == nil {
+			return nil
+		}
+
+		return b.ForEach(func(k, v []byte) error {
+			var entry CacheEntry
+			if err := json.Unmarshal(v, &entry); err != nil {
+				return nil // Skip invalid entries
+			}
+			if !fn(string(k), entry) {
+				return fmt.Errorf("iteration stopped")
+			}
+			return nil
+		})
 	})
 }
 
 // Stats returns cache statistics
 func (pc *PersistentCache) Stats() (numKeys int, sizeInKB int) {
-	pc.memCache.Range(func(k, v interface{}) bool {
-		entry := v.(CacheEntry)
-		numKeys++
-		sizeInKB += len(k.(string)) + len(entry.Value)
-		return true
+	pc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketName))
+		if b == nil {
+			return nil
+		}
+
+		return b.ForEach(func(k, v []byte) error {
+			numKeys++
+			sizeInKB += len(k) + len(v)
+			return nil
+		})
 	})
 	sizeInKB = sizeInKB / 1024
 	return
@@ -371,11 +291,6 @@ func (pc *PersistentCache) reopenDatabase() error {
 		return fmt.Errorf("failed to reopen database: %v", err)
 	}
 	pc.db = db
-
-	// Reload memory cache in background
-	pc.preloadComplete.Store(false)
-	go pc.loadToMemoryAsync()
-
 	return nil
 }
 
@@ -511,19 +426,10 @@ func (pc *PersistentCache) RestoreFromBackup(backupFileName string) error {
 	// Remove the pre-restore backup on success
 	os.Remove(currentBackupPath)
 
-	// Clear memory cache so restored data takes precedence
-	pc.memCache.Range(func(key, value interface{}) bool {
-		pc.memCache.Delete(key)
-		return true
-	})
-
 	// Reopen the database with restored data
 	if err := pc.reopenDatabase(); err != nil {
 		return fmt.Errorf("failed to reopen database after restore: %v", err)
 	}
-
-	// Wait for preload to complete so Stats() returns accurate count
-	pc.WaitForPreload()
 
 	log.Infof("%s Successfully restored from backup: %s", logcolors.LogCacheRestore, backupFileName)
 	return nil

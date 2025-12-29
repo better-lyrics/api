@@ -338,17 +338,17 @@ func TestLoadToMemory(t *testing.T) {
 	}
 }
 
-func TestMemoryCacheFallback(t *testing.T) {
+func TestPersistentStorage(t *testing.T) {
 	cache, _, cleanup := setupTestCache(t, false)
 	defer cleanup()
 
-	key := "memory_test"
-	value := "memory_value"
+	key := "persist_test"
+	value := "persist_value"
 
-	// Set value (goes to both memory and disk)
+	// Set value
 	cache.Set(key, value)
 
-	// Get from memory cache (should be fast)
+	// Get should work
 	retrieved, found := cache.Get(key)
 	if !found {
 		t.Error("Expected to find value in cache")
@@ -357,16 +357,11 @@ func TestMemoryCacheFallback(t *testing.T) {
 		t.Errorf("Expected value %q, got %q", value, retrieved)
 	}
 
-	// Clear memory cache only (not touching disk)
-	cache.memCache.Delete(key)
-
-	// Get should still work (falls back to disk)
-	retrieved, found = cache.Get(key)
-	if !found {
-		t.Error("Expected to find value in disk cache")
-	}
-	if retrieved != value {
-		t.Errorf("Expected value %q from disk, got %q", value, retrieved)
+	// Delete and verify it's gone
+	cache.Delete(key)
+	_, found = cache.Get(key)
+	if found {
+		t.Error("Expected value to be deleted")
 	}
 }
 
