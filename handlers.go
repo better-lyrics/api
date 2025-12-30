@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"lyrics-api-go/cache"
@@ -1087,6 +1088,7 @@ func helpHandler(w http.ResponseWriter, r *http.Request) {
 			"/ttml/getLyrics":   "TTML provider (word-level timing)",
 			"/kugou/getLyrics":  "Kugou provider (line-level timing)",
 			"/legacy/getLyrics": "Legacy Spotify-based provider",
+			"/revalidate":       "Check if cached lyrics are stale and update if needed (requires API key)",
 		},
 		"parameters": map[string]string{
 			"s, song, songName":     "Song name (required)",
@@ -1096,5 +1098,112 @@ func helpHandler(w http.ResponseWriter, r *http.Request) {
 		},
 		"example": "/getLyrics?s=Shape%20of%20You&a=Ed%20Sheeran",
 		"notes":   "The API uses provider-specific matching algorithms. Providing more parameters improves accuracy.",
+	})
+}
+
+// revalidateHandler checks if cached lyrics are stale and updates them if needed.
+// Requires a valid API key and uses the same parameters as getLyrics.
+func revalidateHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Require valid API key
+	apiKeyAuthenticated, _ := r.Context().Value(apiKeyAuthenticatedKey).(bool)
+	if !apiKeyAuthenticated {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "API key required for revalidation",
+			"message": "Provide a valid API key via X-API-Key header",
+		})
+		return
+	}
+
+	// 2. Parse params (same as getLyrics)
+	songName := r.URL.Query().Get("s") + r.URL.Query().Get("song") + r.URL.Query().Get("songName")
+	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist") + r.URL.Query().Get("artistName")
+	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album") + r.URL.Query().Get("albumName")
+	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
+
+	if songName == "" || artistName == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "song (s) and artist (a) parameters are required",
+		})
+		return
+	}
+
+	// 3. Build cache key (same logic as getLyrics)
+	cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
+	legacyCacheKey := buildLegacyCacheKey(songName, artistName, albumName, durationStr)
+
+	// 4. Get cached content
+	cached, found := getCachedLyrics(cacheKey)
+	usedKey := cacheKey
+	if !found && legacyCacheKey != cacheKey {
+		// Try legacy key
+		cached, found = getCachedLyrics(legacyCacheKey)
+		usedKey = legacyCacheKey
+	}
+
+	if !found {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":    "no cached lyrics found for this query",
+			"cacheKey": cacheKey,
+		})
+		return
+	}
+
+	// 5. Compute hash of cached content
+	oldHash := md5.Sum([]byte(cached.TTML))
+
+	// 6. Fetch fresh content
+	var durationMs int
+	if durationStr != "" {
+		fmt.Sscanf(durationStr, "%d", &durationMs)
+		durationMs = durationMs * 1000 // Convert seconds to milliseconds
+	}
+
+	log.Infof("%s Revalidating cache for: %s %s", logcolors.LogRevalidate, songName, artistName)
+	ttmlString, trackDurationMs, score, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
+
+	if err != nil {
+		log.Warnf("%s Revalidation fetch failed: %v", logcolors.LogRevalidate, err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":    err.Error(),
+			"updated":  false,
+			"cacheKey": usedKey,
+		})
+		return
+	}
+
+	if ttmlString == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":    "no lyrics found from source",
+			"updated":  false,
+			"cacheKey": usedKey,
+		})
+		return
+	}
+
+	// 7. Compare hashes
+	newHash := md5.Sum([]byte(ttmlString))
+	updated := oldHash != newHash
+
+	if updated {
+		// Update cache with fresh content
+		setCachedLyrics(usedKey, ttmlString, trackDurationMs, score, "", false)
+		log.Infof("%s Content changed, cache updated for: %s", logcolors.LogRevalidate, usedKey)
+	} else {
+		log.Infof("%s Content unchanged for: %s", logcolors.LogRevalidate, usedKey)
+	}
+
+	// 8. Return result
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"updated":  updated,
+		"cacheKey": usedKey,
 	})
 }

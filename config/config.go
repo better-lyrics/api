@@ -106,6 +106,7 @@ var AccountNameMigrations = map[string]string{
 var APIKeyProtectedPaths = []string{
 	"/getLyrics",
 	"/ttml/getLyrics",
+	"/revalidate",
 }
 
 // TTMLAccount represents a single TTML API account

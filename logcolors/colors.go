@@ -29,6 +29,7 @@ const (
 	LogCacheRestore  = Blue + "[Cache:Restore]" + Reset
 	LogCacheLyrics   = Green + "[Cache:Lyrics]" + Reset
 	LogCacheNegative = Cyan + "[Cache:Negative]" + Reset
+	LogRevalidate    = Cyan + "[Revalidate]" + Reset
 )
 
 // Rate limiting and monitoring log prefixes

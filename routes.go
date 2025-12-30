@@ -9,6 +9,9 @@ func setupRoutes(router *mux.Router) {
 	// Default endpoint - backwards compatible, returns {"ttml": ...}
 	router.HandleFunc("/getLyrics", getLyrics)
 
+	// Revalidate endpoint - checks if cached lyrics are stale and updates if needed
+	router.HandleFunc("/revalidate", revalidateHandler)
+
 	// Provider-specific endpoints - return {"lyrics": ..., "provider": ...}
 	router.HandleFunc("/ttml/getLyrics", getLyricsWithProvider("ttml"))
 	router.HandleFunc("/kugou/getLyrics", getLyricsWithProvider("kugou"))
