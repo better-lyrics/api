@@ -162,7 +162,7 @@ func TestParseTTMLToLines_UnsyncedLyrics(t *testing.T) {
 func TestParseTTMLToLines_WordLevel(t *testing.T) {
 	// Note: Spans are on one line to avoid whitespace being treated as gap text
 	ttml := `<?xml version="1.0" encoding="UTF-8"?>
-<tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" itunes:timing="word">
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://ttml-endpoint.com/" itunes:timing="word">
 	<head>
 		<metadata xmlns:ttm="http://www.w3.org/ns/ttml#metadata">
 		</metadata>

@@ -14,7 +14,7 @@ const (
 	CachePrefix = "ttml_lyrics"
 )
 
-// TTMLProvider implements the providers.Provider interface for Apple Music TTML lyrics
+// TTMLProvider implements the providers.Provider interface for TTML lyrics
 type TTMLProvider struct{}
 
 // NewProvider creates a new TTML provider instance

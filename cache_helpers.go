@@ -97,6 +97,13 @@ func setNegativeCache(key, reason string) {
 	log.Infof("%s Cached 'no lyrics' for key: %s (reason: %s)", logcolors.LogCacheNegative, key, reason)
 }
 
+// deleteNegativeCache removes a negative cache entry (e.g., when lyrics become available via revalidate)
+func deleteNegativeCache(key string) {
+	negativeKey := "no_lyrics:" + key
+	persistentCache.Delete(negativeKey)
+	log.Infof("%s Deleted negative cache for key: %s", logcolors.LogCacheNegative, key)
+}
+
 // shouldNegativeCache determines if an error should be stored in negative cache
 // Only permanent "no lyrics" type errors should be cached, not transient failures
 func shouldNegativeCache(err error) bool {
@@ -106,9 +113,15 @@ func shouldNegativeCache(err error) bool {
 	errStr := err.Error()
 	// Permanent errors - cache these
 	permanentErrors := []string{
-		"no track found",
-		"no tracks found within",
-		"TTML content is empty",
+		"no track found",           // "no track found for query:" (singular)
+		"no tracks found",          // "no tracks found for query:", "no tracks found within"
+		"no tracks within",         // "no tracks within Xms of duration" (detailed error)
+		"no matching tracks found", // "no matching tracks found (best match score X below threshold)"
+		"No related resources",     // 404: "No related resources found for syllable-lyrics"
+		"no lyrics data found",     // Empty lyrics data from API
+		"TTML content is empty",    // Empty TTML content
+		"no songs found",           // Kugou: "no songs found for: {song} - {artist}"
+		"lyrics content is empty",  // Kugou: empty lyrics content
 	}
 	for _, pe := range permanentErrors {
 		if strings.Contains(errStr, pe) {

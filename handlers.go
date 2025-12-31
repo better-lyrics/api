@@ -263,7 +263,8 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Cache permanent "no lyrics" errors to avoid repeated API calls
-		if shouldNegativeCache(err) {
+		isPermanentError := shouldNegativeCache(err)
+		if isPermanentError {
 			setNegativeCache(cacheKey, err.Error())
 		}
 
@@ -274,7 +275,12 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		if rateLimitType != "" {
 			w.Header().Set("X-RateLimit-Type", rateLimitType)
 		}
-		w.WriteHeader(http.StatusInternalServerError)
+		// Return 404 for permanent "not found" errors, 500 for transient errors
+		if isPermanentError {
+			w.WriteHeader(http.StatusNotFound)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": err.Error(),
 		})
@@ -304,6 +310,9 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Cache-Status", "MISS")
+	if apiKeyAuthenticated {
+		w.Header().Set("X-Auth-Mode", "authenticated")
+	}
 	if rateLimitType != "" {
 		w.Header().Set("X-RateLimit-Type", rateLimitType)
 	}
@@ -508,7 +517,8 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 			log.Errorf("%s [%s] Error fetching lyrics: %v", logcolors.LogLyrics, providerName, err)
 
 			// Cache negative result
-			if shouldNegativeCache(err) {
+			isPermanentError := shouldNegativeCache(err)
+			if isPermanentError {
 				setNegativeCache(cacheKey, err.Error())
 			}
 
@@ -519,7 +529,12 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 			if rateLimitType != "" {
 				w.Header().Set("X-RateLimit-Type", rateLimitType)
 			}
-			w.WriteHeader(http.StatusInternalServerError)
+			// Return 404 for permanent "not found" errors, 500 for transient errors
+			if isPermanentError {
+				w.WriteHeader(http.StatusNotFound)
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"error":    err.Error(),
 				"provider": providerName,
@@ -554,6 +569,9 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache-Status", "MISS")
 		w.Header().Set("X-Provider", providerName)
+		if apiKeyAuthenticated {
+			w.Header().Set("X-Auth-Mode", "authenticated")
+		}
 		if rateLimitType != "" {
 			w.Header().Set("X-RateLimit-Type", rateLimitType)
 		}
@@ -1135,13 +1153,29 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 	cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
 	legacyCacheKey := buildLegacyCacheKey(songName, artistName, albumName, durationStr)
 
-	// 4. Get cached content
+	// 4. Get cached content (check positive cache first, then negative cache)
 	cached, found := getCachedLyrics(cacheKey)
 	usedKey := cacheKey
 	if !found && legacyCacheKey != cacheKey {
 		// Try legacy key
 		cached, found = getCachedLyrics(legacyCacheKey)
 		usedKey = legacyCacheKey
+	}
+
+	// Check if this was in negative cache (allows revalidation of "no lyrics" entries)
+	wasInNegativeCache := false
+	if !found {
+		if _, negFound := getNegativeCache(cacheKey); negFound {
+			wasInNegativeCache = true
+			found = true // Allow revalidation to proceed
+			usedKey = cacheKey
+		} else if legacyCacheKey != cacheKey {
+			if _, negFound := getNegativeCache(legacyCacheKey); negFound {
+				wasInNegativeCache = true
+				usedKey = legacyCacheKey
+				found = true
+			}
+		}
 	}
 
 	if !found {
@@ -1154,8 +1188,11 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Compute hash of cached content
-	oldHash := md5.Sum([]byte(cached.TTML))
+	// 5. Compute hash of cached content (empty if from negative cache)
+	var oldHash [16]byte
+	if !wasInNegativeCache {
+		oldHash = md5.Sum([]byte(cached.TTML))
+	}
 
 	// 6. Fetch fresh content
 	var durationMs int
@@ -1188,11 +1225,15 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7. Compare hashes
+	// 7. Compare hashes (if from negative cache, always treat as updated)
 	newHash := md5.Sum([]byte(ttmlString))
-	updated := oldHash != newHash
+	updated := wasInNegativeCache || oldHash != newHash
 
 	if updated {
+		// Delete negative cache if it existed
+		if wasInNegativeCache {
+			deleteNegativeCache(usedKey)
+		}
 		// Update cache with fresh content
 		setCachedLyrics(usedKey, ttmlString, trackDurationMs, score, "", false)
 		log.Infof("%s Content changed, cache updated for: %s", logcolors.LogRevalidate, usedKey)
@@ -1203,7 +1244,8 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 	// 8. Return result
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"updated":  updated,
-		"cacheKey": usedKey,
+		"updated":           updated,
+		"cacheKey":          usedKey,
+		"wasNegativeCache":  wasInNegativeCache,
 	})
 }
