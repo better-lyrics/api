@@ -945,7 +945,7 @@ func helpHandler(w http.ResponseWriter, r *http.Request) {
 			"s, song, songName":     "Song name (required)",
 			"a, artist, artistName": "Artist name (required)",
 			"al, album, albumName":  "Album name (optional, improves matching)",
-			"d, duration":           "Duration in milliseconds (optional, improves matching)",
+			"d, duration":           "Duration in seconds (optional, improves matching)",
 		},
 		"example": "/getLyrics?s=Shape%20of%20You&a=Ed%20Sheeran",
 		"notes":   "The API uses provider-specific matching algorithms. Providing more parameters improves accuracy.",
