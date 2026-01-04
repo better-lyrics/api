@@ -935,11 +935,10 @@ func helpHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"help": "Lyrics API with multiple provider support",
 		"endpoints": map[string]string{
-			"/getLyrics":        "Default provider (configurable via DEFAULT_PROVIDER env)",
+			"/getLyrics":        "Default provider (TTML)",
 			"/ttml/getLyrics":   "TTML provider (word-level timing)",
 			"/kugou/getLyrics":  "Kugou provider (line-level timing)",
 			"/legacy/getLyrics": "Legacy Spotify-based provider",
-			"/revalidate":       "Check if cached lyrics are stale and update if needed (requires API key)",
 		},
 		"parameters": map[string]string{
 			"s, song, songName":     "Song name (required)",
