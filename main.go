@@ -90,7 +90,7 @@ func main() {
 	}
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"https://music.youtube.com", "http://localhost:3000"},
+		AllowedOrigins:   []string{"https://music.youtube.com", "http://localhost:3000","http://localhost:4321","https://docs.better-lyrics.boidu.dev"},
 		AllowCredentials: true,
 	})
 
