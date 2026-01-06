@@ -934,6 +934,7 @@ func helpHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"help": "Lyrics API with multiple provider support",
+		"docs": "https://lyrics-api-docs.boidu.dev",
 		"endpoints": map[string]string{
 			"/getLyrics":        "Default provider (TTML)",
 			"/ttml/getLyrics":   "TTML provider (word-level timing)",
