@@ -457,3 +457,314 @@ func TestBuildLegacyCacheKey(t *testing.T) {
 		})
 	}
 }
+
+// Tests for fuzzy duration cache matching
+
+func TestGetCachedLyricsWithDurationTolerance_ExactMatch(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Cache a song with duration 232s
+	cacheKey := buildNormalizedCacheKey("Shape of You", "Ed Sheeran", "", "232")
+	ttml := "<tt>test ttml content</tt>"
+	setCachedLyrics(cacheKey, ttml, 232000, 0.95, "en", false)
+
+	// Request with exact duration should find it
+	cached, foundKey, found := getCachedLyricsWithDurationTolerance("Shape of You", "Ed Sheeran", "", "232")
+	if !found {
+		t.Error("Expected to find cached lyrics with exact duration match")
+	}
+	if foundKey != cacheKey {
+		t.Errorf("Expected key %q, got %q", cacheKey, foundKey)
+	}
+	if cached.TTML != ttml {
+		t.Errorf("Expected TTML %q, got %q", ttml, cached.TTML)
+	}
+}
+
+func TestGetCachedLyricsWithDurationTolerance_FuzzyMatch(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Cache a song with duration 232s
+	cacheKey := buildNormalizedCacheKey("Shape of You", "Ed Sheeran", "", "232")
+	ttml := "<tt>test ttml content</tt>"
+	setCachedLyrics(cacheKey, ttml, 232000, 0.95, "en", false)
+
+	tests := []struct {
+		name            string
+		requestDuration string
+		shouldFind      bool
+	}{
+		{
+			name:            "Request 231s (1s less) - within 2s tolerance",
+			requestDuration: "231",
+			shouldFind:      true,
+		},
+		{
+			name:            "Request 233s (1s more) - within 2s tolerance",
+			requestDuration: "233",
+			shouldFind:      true,
+		},
+		{
+			name:            "Request 230s (2s less) - at edge of 2s tolerance",
+			requestDuration: "230",
+			shouldFind:      true,
+		},
+		{
+			name:            "Request 234s (2s more) - at edge of 2s tolerance",
+			requestDuration: "234",
+			shouldFind:      true,
+		},
+		{
+			name:            "Request 229s (3s less) - outside 2s tolerance",
+			requestDuration: "229",
+			shouldFind:      false,
+		},
+		{
+			name:            "Request 235s (3s more) - outside 2s tolerance",
+			requestDuration: "235",
+			shouldFind:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cached, foundKey, found := getCachedLyricsWithDurationTolerance("Shape of You", "Ed Sheeran", "", tt.requestDuration)
+
+			if found != tt.shouldFind {
+				t.Errorf("Expected found=%v, got found=%v", tt.shouldFind, found)
+				return
+			}
+
+			if tt.shouldFind {
+				if cached == nil {
+					t.Error("Expected non-nil cached lyrics")
+					return
+				}
+				if cached.TTML != ttml {
+					t.Errorf("Expected TTML %q, got %q", ttml, cached.TTML)
+				}
+				if foundKey != cacheKey {
+					t.Errorf("Expected foundKey %q, got %q", cacheKey, foundKey)
+				}
+			}
+		})
+	}
+}
+
+func TestGetCachedLyricsWithDurationTolerance_ClosestMatch(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Cache songs with durations 230s and 234s
+	cacheKey230 := buildNormalizedCacheKey("Test Song", "Test Artist", "", "230")
+	cacheKey234 := buildNormalizedCacheKey("Test Song", "Test Artist", "", "234")
+
+	setCachedLyrics(cacheKey230, "<tt>230s version</tt>", 230000, 0.95, "en", false)
+	setCachedLyrics(cacheKey234, "<tt>234s version</tt>", 234000, 0.95, "en", false)
+
+	// Request 232s - should find 230s (both are 2s away, but we check lower first)
+	// Actually with our implementation, we check in order: 231, 233, 230, 234
+	// So for 232, we'd check 231 (miss), 233 (miss), 230 (hit!)
+	cached, foundKey, found := getCachedLyricsWithDurationTolerance("Test Song", "Test Artist", "", "232")
+	if !found {
+		t.Error("Expected to find cached lyrics")
+		return
+	}
+	// Should find 230s since it's checked first at offset 2
+	if foundKey != cacheKey230 {
+		t.Errorf("Expected to find %q, got %q", cacheKey230, foundKey)
+	}
+	if cached.TTML != "<tt>230s version</tt>" {
+		t.Errorf("Expected 230s version, got %q", cached.TTML)
+	}
+}
+
+func TestGetCachedLyricsWithDurationTolerance_NoDuration(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Cache a song without duration
+	cacheKey := buildNormalizedCacheKey("Shape of You", "Ed Sheeran", "", "")
+	ttml := "<tt>test ttml content</tt>"
+	setCachedLyrics(cacheKey, ttml, 0, 0.95, "en", false)
+
+	// Request without duration should find it
+	cached, foundKey, found := getCachedLyricsWithDurationTolerance("Shape of You", "Ed Sheeran", "", "")
+	if !found {
+		t.Error("Expected to find cached lyrics without duration")
+	}
+	if foundKey != cacheKey {
+		t.Errorf("Expected key %q, got %q", cacheKey, foundKey)
+	}
+	if cached.TTML != ttml {
+		t.Errorf("Expected TTML %q, got %q", ttml, cached.TTML)
+	}
+}
+
+func TestGetCachedLyricsWithDurationTolerance_LegacyKeyFallback(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Store with legacy key format (uppercase, trailing space)
+	legacyKey := buildLegacyCacheKey("Shape of You", "Ed Sheeran", "", "232")
+	ttml := "<tt>legacy format</tt>"
+
+	// Manually store with legacy key
+	cachedLyrics := CachedLyrics{
+		TTML:            ttml,
+		TrackDurationMs: 232000,
+		Score:           0.95,
+	}
+	data, _ := json.Marshal(cachedLyrics)
+	persistentCache.Set(legacyKey, string(data))
+
+	// Request with normalized format should find the legacy entry
+	cached, foundKey, found := getCachedLyricsWithDurationTolerance("Shape of You", "Ed Sheeran", "", "232")
+	if !found {
+		t.Error("Expected to find cached lyrics via legacy key fallback")
+	}
+	if foundKey != legacyKey {
+		t.Errorf("Expected legacy key %q, got %q", legacyKey, foundKey)
+	}
+	if cached.TTML != ttml {
+		t.Errorf("Expected TTML %q, got %q", ttml, cached.TTML)
+	}
+}
+
+func TestGetNegativeCacheWithDurationTolerance_ExactMatch(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Set negative cache for duration 232s
+	cacheKey := buildNormalizedCacheKey("Unknown Song", "Unknown Artist", "", "232")
+	reason := "no track found"
+	setNegativeCache(cacheKey, reason)
+
+	// Request with exact duration should find it
+	foundReason, foundKey, found := getNegativeCacheWithDurationTolerance("Unknown Song", "Unknown Artist", "", "232")
+	if !found {
+		t.Error("Expected to find negative cache with exact duration match")
+	}
+	if foundKey != cacheKey {
+		t.Errorf("Expected key %q, got %q", cacheKey, foundKey)
+	}
+	if foundReason != reason {
+		t.Errorf("Expected reason %q, got %q", reason, foundReason)
+	}
+}
+
+func TestGetNegativeCacheWithDurationTolerance_FuzzyMatch(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Set negative cache for duration 232s
+	cacheKey := buildNormalizedCacheKey("Unknown Song", "Unknown Artist", "", "232")
+	reason := "no track found"
+	setNegativeCache(cacheKey, reason)
+
+	tests := []struct {
+		name            string
+		requestDuration string
+		shouldFind      bool
+	}{
+		{
+			name:            "Request 231s (1s less) - within 2s tolerance",
+			requestDuration: "231",
+			shouldFind:      true,
+		},
+		{
+			name:            "Request 233s (1s more) - within 2s tolerance",
+			requestDuration: "233",
+			shouldFind:      true,
+		},
+		{
+			name:            "Request 229s (3s less) - outside 2s tolerance",
+			requestDuration: "229",
+			shouldFind:      false,
+		},
+		{
+			name:            "Request 235s (3s more) - outside 2s tolerance",
+			requestDuration: "235",
+			shouldFind:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			foundReason, foundKey, found := getNegativeCacheWithDurationTolerance("Unknown Song", "Unknown Artist", "", tt.requestDuration)
+
+			if found != tt.shouldFind {
+				t.Errorf("Expected found=%v, got found=%v", tt.shouldFind, found)
+				return
+			}
+
+			if tt.shouldFind {
+				if foundReason != reason {
+					t.Errorf("Expected reason %q, got %q", reason, foundReason)
+				}
+				if foundKey != cacheKey {
+					t.Errorf("Expected foundKey %q, got %q", cacheKey, foundKey)
+				}
+			}
+		})
+	}
+}
+
+func TestGetNegativeCacheWithDurationTolerance_NoDuration(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Set negative cache without duration
+	cacheKey := buildNormalizedCacheKey("Unknown Song", "Unknown Artist", "", "")
+	reason := "no track found"
+	setNegativeCache(cacheKey, reason)
+
+	// Request without duration should find it
+	foundReason, foundKey, found := getNegativeCacheWithDurationTolerance("Unknown Song", "Unknown Artist", "", "")
+	if !found {
+		t.Error("Expected to find negative cache without duration")
+	}
+	if foundKey != cacheKey {
+		t.Errorf("Expected key %q, got %q", cacheKey, foundKey)
+	}
+	if foundReason != reason {
+		t.Errorf("Expected reason %q, got %q", reason, foundReason)
+	}
+}
+
+func TestGetCachedLyricsWithDurationTolerance_ZeroDuration(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Cache a song with duration 2s (edge case near zero)
+	cacheKey := buildNormalizedCacheKey("Short Song", "Artist", "", "2")
+	ttml := "<tt>short song</tt>"
+	setCachedLyrics(cacheKey, ttml, 2000, 0.95, "en", false)
+
+	// Request with 0s should find it (2s is within tolerance)
+	cached, _, found := getCachedLyricsWithDurationTolerance("Short Song", "Artist", "", "0")
+	if !found {
+		t.Error("Expected to find cached lyrics for 0s request when 2s is cached")
+	}
+	if cached.TTML != ttml {
+		t.Errorf("Expected TTML %q, got %q", ttml, cached.TTML)
+	}
+}
+
+func TestGetCachedLyricsWithDurationTolerance_InvalidDuration(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Cache a song with valid duration
+	cacheKey := buildNormalizedCacheKey("Test Song", "Test Artist", "", "232")
+	setCachedLyrics(cacheKey, "<tt>test</tt>", 232000, 0.95, "en", false)
+
+	// Request with invalid duration string should not find fuzzy match
+	// (only exact match would work, which won't exist for "abc")
+	_, _, found := getCachedLyricsWithDurationTolerance("Test Song", "Test Artist", "", "abc")
+	if found {
+		t.Error("Expected not to find cached lyrics with invalid duration")
+	}
+}

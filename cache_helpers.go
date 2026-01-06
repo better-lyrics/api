@@ -32,6 +32,155 @@ func getCachedLyrics(key string) (*CachedLyrics, bool) {
 	return &CachedLyrics{TTML: cached}, true
 }
 
+// getCachedLyricsWithDurationTolerance looks up cached lyrics with fuzzy duration matching.
+// When a duration is provided, it first tries the exact key, then checks keys within
+// the configured duration tolerance (DURATION_MATCH_DELTA_MS, default 2000ms = 2 seconds).
+// Returns the cached lyrics, the actual cache key used, and whether a match was found.
+// If multiple matches exist within the tolerance, returns the closest duration match.
+func getCachedLyricsWithDurationTolerance(songName, artistName, albumName, durationStr string) (*CachedLyrics, string, bool) {
+	// Build the exact key first
+	exactKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
+
+	// Try exact match first (most common case - no extra overhead)
+	if cached, ok := getCachedLyrics(exactKey); ok {
+		return cached, exactKey, true
+	}
+
+	// Also check legacy key for exact match
+	legacyKey := buildLegacyCacheKey(songName, artistName, albumName, durationStr)
+	if legacyKey != exactKey {
+		if cached, ok := getCachedLyrics(legacyKey); ok {
+			return cached, legacyKey, true
+		}
+	}
+
+	// If no duration provided, no fuzzy matching possible
+	if durationStr == "" {
+		return nil, exactKey, false
+	}
+
+	// Parse duration and calculate tolerance range
+	var durationSec int
+	if _, err := fmt.Sscanf(durationStr, "%d", &durationSec); err != nil {
+		return nil, exactKey, false
+	}
+
+	// Get delta from config (in ms), convert to seconds
+	deltaMs := conf.Configuration.DurationMatchDeltaMs
+	deltaSec := deltaMs / 1000
+	if deltaSec < 1 {
+		deltaSec = 1 // Minimum 1 second tolerance
+	}
+
+	// Track best match (closest to requested duration)
+	var bestMatch *CachedLyrics
+	var bestKey string
+	var bestDiff int = deltaSec + 1 // Start with diff larger than delta
+
+	// Check keys within ±deltaSec range (excluding exact match already tried)
+	for offset := 1; offset <= deltaSec; offset++ {
+		// Check duration - offset
+		if durationSec-offset >= 0 {
+			testDuration := fmt.Sprintf("%d", durationSec-offset)
+			testKey := buildNormalizedCacheKey(songName, artistName, albumName, testDuration)
+			if cached, ok := getCachedLyrics(testKey); ok {
+				if offset < bestDiff {
+					bestMatch = cached
+					bestKey = testKey
+					bestDiff = offset
+				}
+			}
+		}
+
+		// Check duration + offset
+		testDuration := fmt.Sprintf("%d", durationSec+offset)
+		testKey := buildNormalizedCacheKey(songName, artistName, albumName, testDuration)
+		if cached, ok := getCachedLyrics(testKey); ok {
+			if offset < bestDiff {
+				bestMatch = cached
+				bestKey = testKey
+				bestDiff = offset
+			}
+		}
+
+		// Early exit if we found a match at this offset (can't get closer)
+		if bestDiff == offset {
+			break
+		}
+	}
+
+	if bestMatch != nil {
+		log.Infof("%s Fuzzy duration match: requested %ss, found %s (diff: %ds)",
+			logcolors.LogCacheLyrics, durationStr, bestKey, bestDiff)
+		return bestMatch, bestKey, true
+	}
+
+	return nil, exactKey, false
+}
+
+// getNegativeCacheWithDurationTolerance checks negative cache with fuzzy duration matching.
+// Similar to getCachedLyricsWithDurationTolerance but for negative cache entries.
+func getNegativeCacheWithDurationTolerance(songName, artistName, albumName, durationStr string) (string, string, bool) {
+	// Build the exact key first
+	exactKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
+
+	// Try exact match first
+	if reason, ok := getNegativeCache(exactKey); ok {
+		return reason, exactKey, true
+	}
+
+	// Also check legacy key for exact match
+	legacyKey := buildLegacyCacheKey(songName, artistName, albumName, durationStr)
+	if legacyKey != exactKey {
+		if reason, ok := getNegativeCache(legacyKey); ok {
+			return reason, legacyKey, true
+		}
+	}
+
+	// If no duration provided, no fuzzy matching possible
+	if durationStr == "" {
+		return "", exactKey, false
+	}
+
+	// Parse duration and calculate tolerance range
+	var durationSec int
+	if _, err := fmt.Sscanf(durationStr, "%d", &durationSec); err != nil {
+		return "", exactKey, false
+	}
+
+	// Get delta from config (in ms), convert to seconds
+	deltaMs := conf.Configuration.DurationMatchDeltaMs
+	deltaSec := deltaMs / 1000
+	if deltaSec < 1 {
+		deltaSec = 1
+	}
+
+	// Check keys within ±deltaSec range
+	for offset := 1; offset <= deltaSec; offset++ {
+		// Check duration - offset
+		if durationSec-offset >= 0 {
+			testDuration := fmt.Sprintf("%d", durationSec-offset)
+			testKey := buildNormalizedCacheKey(songName, artistName, albumName, testDuration)
+			if reason, ok := getNegativeCache(testKey); ok {
+				log.Infof("%s Fuzzy negative cache match: requested %ss, found %s",
+					logcolors.LogCacheNegative, durationStr, testKey)
+				return reason, testKey, true
+			}
+		}
+
+		// Check duration + offset
+		testDuration := fmt.Sprintf("%d", durationSec+offset)
+		testKey := buildNormalizedCacheKey(songName, artistName, albumName, testDuration)
+		if reason, ok := getNegativeCache(testKey); ok {
+			log.Infof("%s Fuzzy negative cache match: requested %ss, found %s",
+				logcolors.LogCacheNegative, durationStr, testKey)
+			return reason, testKey, true
+		}
+	}
+
+	return "", exactKey, false
+}
+
 // setCachedLyrics stores lyrics with full metadata
 func setCachedLyrics(key, lyrics string, trackDurationMs int, score float64, language string, isRTL bool) {
 	cachedLyrics := CachedLyrics{

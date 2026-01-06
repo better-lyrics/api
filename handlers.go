@@ -36,7 +36,6 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	// Use normalized cache key for consistent cache hits regardless of input casing/whitespace
 	cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
-	legacyCacheKey := buildLegacyCacheKey(songName, artistName, albumName, durationStr)
 
 	// For logging, use a clean query string
 	query := strings.ToLower(strings.TrimSpace(songName)) + " " + strings.ToLower(strings.TrimSpace(artistName))
@@ -48,48 +47,29 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	apiKeyRequired, _ := r.Context().Value(apiKeyRequiredForFreshKey).(bool)
 	apiKeyInvalid, _ := r.Context().Value(apiKeyInvalidKey).(bool)
 
-	// Check cache first (normalized key, then legacy key for backwards compatibility)
-	if cached, ok := getCachedLyrics(cacheKey); ok {
+	// Check cache first with fuzzy duration matching (handles normalized + legacy keys)
+	// This allows cache hits when duration differs by up to DURATION_MATCH_DELTA_MS (default 2s)
+	if cached, foundKey, ok := getCachedLyricsWithDurationTolerance(songName, artistName, albumName, durationStr); ok {
 		stats.Get().RecordCacheHit()
-		log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
+		if foundKey != cacheKey {
+			log.Infof("%s Found cached TTML via fuzzy duration match: %s", logcolors.LogCacheLyrics, foundKey)
+		} else {
+			log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
+		}
 		Respond(w, r).SetCacheStatus("HIT").JSON(map[string]interface{}{
 			"ttml": cached.TTML,
 		})
 		return
 	}
 
-	// Check legacy cache key (backwards compatibility - use /cache/migrate to convert)
-	if legacyCacheKey != cacheKey {
-		if cached, ok := getCachedLyrics(legacyCacheKey); ok {
-			stats.Get().RecordCacheHit()
-			log.Infof("%s Found cached TTML under legacy key", logcolors.LogCacheLyrics)
-			Respond(w, r).SetCacheStatus("HIT").JSON(map[string]interface{}{
-				"ttml": cached.TTML,
-			})
-			return
-		}
-	}
-
-	// Check negative cache (known "no lyrics" responses)
-	if reason, found := getNegativeCache(cacheKey); found {
+	// Check negative cache with fuzzy duration matching
+	if reason, _, found := getNegativeCacheWithDurationTolerance(songName, artistName, albumName, durationStr); found {
 		stats.Get().RecordNegativeCacheHit()
 		log.Infof("%s Returning cached 'no lyrics' response for: %s", logcolors.LogCacheNegative, query)
 		Respond(w, r).SetCacheStatus("NEGATIVE_HIT").Error(http.StatusNotFound, map[string]interface{}{
 			"error": reason,
 		})
 		return
-	}
-
-	// Check legacy negative cache (backwards compatibility)
-	if legacyCacheKey != cacheKey {
-		if reason, found := getNegativeCache(legacyCacheKey); found {
-			stats.Get().RecordNegativeCacheHit()
-			log.Infof("%s Returning cached 'no lyrics' (legacy key) for: %s", logcolors.LogCacheNegative, query)
-			Respond(w, r).SetCacheStatus("NEGATIVE_HIT").Error(http.StatusNotFound, map[string]interface{}{
-				"error": reason,
-			})
-			return
-		}
 	}
 
 	// If API key is required for fresh fetch but not provided/invalid, return 401
