@@ -221,6 +221,8 @@ func getNegativeCache(key string) (string, bool) {
 	expirationTime := entry.Timestamp + int64(ttlDays*24*60*60)
 	if time.Now().Unix() > expirationTime {
 		// Expired - delete and return not found
+		ageDays := (time.Now().Unix() - entry.Timestamp) / (24 * 60 * 60)
+		log.Infof("%s TTL expired for key: %s (age: %dd, reason was: %s)", logcolors.LogCacheNegative, key, ageDays, entry.Reason)
 		persistentCache.Delete(negativeKey)
 		return "", false
 	}
