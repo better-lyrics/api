@@ -86,12 +86,12 @@ func GetHealthStatuses() map[string]*MUTHealthStatus {
 	defer healthMu.RUnlock()
 
 	// Return a copy to avoid race conditions
-	copy := make(map[string]*MUTHealthStatus)
+	result := make(map[string]*MUTHealthStatus, len(healthStatuses))
 	for k, v := range healthStatuses {
 		statusCopy := *v
-		copy[k] = &statusCopy
+		result[k] = &statusCopy
 	}
-	return copy
+	return result
 }
 
 // StartHealthCheckScheduler runs health checks daily

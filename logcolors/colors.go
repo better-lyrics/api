@@ -32,11 +32,10 @@ const (
 	LogRevalidate    = Cyan + "[Revalidate]" + Reset
 )
 
-// Rate limiting and monitoring log prefixes
+// Rate limiting log prefixes
 const (
-	LogRateLimit    = Purple + "[RateLimit]" + Reset
-	LogTokenMonitor = Cyan + "[Token Monitor]" + Reset
-	LogAPIKey       = Purple + "[APIKey]" + Reset
+	LogRateLimit = Purple + "[RateLimit]" + Reset
+	LogAPIKey    = Purple + "[APIKey]" + Reset
 )
 
 // CircuitBreakerPrefix returns a colored circuit breaker prefix with the given name

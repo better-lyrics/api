@@ -224,13 +224,6 @@ func PublishServerStartupFailed(component string, err error) {
 	GetEventBus().Publish(event)
 }
 
-// MUTHealthInfo represents MUT health information passed to the notification system
-// This is a simple struct to avoid circular imports with the ttml package
-type MUTHealthInfo struct {
-	AccountName string
-	LastError   string
-}
-
 // PublishMUTHealthCheckFailed publishes when MUT health check detects unhealthy accounts
 func PublishMUTHealthCheckFailed(unhealthyAccounts interface{}) {
 	event := NewEvent(EventMUTHealthCheckFailed, SeverityCritical,

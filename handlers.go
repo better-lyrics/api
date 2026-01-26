@@ -722,7 +722,6 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") == conf.Configuration.CacheAccessToken && conf.Configuration.CacheAccessToken != "" {
 		var tokenStatuses []map[string]interface{}
 		overallHealthy := true
-		warningThreshold := 7
 
 		// Include shared bearer token status
 		bearerExpiry, bearerRemaining, bearerNeedsRefresh := ttml.GetTokenStatus()
@@ -743,7 +742,8 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		tokenStatuses = append(tokenStatuses, bearerStatus)
 
-		// Include ALL MUT accounts (same as before, but with out_of_service handling)
+		// Include ALL MUT accounts - use health check status (MUTs are not JWTs)
+		healthStatuses := ttml.GetHealthStatuses()
 		for _, acc := range allAccounts {
 			tokenStatus := map[string]interface{}{
 				"name": acc.Name,
@@ -758,24 +758,20 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			expirationDate, err := notifier.GetExpirationDate(acc.MediaUserToken)
-			if err != nil {
-				tokenStatus["status"] = "error"
-				tokenStatus["error"] = err.Error()
-				overallHealthy = false
-			} else {
-				daysRemaining := int(time.Until(expirationDate).Hours() / 24)
-				tokenStatus["expires"] = expirationDate.Format("2006-01-02 15:04:05")
-				tokenStatus["days_remaining"] = daysRemaining
-
-				if daysRemaining <= 0 {
-					tokenStatus["status"] = "expired"
-					overallHealthy = false
-				} else if daysRemaining <= warningThreshold {
-					tokenStatus["status"] = "expiring_soon"
-				} else {
+			// Get health status from canary check instead of JWT parsing
+			// MUTs are opaque Apple credentials, not JWTs - cannot parse expiry
+			if status, ok := healthStatuses[acc.Name]; ok {
+				tokenStatus["last_checked"] = status.LastChecked.Format(time.RFC3339)
+				if status.Healthy {
 					tokenStatus["status"] = "healthy"
+				} else {
+					tokenStatus["status"] = "unhealthy"
+					tokenStatus["last_error"] = status.LastError
+					overallHealthy = false
 				}
+			} else {
+				tokenStatus["status"] = "unknown"
+				tokenStatus["note"] = "health check not yet run"
 			}
 
 			tokenStatuses = append(tokenStatuses, tokenStatus)
@@ -805,11 +801,11 @@ func handleMUTHealth(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("refresh") == "true" {
 		results := ttml.CheckAllMUTHealth()
 		response := make(map[string]interface{})
-		for _, r := range results {
-			response[r.AccountName] = map[string]interface{}{
-				"healthy":      r.Healthy,
-				"last_checked": r.LastChecked.Format(time.RFC3339),
-				"last_error":   r.LastError,
+		for _, status := range results {
+			response[status.AccountName] = map[string]interface{}{
+				"healthy":      status.Healthy,
+				"last_checked": status.LastChecked.Format(time.RFC3339),
+				"last_error":   status.LastError,
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -926,6 +922,9 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 		var accountInfos []map[string]interface{}
 		var infoLines []string
 
+		// Get health statuses from canary checks (MUTs are not JWTs)
+		healthStatuses := ttml.GetHealthStatuses()
+
 		for _, acc := range allAccounts {
 			if acc.OutOfService {
 				infoLines = append(infoLines, fmt.Sprintf("%s: Out of service (empty MUT)", acc.Name))
@@ -937,21 +936,28 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			expirationDate, err := notifier.GetExpirationDate(acc.MediaUserToken)
-			if err != nil {
-				infoLines = append(infoLines, fmt.Sprintf("%s: Error - %v", acc.Name, err))
+			// Use health check status instead of JWT parsing
+			// MUTs are opaque Apple credentials, not JWTs
+			if status, ok := healthStatuses[acc.Name]; ok {
+				statusStr := "healthy"
+				if !status.Healthy {
+					statusStr = fmt.Sprintf("unhealthy (%s)", status.LastError)
+				}
+				infoLines = append(infoLines, fmt.Sprintf("%s (MUT): %s (checked %s)",
+					acc.Name, statusStr, status.LastChecked.Format("2006-01-02 15:04")))
 				accountInfos = append(accountInfos, map[string]interface{}{
-					"name":  acc.Name,
-					"error": err.Error(),
+					"name":         acc.Name,
+					"status":       statusStr,
+					"healthy":      status.Healthy,
+					"last_checked": status.LastChecked.Format(time.RFC3339),
+					"last_error":   status.LastError,
 				})
 			} else {
-				daysUntilExpiration := int(time.Until(expirationDate).Hours() / 24)
-				infoLines = append(infoLines, fmt.Sprintf("%s (MUT): %d days remaining (expires %s)",
-					acc.Name, daysUntilExpiration, expirationDate.Format("2006-01-02")))
+				infoLines = append(infoLines, fmt.Sprintf("%s (MUT): health check not yet run", acc.Name))
 				accountInfos = append(accountInfos, map[string]interface{}{
-					"name":                  acc.Name,
-					"mut_expires":           expirationDate.Format("2006-01-02 15:04:05"),
-					"days_until_expiration": daysUntilExpiration,
+					"name":   acc.Name,
+					"status": "unknown",
+					"note":   "health check not yet run",
 				})
 			}
 		}
@@ -961,8 +967,7 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 			"Current date:         %s\n"+
 				"Accounts configured:  %d (active: %d, out of service: %d)\n\n"+
 				"Account Status:\n  %s\n\n"+
-				"Warning threshold:    7 days before expiration\n"+
-				"Reminder frequency:   Daily until updated",
+				"Note: MUT validity is checked via canary requests, not JWT expiry",
 			now.Format("2006-01-02 15:04:05"),
 			len(allAccounts),
 			len(activeAccounts),
@@ -971,11 +976,11 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 		)
 
 		tokenDetails = map[string]interface{}{
-			"current_date":             now.Format("2006-01-02 15:04:05"),
-			"accounts_configured":      len(allAccounts),
-			"accounts_active":          len(activeAccounts),
-			"accounts_out_of_service":  outOfServiceCount,
-			"accounts":                 accountInfos,
+			"current_date":            now.Format("2006-01-02 15:04:05"),
+			"accounts_configured":     len(allAccounts),
+			"accounts_active":         len(activeAccounts),
+			"accounts_out_of_service": outOfServiceCount,
+			"accounts":                accountInfos,
 		}
 	}
 

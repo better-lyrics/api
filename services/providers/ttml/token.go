@@ -28,7 +28,6 @@ var (
 // JWTClaims represents the relevant claims from the bearer token
 type JWTClaims struct {
 	Exp int64 `json:"exp"` // Expiration time (Unix timestamp)
-	Iat int64 `json:"iat"` // Issued at time
 }
 
 // GetBearerToken returns the current bearer token, scraping a fresh one if expired or near expiry
@@ -43,13 +42,10 @@ func GetBearerToken() (string, error) {
 	return refreshBearerToken()
 }
 
-// isTokenExpiringSoon checks if the token will expire within the refresh threshold
-// Must be called with at least a read lock held
+// isTokenExpiringSoon checks if the token will expire within the refresh threshold.
+// Note: This function does not acquire locks - caller must hold at least a read lock.
 func isTokenExpiringSoon() bool {
-	if tokenExpiry.IsZero() {
-		return true
-	}
-	return time.Now().Add(refreshThreshold).After(tokenExpiry)
+	return tokenExpiry.IsZero() || time.Now().Add(refreshThreshold).After(tokenExpiry)
 }
 
 // GetTokenStatus returns the current token's expiry status for monitoring
@@ -71,7 +67,7 @@ func refreshBearerToken() (string, error) {
 	defer tokenMu.Unlock()
 
 	// Double-check after acquiring write lock
-	if bearerToken != "" && !isTokenExpiringSoonUnsafe() {
+	if bearerToken != "" && !isTokenExpiringSoon() {
 		return bearerToken, nil
 	}
 
@@ -100,14 +96,6 @@ func refreshBearerToken() (string, error) {
 	return token, nil
 }
 
-// isTokenExpiringSoonUnsafe is like isTokenExpiringSoon but doesn't check locks
-// Only call when write lock is already held
-func isTokenExpiringSoonUnsafe() bool {
-	if tokenExpiry.IsZero() {
-		return true
-	}
-	return time.Now().Add(refreshThreshold).After(tokenExpiry)
-}
 
 // parseJWTExpiry extracts the expiration time from a JWT token
 func parseJWTExpiry(token string) (time.Time, error) {
@@ -164,7 +152,10 @@ func scrapeToken() (string, error) {
 	// 1. Fetch upstream provider's browse page
 	client := &http.Client{Timeout: 15 * time.Second}
 
-	req, _ := http.NewRequest("GET", baseURL+browsePath, nil)
+	req, err := http.NewRequest("GET", baseURL+browsePath, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create browse request: %w", err)
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
@@ -178,7 +169,10 @@ func scrapeToken() (string, error) {
 		return "", fmt.Errorf("token source returned status %d", resp.StatusCode)
 	}
 
-	html, _ := io.ReadAll(resp.Body)
+	html, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read token source response: %w", err)
+	}
 
 	// 2. Extract JS bundle path
 	jsPathRe := regexp.MustCompile(`/assets/index[~\-][a-zA-Z0-9]+\.js`)
@@ -190,7 +184,10 @@ func scrapeToken() (string, error) {
 	log.Debugf("%s Found JS bundle: %s", logcolors.LogBearerToken, jsPath)
 
 	// 3. Fetch JS bundle
-	jsReq, _ := http.NewRequest("GET", baseURL+jsPath, nil)
+	jsReq, err := http.NewRequest("GET", baseURL+jsPath, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create JS bundle request: %w", err)
+	}
 	jsReq.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
 
 	jsResp, err := client.Do(jsReq)
@@ -199,7 +196,10 @@ func scrapeToken() (string, error) {
 	}
 	defer jsResp.Body.Close()
 
-	jsContent, _ := io.ReadAll(jsResp.Body)
+	jsContent, err := io.ReadAll(jsResp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read JS bundle: %w", err)
+	}
 
 	// 4. Extract JWT token - look for ES256 signed developer token
 	tokenRe := regexp.MustCompile(`"(eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6[^"]+)"`)
