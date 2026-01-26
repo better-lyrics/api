@@ -13,7 +13,7 @@ import (
 
 const (
 	// HealthCheckSongID is a known song ID that has lyrics - used as health check canary
-	// "Viva la Vida" by Coldplay - a popular song that should always have lyrics
+	// "Breathe in the air" by Pink Floyd - a popular song that should always have lyrics
 	HealthCheckSongID = "1065973704"
 
 	// HealthCheckInterval is the time between health checks
