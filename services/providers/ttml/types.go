@@ -20,9 +20,10 @@ type Syllable = providers.Syllable
 // ACCOUNT MANAGEMENT TYPES
 // =============================================================================
 
+// MusicAccount represents a single TTML API account.
+// Bearer token is now shared and auto-scraped - only MUT is per-account.
 type MusicAccount struct {
 	NameID         string
-	BearerToken    string
 	MediaUserToken string
 	Storefront     string
 }

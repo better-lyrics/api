@@ -8,9 +8,9 @@ import (
 
 func TestAccountManager_GetNextAccount_RoundRobin(t *testing.T) {
 	accounts := []MusicAccount{
-		{NameID: "Account1", BearerToken: "token1"},
-		{NameID: "Account2", BearerToken: "token2"},
-		{NameID: "Account3", BearerToken: "token3"},
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
+		{NameID: "Account3", MediaUserToken: "mut3"},
 	}
 
 	manager := &AccountManager{
@@ -31,7 +31,7 @@ func TestAccountManager_GetNextAccount_RoundRobin(t *testing.T) {
 
 func TestAccountManager_SingleAccount(t *testing.T) {
 	accounts := []MusicAccount{
-		{NameID: "OnlyAccount", BearerToken: "token"},
+		{NameID: "OnlyAccount", MediaUserToken: "mut"},
 	}
 
 	manager := &AccountManager{
@@ -151,16 +151,12 @@ func TestAccountManager_ConcurrentAccess(t *testing.T) {
 func TestMusicAccount_Fields(t *testing.T) {
 	account := MusicAccount{
 		NameID:         "TestAccount",
-		BearerToken:    "test_bearer_token_123",
 		MediaUserToken: "test_media_token_456",
 		Storefront:     "us",
 	}
 
 	if account.NameID != "TestAccount" {
 		t.Errorf("Expected NameID 'TestAccount', got %q", account.NameID)
-	}
-	if account.BearerToken != "test_bearer_token_123" {
-		t.Errorf("Expected BearerToken 'test_bearer_token_123', got %q", account.BearerToken)
 	}
 	if account.MediaUserToken != "test_media_token_456" {
 		t.Errorf("Expected MediaUserToken 'test_media_token_456', got %q", account.MediaUserToken)
@@ -172,9 +168,9 @@ func TestMusicAccount_Fields(t *testing.T) {
 
 func TestAccountManager_Quarantine(t *testing.T) {
 	accounts := []MusicAccount{
-		{NameID: "Account1", BearerToken: "token1"},
-		{NameID: "Account2", BearerToken: "token2"},
-		{NameID: "Account3", BearerToken: "token3"},
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
+		{NameID: "Account3", MediaUserToken: "mut3"},
 	}
 
 	manager := &AccountManager{
@@ -212,8 +208,8 @@ func TestAccountManager_Quarantine(t *testing.T) {
 
 func TestAccountManager_QuarantineAllAccounts(t *testing.T) {
 	accounts := []MusicAccount{
-		{NameID: "Account1", BearerToken: "token1"},
-		{NameID: "Account2", BearerToken: "token2"},
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
 	}
 
 	manager := &AccountManager{
@@ -235,8 +231,8 @@ func TestAccountManager_QuarantineAllAccounts(t *testing.T) {
 
 func TestAccountManager_ClearQuarantine(t *testing.T) {
 	accounts := []MusicAccount{
-		{NameID: "Account1", BearerToken: "token1"},
-		{NameID: "Account2", BearerToken: "token2"},
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
 	}
 
 	manager := &AccountManager{
@@ -266,9 +262,9 @@ func TestAccountManager_ClearQuarantine(t *testing.T) {
 
 func TestAccountManager_AvailableAccountCount(t *testing.T) {
 	accounts := []MusicAccount{
-		{NameID: "Account1", BearerToken: "token1"},
-		{NameID: "Account2", BearerToken: "token2"},
-		{NameID: "Account3", BearerToken: "token3"},
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
+		{NameID: "Account3", MediaUserToken: "mut3"},
 	}
 
 	manager := &AccountManager{
@@ -297,8 +293,8 @@ func TestAccountManager_AvailableAccountCount(t *testing.T) {
 
 func TestAccountManager_QuarantineStatus(t *testing.T) {
 	accounts := []MusicAccount{
-		{NameID: "Account1", BearerToken: "token1"},
-		{NameID: "Account2", BearerToken: "token2"},
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
 	}
 
 	manager := &AccountManager{
@@ -331,7 +327,7 @@ func TestAccountManager_QuarantineStatus(t *testing.T) {
 func TestAccountManager_IsQuarantined(t *testing.T) {
 	manager := &AccountManager{
 		accounts: []MusicAccount{
-			{NameID: "Account1", BearerToken: "token1"},
+			{NameID: "Account1", MediaUserToken: "mut1"},
 		},
 		currentIndex:   0,
 		quarantineTime: make(map[int]int64),

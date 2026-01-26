@@ -98,3 +98,9 @@ const (
 	LogTTMLParser     = Cyan + "[TTML Parser]" + Reset
 	LogWarning        = Red + "[Warning]" + Reset
 )
+
+// Token and health check log prefixes
+const (
+	LogBearerToken  = Cyan + "[Bearer Token]" + Reset
+	LogHealthCheck  = Cyan + "[Health Check]" + Reset
+)

@@ -14,6 +14,7 @@ const (
 	EventAllAccountsQuarantine EventType = "all_accounts_quarantined"
 	EventAccountAuthFailure    EventType = "account_auth_failure"
 	EventServerStartupFailed   EventType = "server_startup_failed"
+	EventMUTHealthCheckFailed  EventType = "mut_health_check_failed"
 
 	// Warning events
 	EventHighFailureRate         EventType = "high_failure_rate"
@@ -220,5 +221,20 @@ func PublishServerStartupFailed(component string, err error) {
 		"Server failed to start").
 		WithData("component", component).
 		WithData("error", err.Error())
+	GetEventBus().Publish(event)
+}
+
+// MUTHealthInfo represents MUT health information passed to the notification system
+// This is a simple struct to avoid circular imports with the ttml package
+type MUTHealthInfo struct {
+	AccountName string
+	LastError   string
+}
+
+// PublishMUTHealthCheckFailed publishes when MUT health check detects unhealthy accounts
+func PublishMUTHealthCheckFailed(unhealthyAccounts interface{}) {
+	event := NewEvent(EventMUTHealthCheckFailed, SeverityCritical,
+		"MUT health check detected unhealthy accounts").
+		WithData("unhealthy_accounts", unhealthyAccounts)
 	GetEventBus().Publish(event)
 }

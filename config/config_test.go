@@ -201,15 +201,16 @@ func TestConfigEnvironmentOverrides(t *testing.T) {
 
 func TestConfigTTMLSettings(t *testing.T) {
 	// Set TTML-specific environment variables
-	os.Setenv("TTML_BEARER_TOKEN", "test_bearer_token")
+	// Note: Bearer tokens are now auto-scraped, only MUT is configured per account
 	os.Setenv("TTML_MEDIA_USER_TOKEN", "test_media_user_token")
+	os.Setenv("TTML_TOKEN_SOURCE_URL", "https://music.example.com")
 	os.Setenv("TTML_BASE_URL", "https://api.example.com")
 	os.Setenv("TTML_SEARCH_PATH", "/search")
 	os.Setenv("TTML_LYRICS_PATH", "/lyrics")
 
 	defer func() {
-		os.Unsetenv("TTML_BEARER_TOKEN")
 		os.Unsetenv("TTML_MEDIA_USER_TOKEN")
+		os.Unsetenv("TTML_TOKEN_SOURCE_URL")
 		os.Unsetenv("TTML_BASE_URL")
 		os.Unsetenv("TTML_SEARCH_PATH")
 		os.Unsetenv("TTML_LYRICS_PATH")
@@ -220,11 +221,11 @@ func TestConfigTTMLSettings(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	if cfg.Configuration.TTMLBearerToken != "test_bearer_token" {
-		t.Errorf("Expected TTMLBearerToken 'test_bearer_token', got %q", cfg.Configuration.TTMLBearerToken)
-	}
 	if cfg.Configuration.TTMLMediaUserToken != "test_media_user_token" {
 		t.Errorf("Expected TTMLMediaUserToken 'test_media_user_token', got %q", cfg.Configuration.TTMLMediaUserToken)
+	}
+	if cfg.Configuration.TTMLTokenSourceURL != "https://music.example.com" {
+		t.Errorf("Expected TTMLTokenSourceURL 'https://music.example.com', got %q", cfg.Configuration.TTMLTokenSourceURL)
 	}
 	if cfg.Configuration.TTMLBaseURL != "https://api.example.com" {
 		t.Errorf("Expected TTMLBaseURL 'https://api.example.com', got %q", cfg.Configuration.TTMLBaseURL)
@@ -385,18 +386,16 @@ func TestConfigStringFields(t *testing.T) {
 	if cfg.Configuration.CacheAccessToken != "" {
 		t.Errorf("Expected empty CacheAccessToken, got %q", cfg.Configuration.CacheAccessToken)
 	}
-	if cfg.Configuration.TTMLBearerToken != "" {
-		t.Errorf("Expected empty TTMLBearerToken, got %q", cfg.Configuration.TTMLBearerToken)
+	if cfg.Configuration.TTMLMediaUserToken != "" {
+		t.Errorf("Expected empty TTMLMediaUserToken, got %q", cfg.Configuration.TTMLMediaUserToken)
 	}
 }
 
-func TestGetTTMLAccounts_FiltersEmptyCredentials(t *testing.T) {
-	// Set multi-account tokens with some empty values
-	// Account 1: valid, Account 2: empty MUT, Account 3: valid
-	os.Setenv("TTML_BEARER_TOKENS", "bearer1,bearer2,bearer3")
+func TestGetTTMLAccounts_FiltersEmptyMUT(t *testing.T) {
+	// Set multi-account MUTs with some empty values
+	// Account 1: valid MUT, Account 2: empty MUT, Account 3: valid MUT
 	os.Setenv("TTML_MEDIA_USER_TOKENS", "mut1,,mut3") // Account 2 has empty MUT
 	defer func() {
-		os.Unsetenv("TTML_BEARER_TOKENS")
 		os.Unsetenv("TTML_MEDIA_USER_TOKENS")
 	}()
 
@@ -427,37 +426,10 @@ func TestGetTTMLAccounts_FiltersEmptyCredentials(t *testing.T) {
 	}
 }
 
-func TestGetTTMLAccounts_FiltersEmptyBearerToken(t *testing.T) {
-	// Test with empty bearer token
-	os.Setenv("TTML_BEARER_TOKENS", "bearer1,,bearer3")
-	os.Setenv("TTML_MEDIA_USER_TOKENS", "mut1,mut2,mut3")
-	defer func() {
-		os.Unsetenv("TTML_BEARER_TOKENS")
-		os.Unsetenv("TTML_MEDIA_USER_TOKENS")
-	}()
-
-	cfg, err := load()
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	accounts, err := cfg.GetTTMLAccounts()
-	if err != nil {
-		t.Fatalf("GetTTMLAccounts failed: %v", err)
-	}
-
-	// Should only return 2 accounts
-	if len(accounts) != 2 {
-		t.Errorf("Expected 2 active accounts (filtering empty bearer), got %d", len(accounts))
-	}
-}
-
 func TestGetAllTTMLAccounts_IncludesOutOfService(t *testing.T) {
-	// Set multi-account tokens with some empty values
-	os.Setenv("TTML_BEARER_TOKENS", "bearer1,bearer2,bearer3")
+	// Set multi-account MUTs with some empty values
 	os.Setenv("TTML_MEDIA_USER_TOKENS", "mut1,,mut3") // Account 2 has empty MUT
 	defer func() {
-		os.Unsetenv("TTML_BEARER_TOKENS")
 		os.Unsetenv("TTML_MEDIA_USER_TOKENS")
 	}()
 
@@ -487,11 +459,9 @@ func TestGetAllTTMLAccounts_IncludesOutOfService(t *testing.T) {
 }
 
 func TestGetAllTTMLAccounts_AllValid(t *testing.T) {
-	// All accounts have valid credentials
-	os.Setenv("TTML_BEARER_TOKENS", "bearer1,bearer2,bearer3")
+	// All accounts have valid MUTs
 	os.Setenv("TTML_MEDIA_USER_TOKENS", "mut1,mut2,mut3")
 	defer func() {
-		os.Unsetenv("TTML_BEARER_TOKENS")
 		os.Unsetenv("TTML_MEDIA_USER_TOKENS")
 	}()
 
@@ -519,19 +489,16 @@ func TestGetAllTTMLAccounts_AllValid(t *testing.T) {
 	// No accounts should be out of service
 	for _, acc := range allAccounts {
 		if acc.OutOfService {
-			t.Errorf("Account %s should not be OutOfService when credentials are valid", acc.Name)
+			t.Errorf("Account %s should not be OutOfService when MUT is valid", acc.Name)
 		}
 	}
 }
 
 func TestGetTTMLAccounts_SingleAccountEmptyMUT(t *testing.T) {
 	// Test single account mode with empty MUT
-	os.Unsetenv("TTML_BEARER_TOKENS")
 	os.Unsetenv("TTML_MEDIA_USER_TOKENS")
-	os.Setenv("TTML_BEARER_TOKEN", "single_bearer")
 	os.Setenv("TTML_MEDIA_USER_TOKEN", "") // Empty MUT
 	defer func() {
-		os.Unsetenv("TTML_BEARER_TOKEN")
 		os.Unsetenv("TTML_MEDIA_USER_TOKEN")
 	}()
 
@@ -551,42 +518,10 @@ func TestGetTTMLAccounts_SingleAccountEmptyMUT(t *testing.T) {
 	}
 }
 
-func TestGetAllTTMLAccounts_SingleAccountEmptyMUT(t *testing.T) {
-	// Test single account mode with empty MUT
-	os.Unsetenv("TTML_BEARER_TOKENS")
-	os.Unsetenv("TTML_MEDIA_USER_TOKENS")
-	os.Setenv("TTML_BEARER_TOKEN", "single_bearer")
-	os.Setenv("TTML_MEDIA_USER_TOKEN", "") // Empty MUT
-	defer func() {
-		os.Unsetenv("TTML_BEARER_TOKEN")
-		os.Unsetenv("TTML_MEDIA_USER_TOKEN")
-	}()
-
-	cfg, err := load()
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	allAccounts, err := cfg.GetAllTTMLAccounts()
-	if err != nil {
-		t.Fatalf("GetAllTTMLAccounts failed: %v", err)
-	}
-
-	// Should return 1 account (but marked as out of service)
-	if len(allAccounts) != 1 {
-		t.Errorf("Expected 1 total account, got %d", len(allAccounts))
-	}
-
-	if !allAccounts[0].OutOfService {
-		t.Error("Account with empty MUT should be marked as OutOfService")
-	}
-}
-
 func TestTTMLAccount_OutOfServiceField(t *testing.T) {
 	// Test that OutOfService field is properly set
 	acc := TTMLAccount{
 		Name:           "TestAccount",
-		BearerToken:    "bearer",
 		MediaUserToken: "mut",
 		OutOfService:   false,
 	}

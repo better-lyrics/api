@@ -91,12 +91,12 @@ func startTokenMonitor() {
 		return
 	}
 
-	// Convert accounts to TokenInfo for the monitor
+	// Convert accounts to TokenInfo for the monitor (monitoring MUTs)
 	tokens := make([]notifier.TokenInfo, len(accounts))
 	for i, acc := range accounts {
 		tokens[i] = notifier.TokenInfo{
-			Name:        acc.Name,
-			BearerToken: acc.BearerToken,
+			Name:           acc.Name,
+			MediaUserToken: acc.MediaUserToken,
 		}
 	}
 

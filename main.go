@@ -6,6 +6,7 @@ import (
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/middleware"
 	"lyrics-api-go/services/notifier"
+	"lyrics-api-go/services/providers/ttml"
 	"lyrics-api-go/stats"
 	"net/http"
 	"os"
@@ -80,6 +81,12 @@ func main() {
 	}
 
 	go startTokenMonitor()
+
+	// Start bearer token auto-scraper (proactive refresh based on JWT expiry)
+	ttml.StartBearerTokenMonitor()
+
+	// Start MUT health check scheduler (daily canary checks)
+	ttml.StartHealthCheckScheduler()
 
 	router := mux.NewRouter()
 	setupRoutes(router)

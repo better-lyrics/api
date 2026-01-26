@@ -724,21 +724,41 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 		overallHealthy := true
 		warningThreshold := 7
 
-		// Include ALL accounts (same as before, but with out_of_service handling)
+		// Include shared bearer token status
+		bearerExpiry, bearerRemaining, bearerNeedsRefresh := ttml.GetTokenStatus()
+		bearerStatus := map[string]interface{}{
+			"name": "shared_bearer_token",
+			"type": "bearer",
+		}
+		if bearerExpiry.IsZero() {
+			bearerStatus["status"] = "not_initialized"
+		} else {
+			bearerStatus["expires"] = bearerExpiry.Format("2006-01-02 15:04:05")
+			bearerStatus["remaining_minutes"] = int(bearerRemaining.Minutes())
+			if bearerNeedsRefresh {
+				bearerStatus["status"] = "refreshing_soon"
+			} else {
+				bearerStatus["status"] = "healthy"
+			}
+		}
+		tokenStatuses = append(tokenStatuses, bearerStatus)
+
+		// Include ALL MUT accounts (same as before, but with out_of_service handling)
 		for _, acc := range allAccounts {
 			tokenStatus := map[string]interface{}{
 				"name": acc.Name,
+				"type": "mut",
 			}
 
 			// Handle out-of-service accounts
 			if acc.OutOfService {
 				tokenStatus["status"] = "out_of_service"
-				tokenStatus["reason"] = "empty credentials"
+				tokenStatus["reason"] = "empty MUT"
 				tokenStatuses = append(tokenStatuses, tokenStatus)
 				continue
 			}
 
-			expirationDate, err := notifier.GetExpirationDate(acc.BearerToken)
+			expirationDate, err := notifier.GetExpirationDate(acc.MediaUserToken)
 			if err != nil {
 				tokenStatus["status"] = "error"
 				tokenStatus["error"] = err.Error()
@@ -771,6 +791,44 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(health)
+}
+
+// handleMUTHealth handles the /health/mut endpoint for MUT health status
+func handleMUTHealth(w http.ResponseWriter, r *http.Request) {
+	// Requires auth token
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken || conf.Configuration.CacheAccessToken == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Option to force recheck
+	if r.URL.Query().Get("refresh") == "true" {
+		results := ttml.CheckAllMUTHealth()
+		response := make(map[string]interface{})
+		for _, r := range results {
+			response[r.AccountName] = map[string]interface{}{
+				"healthy":      r.Healthy,
+				"last_checked": r.LastChecked.Format(time.RFC3339),
+				"last_error":   r.LastError,
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Return cached health statuses
+	statuses := ttml.GetHealthStatuses()
+	response := make(map[string]interface{})
+	for name, status := range statuses {
+		response[name] = map[string]interface{}{
+			"healthy":      status.Healthy,
+			"last_checked": status.LastChecked.Format(time.RFC3339),
+			"last_error":   status.LastError,
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func getCircuitBreakerStatus(w http.ResponseWriter, r *http.Request) {
@@ -870,16 +928,16 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 
 		for _, acc := range allAccounts {
 			if acc.OutOfService {
-				infoLines = append(infoLines, fmt.Sprintf("%s: Out of service (empty credentials)", acc.Name))
+				infoLines = append(infoLines, fmt.Sprintf("%s: Out of service (empty MUT)", acc.Name))
 				accountInfos = append(accountInfos, map[string]interface{}{
 					"name":   acc.Name,
 					"status": "out_of_service",
-					"reason": "empty credentials",
+					"reason": "empty MUT",
 				})
 				continue
 			}
 
-			expirationDate, err := notifier.GetExpirationDate(acc.BearerToken)
+			expirationDate, err := notifier.GetExpirationDate(acc.MediaUserToken)
 			if err != nil {
 				infoLines = append(infoLines, fmt.Sprintf("%s: Error - %v", acc.Name, err))
 				accountInfos = append(accountInfos, map[string]interface{}{
@@ -888,11 +946,11 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 				})
 			} else {
 				daysUntilExpiration := int(time.Until(expirationDate).Hours() / 24)
-				infoLines = append(infoLines, fmt.Sprintf("%s: %d days remaining (expires %s)",
+				infoLines = append(infoLines, fmt.Sprintf("%s (MUT): %d days remaining (expires %s)",
 					acc.Name, daysUntilExpiration, expirationDate.Format("2006-01-02")))
 				accountInfos = append(accountInfos, map[string]interface{}{
 					"name":                  acc.Name,
-					"token_expires":         expirationDate.Format("2006-01-02 15:04:05"),
+					"mut_expires":           expirationDate.Format("2006-01-02 15:04:05"),
 					"days_until_expiration": daysUntilExpiration,
 				})
 			}

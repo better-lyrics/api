@@ -47,7 +47,6 @@ func initAccountManager() {
 	for i, acc := range configAccounts {
 		accounts[i] = MusicAccount{
 			NameID:         acc.Name,
-			BearerToken:    acc.BearerToken,
 			MediaUserToken: acc.MediaUserToken,
 			Storefront:     storefront,
 		}

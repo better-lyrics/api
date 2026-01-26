@@ -11,9 +11,10 @@ import (
 )
 
 // TokenInfo holds information about a single token for monitoring
+// Now tracks Media User Tokens (MUTs) since bearer is auto-scraped
 type TokenInfo struct {
-	Name        string // Account name (e.g., "Account-1")
-	BearerToken string
+	Name           string // Account name (e.g., "Account-1")
+	MediaUserToken string // MUT to monitor for expiration
 }
 
 // MonitorConfig holds the configuration for the token monitor
@@ -121,9 +122,9 @@ func (m *TokenMonitor) Check() error {
 	var expiringTokens []TokenStatus
 	minDaysRemaining := 999999
 
-	// Check all tokens
+	// Check all MUT tokens
 	for _, token := range m.config.Tokens {
-		expiringSoon, daysRemaining, err := IsExpiringSoon(token.BearerToken, m.config.WarningThreshold)
+		expiringSoon, daysRemaining, err := IsExpiringSoon(token.MediaUserToken, m.config.WarningThreshold)
 		status := TokenStatus{
 			Name:          token.Name,
 			ExpiringSoon:  expiringSoon,
@@ -201,27 +202,27 @@ func (m *TokenMonitor) sendNotifications(expiringTokens []TokenStatus) error {
 	}
 
 	if minDays <= 0 {
-		subject = fmt.Sprintf("🚨 URGENT: TTML %s EXPIRED", tokenWord)
-		message = fmt.Sprintf("🚨 TTML TOKEN(S) EXPIRED\n\n"+
+		subject = fmt.Sprintf("🚨 URGENT: MUT %s EXPIRED", tokenWord)
+		message = fmt.Sprintf("🚨 MEDIA USER TOKEN(S) EXPIRED\n\n"+
 			"The following %s have EXPIRED:\n\n%s\n"+
 			"⚠️ Action Required:\n\n"+
 			"The service will stop working until you update the tokens.\n\n"+
-			"Update TTML_BEARER_TOKENS in your environment and restart the service immediately.",
+			"Update TTML_MEDIA_USER_TOKENS in your environment and restart the service immediately.",
 			tokenWord, tokenDetails)
 	} else if minDays == 1 {
-		subject = fmt.Sprintf("⚠️ Alert: TTML %s Expires Tomorrow", tokenWord)
-		message = fmt.Sprintf("⚠️ TTML TOKEN EXPIRATION WARNING\n\n"+
+		subject = fmt.Sprintf("⚠️ Alert: MUT %s Expires Tomorrow", tokenWord)
+		message = fmt.Sprintf("⚠️ MEDIA USER TOKEN EXPIRATION WARNING\n\n"+
 			"The following %s need attention:\n\n%s\n"+
 			"📝 Action Required:\n\n"+
-			"Update TTML_BEARER_TOKENS in your environment soon to avoid service interruption.",
+			"Update TTML_MEDIA_USER_TOKENS in your environment soon to avoid service interruption.",
 			tokenWord, tokenDetails)
 	} else {
-		subject = fmt.Sprintf("⏰ Notice: TTML %s Expiring Soon", tokenWord)
+		subject = fmt.Sprintf("⏰ Notice: MUT %s Expiring Soon", tokenWord)
 		message = fmt.Sprintf(
-			"⏰ TTML TOKEN EXPIRATION NOTICE\n\n"+
+			"⏰ MEDIA USER TOKEN EXPIRATION NOTICE\n\n"+
 				"The following %s need attention:\n\n%s\n"+
 				"📝 Action Required:\n\n"+
-				"Update TTML_BEARER_TOKENS in your environment before expiration to maintain service availability.\n\n"+
+				"Update TTML_MEDIA_USER_TOKENS in your environment before expiration to maintain service availability.\n\n"+
 				"You will receive daily reminders until the tokens are updated.",
 			tokenWord, tokenDetails)
 	}
