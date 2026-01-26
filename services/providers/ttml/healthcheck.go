@@ -129,7 +129,15 @@ func runHealthCheck() {
 
 	// Emit notification if any unhealthy MUTs detected
 	if len(unhealthy) > 0 {
-		notifier.PublishMUTHealthCheckFailed(unhealthy)
+		// Convert to simplified format to avoid circular imports in notifier
+		unhealthyData := make([]map[string]string, 0, len(unhealthy))
+		for _, status := range unhealthy {
+			unhealthyData = append(unhealthyData, map[string]string{
+				"name":  status.AccountName,
+				"error": status.LastError,
+			})
+		}
+		notifier.PublishMUTHealthCheckFailed(unhealthyData)
 	}
 }
 

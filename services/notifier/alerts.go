@@ -124,6 +124,16 @@ func (h *AlertHandler) formatAlert(event *Event) (subject, message string) {
 				"Action: Check and refresh the TTML bearer token for this account.",
 			account, statusCode)
 
+	case EventMUTHealthCheckFailed:
+		subject = "MUT Health Check Failed"
+		message = "MUT health check detected unhealthy accounts:\n\n"
+		if accounts, ok := event.Data["unhealthy_accounts"].([]map[string]string); ok {
+			for _, acc := range accounts {
+				message += fmt.Sprintf("  • %s: %s\n", acc["name"], acc["error"])
+			}
+		}
+		message += "\nAction: Check and refresh the Media User Token for these accounts."
+
 	case EventServerStartupFailed:
 		component := event.Data["component"].(string)
 		errMsg := event.Data["error"].(string)
