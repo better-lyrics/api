@@ -17,10 +17,10 @@ const (
 
 // AlertHandler handles events and sends notifications
 type AlertHandler struct {
-	notifiers    []Notifier
-	cooldowns    map[EventType]time.Time // last alert time per event type
+	notifiers        []Notifier
+	cooldowns        map[EventType]time.Time // last alert time per event type
 	cooldownDuration time.Duration
-	mu           sync.RWMutex
+	mu               sync.RWMutex
 }
 
 // AlertConfig holds configuration for the alert handler

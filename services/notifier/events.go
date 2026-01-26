@@ -17,10 +17,10 @@ const (
 	EventMUTHealthCheckFailed  EventType = "mut_health_check_failed"
 
 	// Warning events
-	EventHighFailureRate         EventType = "high_failure_rate"
-	EventHalfAccountsQuarantine  EventType = "half_accounts_quarantined"
-	EventOneAwayFromQuarantine   EventType = "one_away_from_quarantine"
-	EventCacheBackupFailed       EventType = "cache_backup_failed"
+	EventHighFailureRate        EventType = "high_failure_rate"
+	EventHalfAccountsQuarantine EventType = "half_accounts_quarantined"
+	EventOneAwayFromQuarantine  EventType = "one_away_from_quarantine"
+	EventCacheBackupFailed      EventType = "cache_backup_failed"
 
 	// Info events
 	EventCircuitBreakerRecovered EventType = "circuit_breaker_recovered"
@@ -68,9 +68,9 @@ type EventHandler func(event *Event)
 
 // EventBus manages event publishing and subscription
 type EventBus struct {
-	handlers map[EventType][]EventHandler
+	handlers    map[EventType][]EventHandler
 	allHandlers []EventHandler // handlers that receive all events
-	mu       sync.RWMutex
+	mu          sync.RWMutex
 }
 
 // Global event bus instance

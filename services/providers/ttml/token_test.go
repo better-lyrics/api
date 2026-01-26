@@ -211,7 +211,7 @@ func TestParseJWTExpiry_Base64Padding(t *testing.T) {
 			claims: map[string]interface{}{"exp": time.Now().Add(time.Hour).Unix(), "iss": "ab"},
 		},
 		{
-			name:   "Larger payload",
+			name: "Larger payload",
 			claims: map[string]interface{}{
 				"exp": time.Now().Add(time.Hour).Unix(),
 				"iss": "test-issuer-with-longer-name",

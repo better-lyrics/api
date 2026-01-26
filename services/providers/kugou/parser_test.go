@@ -512,7 +512,7 @@ func TestNormalizeLanguageCode(t *testing.T) {
 		{"Unknown long name", "Klingon", "en"}, // defaults to en
 		{"Whitespace", "  english  ", "en"},
 		{"Case insensitive", "ENGLISH", "en"},
-		{"Empty", "", ""},  // Empty string returns as-is (len <= 3)
+		{"Empty", "", ""}, // Empty string returns as-is (len <= 3)
 	}
 
 	for _, tt := range tests {

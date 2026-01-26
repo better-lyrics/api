@@ -17,9 +17,9 @@ import (
 )
 
 var (
-	bearerToken  string
-	tokenExpiry  time.Time
-	tokenMu      sync.RWMutex
+	bearerToken string
+	tokenExpiry time.Time
+	tokenMu     sync.RWMutex
 
 	// Refresh token when it has less than this time remaining
 	refreshThreshold = 5 * time.Minute
@@ -95,7 +95,6 @@ func refreshBearerToken() (string, error) {
 
 	return token, nil
 }
-
 
 // parseJWTExpiry extracts the expiration time from a JWT token
 func parseJWTExpiry(token string) (time.Time, error) {

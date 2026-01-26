@@ -645,9 +645,9 @@ func cacheKeys(w http.ResponseWriter, r *http.Request) {
 
 		if count < limit {
 			keys = append(keys, map[string]interface{}{
-				"key":       key,
-				"size":      len(entry.Value),
-				"is_lyrics": strings.HasPrefix(key, "ttml_lyrics:"),
+				"key":         key,
+				"size":        len(entry.Value),
+				"is_lyrics":   strings.HasPrefix(key, "ttml_lyrics:"),
 				"is_negative": strings.HasPrefix(key, "no_lyrics:"),
 			})
 			count++
@@ -658,10 +658,10 @@ func cacheKeys(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"total_keys":    total,
-		"matched_keys":  count,
-		"limit":         limit,
-		"keys":          keys,
+		"total_keys":   total,
+		"matched_keys": count,
+		"limit":        limit,
+		"keys":         keys,
 	})
 }
 

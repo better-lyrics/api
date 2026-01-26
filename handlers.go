@@ -572,8 +572,8 @@ func clearProviderCache(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":             fmt.Sprintf("Unknown provider: %s", providerName),
-			"valid_providers":   []string{"ttml", "kugou", "legacy"},
+			"error":           fmt.Sprintf("Unknown provider: %s", providerName),
+			"valid_providers": []string{"ttml", "kugou", "legacy"},
 		})
 		return
 	}
@@ -694,12 +694,12 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 	// Basic health response (always available)
 	// accounts field UNCHANGED for backward compatibility - shows total configured
 	health := map[string]interface{}{
-		"status":                    "ok",
-		"accounts":                  totalAccountCount,          // UNCHANGED: total configured
-		"accounts_active":           activeAccountCount,         // NEW: working accounts
-		"accounts_out_of_service":   outOfServiceCount,          // NEW: accounts with empty credentials
-		"circuit_breaker":           cbState,
-		"cache_ready":               persistentCache.IsPreloadComplete(),
+		"status":                  "ok",
+		"accounts":                totalAccountCount,  // UNCHANGED: total configured
+		"accounts_active":         activeAccountCount, // NEW: working accounts
+		"accounts_out_of_service": outOfServiceCount,  // NEW: accounts with empty credentials
+		"circuit_breaker":         cbState,
+		"cache_ready":             persistentCache.IsPreloadComplete(),
 	}
 
 	// If circuit breaker is open, mark as degraded

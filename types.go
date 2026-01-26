@@ -73,14 +73,14 @@ const (
 
 // MigrationJob tracks an async cache migration
 type MigrationJob struct {
-	ID           string             `json:"id"`
-	Status       MigrationJobStatus `json:"status"`
-	StartedAt    int64              `json:"started_at"`
-	CompletedAt  int64              `json:"completed_at,omitempty"`
-	Recompress   bool               `json:"recompress"`
-	Progress     MigrationProgress  `json:"progress"`
-	Result       *MigrationResult   `json:"result,omitempty"`
-	Error        string             `json:"error,omitempty"`
+	ID          string             `json:"id"`
+	Status      MigrationJobStatus `json:"status"`
+	StartedAt   int64              `json:"started_at"`
+	CompletedAt int64              `json:"completed_at,omitempty"`
+	Recompress  bool               `json:"recompress"`
+	Progress    MigrationProgress  `json:"progress"`
+	Result      *MigrationResult   `json:"result,omitempty"`
+	Error       string             `json:"error,omitempty"`
 }
 
 // MigrationProgress tracks migration progress

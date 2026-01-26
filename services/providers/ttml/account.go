@@ -19,9 +19,9 @@ const (
 
 var (
 	accountManager   *AccountManager
-	quarantineMutex  sync.RWMutex          // Protects quarantineTime map
+	quarantineMutex  sync.RWMutex            // Protects quarantineTime map
 	disabledAccounts = make(map[string]bool) // Permanently disabled accounts (stale MUT)
-	disabledMutex    sync.RWMutex          // Protects disabledAccounts map
+	disabledMutex    sync.RWMutex            // Protects disabledAccounts map
 )
 
 func initAccountManager() {

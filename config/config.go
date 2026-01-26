@@ -24,9 +24,9 @@ type Config struct {
 		CachedRateLimitBurstLimit          int    `envconfig:"CACHED_RATE_LIMIT_BURST_LIMIT" default:"20"`
 		CacheInvalidationIntervalInSeconds int    `envconfig:"CACHE_INVALIDATION_INTERVAL_IN_SECONDS" default:"3600"`
 		LyricsCacheTTLInSeconds            int    `envconfig:"LYRICS_CACHE_TTL_IN_SECONDS" default:"86400"`
-		CacheAccessToken string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
-		APIKey           string `envconfig:"API_KEY" default:""`
-		APIKeyRequired   bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
+		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
+		APIKey                             string `envconfig:"API_KEY" default:""`
+		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
 
 		// TTML API Configuration
 		// Token source for auto-scraping bearer tokens (web frontend URL)
@@ -34,8 +34,8 @@ type Config struct {
 		// Single account (backwards compatible) - only MUT needed, bearer is auto-scraped
 		TTMLMediaUserToken string `envconfig:"TTML_MEDIA_USER_TOKEN" default:""`
 		// Multi-account support (comma-separated media user tokens)
-		TTMLMediaUserTokens string `envconfig:"TTML_MEDIA_USER_TOKENS" default:""`
-		TTMLStorefront      string `envconfig:"TTML_STOREFRONT" default:"us"`
+		TTMLMediaUserTokens        string  `envconfig:"TTML_MEDIA_USER_TOKENS" default:""`
+		TTMLStorefront             string  `envconfig:"TTML_STOREFRONT" default:"us"`
 		TTMLBaseURL                string  `envconfig:"TTML_BASE_URL" default:""`
 		TTMLSearchPath             string  `envconfig:"TTML_SEARCH_PATH" default:""`
 		TTMLLyricsPath             string  `envconfig:"TTML_LYRICS_PATH" default:""`
@@ -46,19 +46,19 @@ type Config struct {
 		CircuitBreakerCooldownSecs int     `envconfig:"CIRCUIT_BREAKER_COOLDOWN_SECS" default:"300"` // Seconds to wait before retrying (default: 5 minutes)
 
 		// Legacy Provider Configuration (Spotify-based)
-		LyricsUrl          string `envconfig:"LYRICS_URL" default:""`
-		TrackUrl           string `envconfig:"TRACK_URL" default:""`
-		TokenUrl           string `envconfig:"TOKEN_URL" default:""`
-		TokenKey           string `envconfig:"TOKEN_KEY" default:"sp_dc_token"`
-		AppPlatform        string `envconfig:"APP_PLATFORM" default:"WebPlayer"`
-		UserAgent          string `envconfig:"USER_AGENT" default:"Mozilla/5.0"`
-		CookieStringFormat string `envconfig:"COOKIE_STRING_FORMAT" default:"sp_dc=%s"`
-		CookieValue        string `envconfig:"COOKIE_VALUE" default:""`
-		ClientID           string `envconfig:"CLIENT_ID" default:""`
-		ClientSecret       string `envconfig:"CLIENT_SECRET" default:""`
-		OauthTokenUrl      string `envconfig:"OAUTH_TOKEN_URL" default:"https://accounts.spotify.com/api/token"`
-		OauthTokenKey      string `envconfig:"OAUTH_TOKEN_KEY" default:"oauth_token"`
-		TrackCacheTTLInSeconds int `envconfig:"TRACK_CACHE_TTL_IN_SECONDS" default:"86400"`
+		LyricsUrl              string `envconfig:"LYRICS_URL" default:""`
+		TrackUrl               string `envconfig:"TRACK_URL" default:""`
+		TokenUrl               string `envconfig:"TOKEN_URL" default:""`
+		TokenKey               string `envconfig:"TOKEN_KEY" default:"sp_dc_token"`
+		AppPlatform            string `envconfig:"APP_PLATFORM" default:"WebPlayer"`
+		UserAgent              string `envconfig:"USER_AGENT" default:"Mozilla/5.0"`
+		CookieStringFormat     string `envconfig:"COOKIE_STRING_FORMAT" default:"sp_dc=%s"`
+		CookieValue            string `envconfig:"COOKIE_VALUE" default:""`
+		ClientID               string `envconfig:"CLIENT_ID" default:""`
+		ClientSecret           string `envconfig:"CLIENT_SECRET" default:""`
+		OauthTokenUrl          string `envconfig:"OAUTH_TOKEN_URL" default:"https://accounts.spotify.com/api/token"`
+		OauthTokenKey          string `envconfig:"OAUTH_TOKEN_KEY" default:"oauth_token"`
+		TrackCacheTTLInSeconds int    `envconfig:"TRACK_CACHE_TTL_IN_SECONDS" default:"86400"`
 	}
 
 	FeatureFlags struct {
@@ -121,7 +121,7 @@ type TTMLAccount struct {
 // funNames contains artist names for account logging
 var funNames = []string{
 	"Billie", "Toliver", "Taylor", "Dua", "Olivia",
-	"Charli", "Khalid", "Tyler", "Gunna", "Future",
+	"Charli", "Khalid", "Tyler", "Crywank", "Future",
 	"Offset", "Metro", "Burna", "Phoebe", "Mitski",
 	"Finneas", "Clairo", "Raye", "Hozier", "Gracie",
 	"Adele", "Ye", "Abel", "Keem", "Yeat",

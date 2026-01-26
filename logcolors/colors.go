@@ -100,6 +100,6 @@ const (
 
 // Token and health check log prefixes
 const (
-	LogBearerToken  = Cyan + "[Bearer Token]" + Reset
-	LogHealthCheck  = Cyan + "[Health Check]" + Reset
+	LogBearerToken = Cyan + "[Bearer Token]" + Reset
+	LogHealthCheck = Cyan + "[Health Check]" + Reset
 )
