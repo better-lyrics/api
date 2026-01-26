@@ -15,6 +15,7 @@ func TestConfigDefaultValues(t *testing.T) {
 		"CACHE_INVALIDATION_INTERVAL_IN_SECONDS",
 		"LYRICS_CACHE_TTL_IN_SECONDS",
 		"FF_CACHE_COMPRESSION",
+		"FF_CACHE_ONLY_MODE",
 		"TTML_STOREFRONT",
 	}
 
@@ -84,6 +85,11 @@ func TestConfigDefaultValues(t *testing.T) {
 			got:      cfg.FeatureFlags.CacheCompression,
 			expected: true,
 		},
+		{
+			name:     "CacheOnlyMode default",
+			got:      cfg.FeatureFlags.CacheOnlyMode,
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -106,6 +112,7 @@ func TestConfigEnvironmentOverrides(t *testing.T) {
 	os.Setenv("CACHE_ACCESS_TOKEN", "test_token_123")
 	os.Setenv("TTML_STOREFRONT", "jp")
 	os.Setenv("FF_CACHE_COMPRESSION", "false")
+	os.Setenv("FF_CACHE_ONLY_MODE", "true")
 
 	defer func() {
 		// Clean up
@@ -118,6 +125,7 @@ func TestConfigEnvironmentOverrides(t *testing.T) {
 		os.Unsetenv("CACHE_ACCESS_TOKEN")
 		os.Unsetenv("TTML_STOREFRONT")
 		os.Unsetenv("FF_CACHE_COMPRESSION")
+		os.Unsetenv("FF_CACHE_ONLY_MODE")
 	}()
 
 	cfg, err := load()
@@ -174,6 +182,11 @@ func TestConfigEnvironmentOverrides(t *testing.T) {
 			name:     "CacheCompression override",
 			got:      cfg.FeatureFlags.CacheCompression,
 			expected: false,
+		},
+		{
+			name:     "CacheOnlyMode override",
+			got:      cfg.FeatureFlags.CacheOnlyMode,
+			expected: true,
 		},
 	}
 
@@ -292,6 +305,66 @@ func TestFeatureFlagCacheCompression(t *testing.T) {
 				t.Errorf("Expected CacheCompression %v, got %v", tt.expected, cfg.FeatureFlags.CacheCompression)
 			}
 		})
+	}
+}
+
+func TestFeatureFlagCacheOnlyMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		expected bool
+	}{
+		{
+			name:     "Cache-only mode enabled (true)",
+			envValue: "true",
+			expected: true,
+		},
+		{
+			name:     "Cache-only mode disabled (false)",
+			envValue: "false",
+			expected: false,
+		},
+		{
+			name:     "Cache-only mode enabled (1)",
+			envValue: "1",
+			expected: true,
+		},
+		{
+			name:     "Cache-only mode disabled (0)",
+			envValue: "0",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Setenv("FF_CACHE_ONLY_MODE", tt.envValue)
+			defer os.Unsetenv("FF_CACHE_ONLY_MODE")
+
+			cfg, err := load()
+			if err != nil {
+				t.Fatalf("Failed to load config: %v", err)
+			}
+
+			if cfg.FeatureFlags.CacheOnlyMode != tt.expected {
+				t.Errorf("Expected CacheOnlyMode %v, got %v", tt.expected, cfg.FeatureFlags.CacheOnlyMode)
+			}
+		})
+	}
+}
+
+func TestFeatureFlagCacheOnlyModeDefault(t *testing.T) {
+	// Ensure the env var is not set
+	os.Unsetenv("FF_CACHE_ONLY_MODE")
+
+	cfg, err := load()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Default should be false (upstream requests enabled)
+	if cfg.FeatureFlags.CacheOnlyMode != false {
+		t.Errorf("Expected CacheOnlyMode default to be false, got %v", cfg.FeatureFlags.CacheOnlyMode)
 	}
 }
 

@@ -63,6 +63,7 @@ type Config struct {
 
 	FeatureFlags struct {
 		CacheCompression bool `envconfig:"FF_CACHE_COMPRESSION" default:"true"`
+		CacheOnlyMode    bool `envconfig:"FF_CACHE_ONLY_MODE" default:"false"`
 	}
 }
 

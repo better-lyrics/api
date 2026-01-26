@@ -92,7 +92,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If in cache-only mode and no cache found, return 429
+	// If in cache-only mode (rate limit tier 2) and no cache found, return 429
 	if cacheOnlyMode {
 		stats.Get().RecordCacheMiss()
 		stats.Get().RecordRateLimit("exceeded")
@@ -101,6 +101,16 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		Respond(w, r).SetCacheStatus("MISS").Error(http.StatusTooManyRequests, map[string]interface{}{
 			"error":   "Rate limit exceeded. This request requires cached data, but no cache is available for this query.",
 			"message": "Please try again later or reduce your request rate.",
+		})
+		return
+	}
+
+	// If FF_CACHE_ONLY_MODE is enabled and no cache found, return 503
+	if conf.FeatureFlags.CacheOnlyMode {
+		stats.Get().RecordCacheMiss()
+		log.Warnf("%s FF_CACHE_ONLY_MODE enabled, no cache for: %s", logcolors.LogCacheLyrics, query)
+		Respond(w, r).SetCacheStatus("MISS").Error(http.StatusServiceUnavailable, map[string]interface{}{
+			"error": "Service running in cache-only mode. No cached lyrics available for this query.",
 		})
 		return
 	}
@@ -283,7 +293,7 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 			return
 		}
 
-		// If in cache-only mode and no cache found, return 429
+		// If in cache-only mode (rate limit tier 2) and no cache found, return 429
 		if cacheOnlyMode {
 			stats.Get().RecordCacheMiss()
 			stats.Get().RecordRateLimit("exceeded")
@@ -291,6 +301,17 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 			w.Header().Set("Retry-After", "60")
 			Respond(w, r).SetProvider(providerName).SetCacheStatus("MISS").Error(http.StatusTooManyRequests, map[string]interface{}{
 				"error":    "Rate limit exceeded. No cached data available.",
+				"provider": providerName,
+			})
+			return
+		}
+
+		// If FF_CACHE_ONLY_MODE is enabled and no cache found, return 503
+		if conf.FeatureFlags.CacheOnlyMode {
+			stats.Get().RecordCacheMiss()
+			log.Warnf("%s [%s] FF_CACHE_ONLY_MODE enabled, no cache for: %s", logcolors.LogCacheLyrics, providerName, query)
+			Respond(w, r).SetProvider(providerName).SetCacheStatus("MISS").Error(http.StatusServiceUnavailable, map[string]interface{}{
+				"error":    "Service running in cache-only mode. No cached lyrics available for this query.",
 				"provider": providerName,
 			})
 			return

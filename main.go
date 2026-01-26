@@ -140,6 +140,11 @@ func main() {
 		log.Infof("%s API key configured for rate limit bypass only", logcolors.LogAPIKey)
 	}
 
+	// Log cache-only mode status
+	if conf.FeatureFlags.CacheOnlyMode {
+		log.Warnf("%s FF_CACHE_ONLY_MODE is enabled - all upstream requests are disabled, serving from cache only", logcolors.LogWarning)
+	}
+
 	log.Infof("%s Listening on port %s", logcolors.LogServer, port)
 
 	// Publish server started event
