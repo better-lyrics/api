@@ -656,19 +656,29 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 	// Get circuit breaker status
 	cbState, cbFailures, cbTimeUntilRetry := ttml.GetCircuitBreakerStats()
 
-	// Get account info
-	accounts, accErr := conf.GetTTMLAccounts()
-	accountCount := 0
-	if accErr == nil {
-		accountCount = len(accounts)
+	// Get account info - use GetAllTTMLAccounts for total count (backward compat)
+	// and GetTTMLAccounts for active count
+	allAccounts, allAccErr := conf.GetAllTTMLAccounts()
+	activeAccounts, _ := conf.GetTTMLAccounts()
+
+	totalAccountCount := 0
+	activeAccountCount := 0
+	outOfServiceCount := 0
+	if allAccErr == nil {
+		totalAccountCount = len(allAccounts)
+		activeAccountCount = len(activeAccounts)
+		outOfServiceCount = totalAccountCount - activeAccountCount
 	}
 
 	// Basic health response (always available)
+	// accounts field UNCHANGED for backward compatibility - shows total configured
 	health := map[string]interface{}{
-		"status":          "ok",
-		"accounts":        accountCount,
-		"circuit_breaker": cbState,
-		"cache_ready":     persistentCache.IsPreloadComplete(),
+		"status":                    "ok",
+		"accounts":                  totalAccountCount,          // UNCHANGED: total configured
+		"accounts_active":           activeAccountCount,         // NEW: working accounts
+		"accounts_out_of_service":   outOfServiceCount,          // NEW: accounts with empty credentials
+		"circuit_breaker":           cbState,
+		"cache_ready":               persistentCache.IsPreloadComplete(),
 	}
 
 	// If circuit breaker is open, mark as degraded
@@ -677,10 +687,14 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 		health["circuit_breaker_retry_in"] = cbTimeUntilRetry.String()
 	}
 
-	// If no accounts configured, mark as unhealthy
-	if accountCount == 0 {
+	// If no active accounts configured, mark as unhealthy
+	if activeAccountCount == 0 {
 		health["status"] = "unhealthy"
-		health["error"] = "no TTML accounts configured"
+		if totalAccountCount == 0 {
+			health["error"] = "no TTML accounts configured"
+		} else {
+			health["error"] = "all TTML accounts are out of service (empty credentials)"
+		}
 	}
 
 	// If authenticated, include detailed token status
@@ -689,9 +703,18 @@ func getHealthStatus(w http.ResponseWriter, r *http.Request) {
 		overallHealthy := true
 		warningThreshold := 7
 
-		for _, acc := range accounts {
+		// Include ALL accounts (same as before, but with out_of_service handling)
+		for _, acc := range allAccounts {
 			tokenStatus := map[string]interface{}{
 				"name": acc.Name,
+			}
+
+			// Handle out-of-service accounts
+			if acc.OutOfService {
+				tokenStatus["status"] = "out_of_service"
+				tokenStatus["reason"] = "empty credentials"
+				tokenStatuses = append(tokenStatuses, tokenStatus)
+				continue
 			}
 
 			expirationDate, err := notifier.GetExpirationDate(acc.BearerToken)
@@ -807,22 +830,34 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 	var tokenInfo string
 	var tokenDetails map[string]interface{}
 
-	accounts, accErr := conf.GetTTMLAccounts()
-	if accErr != nil || len(accounts) == 0 {
+	allAccounts, allAccErr := conf.GetAllTTMLAccounts()
+	activeAccounts, _ := conf.GetTTMLAccounts()
+
+	if allAccErr != nil || len(allAccounts) == 0 {
 		tokenInfo = "Status:               Not configured\n" +
 			"TTML_BEARER_TOKENS:   Missing from environment"
 		tokenDetails = map[string]interface{}{
 			"configured": false,
 		}
-		if accErr != nil {
-			tokenDetails["error"] = accErr.Error()
+		if allAccErr != nil {
+			tokenDetails["error"] = allAccErr.Error()
 		}
 	} else {
 		now := time.Now()
 		var accountInfos []map[string]interface{}
 		var infoLines []string
 
-		for _, acc := range accounts {
+		for _, acc := range allAccounts {
+			if acc.OutOfService {
+				infoLines = append(infoLines, fmt.Sprintf("%s: Out of service (empty credentials)", acc.Name))
+				accountInfos = append(accountInfos, map[string]interface{}{
+					"name":   acc.Name,
+					"status": "out_of_service",
+					"reason": "empty credentials",
+				})
+				continue
+			}
+
 			expirationDate, err := notifier.GetExpirationDate(acc.BearerToken)
 			if err != nil {
 				infoLines = append(infoLines, fmt.Sprintf("%s: Error - %v", acc.Name, err))
@@ -842,21 +877,26 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		outOfServiceCount := len(allAccounts) - len(activeAccounts)
 		tokenInfo = fmt.Sprintf(
 			"Current date:         %s\n"+
-				"Accounts configured:  %d\n\n"+
+				"Accounts configured:  %d (active: %d, out of service: %d)\n\n"+
 				"Account Status:\n  %s\n\n"+
 				"Warning threshold:    7 days before expiration\n"+
 				"Reminder frequency:   Daily until updated",
 			now.Format("2006-01-02 15:04:05"),
-			len(accounts),
+			len(allAccounts),
+			len(activeAccounts),
+			outOfServiceCount,
 			strings.Join(infoLines, "\n  "),
 		)
 
 		tokenDetails = map[string]interface{}{
-			"current_date":        now.Format("2006-01-02 15:04:05"),
-			"accounts_configured": len(accounts),
-			"accounts":            accountInfos,
+			"current_date":             now.Format("2006-01-02 15:04:05"),
+			"accounts_configured":      len(allAccounts),
+			"accounts_active":          len(activeAccounts),
+			"accounts_out_of_service":  outOfServiceCount,
+			"accounts":                 accountInfos,
 		}
 	}
 

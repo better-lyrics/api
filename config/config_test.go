@@ -316,3 +316,214 @@ func TestConfigStringFields(t *testing.T) {
 		t.Errorf("Expected empty TTMLBearerToken, got %q", cfg.Configuration.TTMLBearerToken)
 	}
 }
+
+func TestGetTTMLAccounts_FiltersEmptyCredentials(t *testing.T) {
+	// Set multi-account tokens with some empty values
+	// Account 1: valid, Account 2: empty MUT, Account 3: valid
+	os.Setenv("TTML_BEARER_TOKENS", "bearer1,bearer2,bearer3")
+	os.Setenv("TTML_MEDIA_USER_TOKENS", "mut1,,mut3") // Account 2 has empty MUT
+	defer func() {
+		os.Unsetenv("TTML_BEARER_TOKENS")
+		os.Unsetenv("TTML_MEDIA_USER_TOKENS")
+	}()
+
+	cfg, err := load()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	accounts, err := cfg.GetTTMLAccounts()
+	if err != nil {
+		t.Fatalf("GetTTMLAccounts failed: %v", err)
+	}
+
+	// Should only return 2 accounts (Account 1 and Account 3)
+	if len(accounts) != 2 {
+		t.Errorf("Expected 2 active accounts (filtering empty MUT), got %d", len(accounts))
+	}
+
+	// Verify the accounts are Billie (index 0) and Taylor (index 2)
+	expectedNames := []string{"Billie", "Taylor"}
+	for i, acc := range accounts {
+		if acc.Name != expectedNames[i] {
+			t.Errorf("Expected account %d name %q, got %q", i, expectedNames[i], acc.Name)
+		}
+		if acc.OutOfService {
+			t.Errorf("Active account %s should not be marked as OutOfService", acc.Name)
+		}
+	}
+}
+
+func TestGetTTMLAccounts_FiltersEmptyBearerToken(t *testing.T) {
+	// Test with empty bearer token
+	os.Setenv("TTML_BEARER_TOKENS", "bearer1,,bearer3")
+	os.Setenv("TTML_MEDIA_USER_TOKENS", "mut1,mut2,mut3")
+	defer func() {
+		os.Unsetenv("TTML_BEARER_TOKENS")
+		os.Unsetenv("TTML_MEDIA_USER_TOKENS")
+	}()
+
+	cfg, err := load()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	accounts, err := cfg.GetTTMLAccounts()
+	if err != nil {
+		t.Fatalf("GetTTMLAccounts failed: %v", err)
+	}
+
+	// Should only return 2 accounts
+	if len(accounts) != 2 {
+		t.Errorf("Expected 2 active accounts (filtering empty bearer), got %d", len(accounts))
+	}
+}
+
+func TestGetAllTTMLAccounts_IncludesOutOfService(t *testing.T) {
+	// Set multi-account tokens with some empty values
+	os.Setenv("TTML_BEARER_TOKENS", "bearer1,bearer2,bearer3")
+	os.Setenv("TTML_MEDIA_USER_TOKENS", "mut1,,mut3") // Account 2 has empty MUT
+	defer func() {
+		os.Unsetenv("TTML_BEARER_TOKENS")
+		os.Unsetenv("TTML_MEDIA_USER_TOKENS")
+	}()
+
+	cfg, err := load()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	allAccounts, err := cfg.GetAllTTMLAccounts()
+	if err != nil {
+		t.Fatalf("GetAllTTMLAccounts failed: %v", err)
+	}
+
+	// Should return all 3 accounts
+	if len(allAccounts) != 3 {
+		t.Errorf("Expected 3 total accounts, got %d", len(allAccounts))
+	}
+
+	// Verify OutOfService flags
+	expectedOutOfService := []bool{false, true, false}
+	for i, acc := range allAccounts {
+		if acc.OutOfService != expectedOutOfService[i] {
+			t.Errorf("Account %d (%s) OutOfService: expected %v, got %v",
+				i, acc.Name, expectedOutOfService[i], acc.OutOfService)
+		}
+	}
+}
+
+func TestGetAllTTMLAccounts_AllValid(t *testing.T) {
+	// All accounts have valid credentials
+	os.Setenv("TTML_BEARER_TOKENS", "bearer1,bearer2,bearer3")
+	os.Setenv("TTML_MEDIA_USER_TOKENS", "mut1,mut2,mut3")
+	defer func() {
+		os.Unsetenv("TTML_BEARER_TOKENS")
+		os.Unsetenv("TTML_MEDIA_USER_TOKENS")
+	}()
+
+	cfg, err := load()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	allAccounts, err := cfg.GetAllTTMLAccounts()
+	if err != nil {
+		t.Fatalf("GetAllTTMLAccounts failed: %v", err)
+	}
+
+	activeAccounts, err := cfg.GetTTMLAccounts()
+	if err != nil {
+		t.Fatalf("GetTTMLAccounts failed: %v", err)
+	}
+
+	// Both should return the same count when all are valid
+	if len(allAccounts) != len(activeAccounts) {
+		t.Errorf("With all valid accounts, GetAllTTMLAccounts (%d) and GetTTMLAccounts (%d) should return same count",
+			len(allAccounts), len(activeAccounts))
+	}
+
+	// No accounts should be out of service
+	for _, acc := range allAccounts {
+		if acc.OutOfService {
+			t.Errorf("Account %s should not be OutOfService when credentials are valid", acc.Name)
+		}
+	}
+}
+
+func TestGetTTMLAccounts_SingleAccountEmptyMUT(t *testing.T) {
+	// Test single account mode with empty MUT
+	os.Unsetenv("TTML_BEARER_TOKENS")
+	os.Unsetenv("TTML_MEDIA_USER_TOKENS")
+	os.Setenv("TTML_BEARER_TOKEN", "single_bearer")
+	os.Setenv("TTML_MEDIA_USER_TOKEN", "") // Empty MUT
+	defer func() {
+		os.Unsetenv("TTML_BEARER_TOKEN")
+		os.Unsetenv("TTML_MEDIA_USER_TOKEN")
+	}()
+
+	cfg, err := load()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	accounts, err := cfg.GetTTMLAccounts()
+	if err != nil {
+		t.Fatalf("GetTTMLAccounts failed: %v", err)
+	}
+
+	// Should return empty (no active accounts)
+	if len(accounts) != 0 {
+		t.Errorf("Expected 0 active accounts (single account with empty MUT), got %d", len(accounts))
+	}
+}
+
+func TestGetAllTTMLAccounts_SingleAccountEmptyMUT(t *testing.T) {
+	// Test single account mode with empty MUT
+	os.Unsetenv("TTML_BEARER_TOKENS")
+	os.Unsetenv("TTML_MEDIA_USER_TOKENS")
+	os.Setenv("TTML_BEARER_TOKEN", "single_bearer")
+	os.Setenv("TTML_MEDIA_USER_TOKEN", "") // Empty MUT
+	defer func() {
+		os.Unsetenv("TTML_BEARER_TOKEN")
+		os.Unsetenv("TTML_MEDIA_USER_TOKEN")
+	}()
+
+	cfg, err := load()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	allAccounts, err := cfg.GetAllTTMLAccounts()
+	if err != nil {
+		t.Fatalf("GetAllTTMLAccounts failed: %v", err)
+	}
+
+	// Should return 1 account (but marked as out of service)
+	if len(allAccounts) != 1 {
+		t.Errorf("Expected 1 total account, got %d", len(allAccounts))
+	}
+
+	if !allAccounts[0].OutOfService {
+		t.Error("Account with empty MUT should be marked as OutOfService")
+	}
+}
+
+func TestTTMLAccount_OutOfServiceField(t *testing.T) {
+	// Test that OutOfService field is properly set
+	acc := TTMLAccount{
+		Name:           "TestAccount",
+		BearerToken:    "bearer",
+		MediaUserToken: "mut",
+		OutOfService:   false,
+	}
+
+	if acc.OutOfService {
+		t.Error("Expected OutOfService to be false")
+	}
+
+	acc.OutOfService = true
+	if !acc.OutOfService {
+		t.Error("Expected OutOfService to be true")
+	}
+}

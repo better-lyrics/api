@@ -247,3 +247,10 @@ func (cb *CircuitBreaker) IsHalfOpen() bool {
 	defer cb.mu.RUnlock()
 	return cb.state == StateHalfOpen
 }
+
+// Threshold returns the configured failure threshold
+func (cb *CircuitBreaker) Threshold() int {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	return cb.threshold
+}

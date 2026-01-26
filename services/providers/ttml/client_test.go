@@ -461,3 +461,102 @@ func TestScoreTrack_Comparison(t *testing.T) {
 		t.Errorf("Score difference should be >= 0.3, got %.3f", diff)
 	}
 }
+
+func TestTripCircuitBreakerOnFullQuarantine(t *testing.T) {
+	// Initialize a circuit breaker with low threshold for testing
+	apiCircuitBreaker = nil // Reset global state
+
+	// Set up test environment
+	initCircuitBreaker()
+
+	if apiCircuitBreaker == nil {
+		t.Fatal("Circuit breaker should be initialized")
+	}
+
+	// Reset to clean state
+	ResetCircuitBreaker()
+
+	// Get initial state
+	initialState, initialFailures, _ := GetCircuitBreakerStats()
+	if initialState != "CLOSED" {
+		t.Errorf("Expected initial state CLOSED, got %s", initialState)
+	}
+	if initialFailures != 0 {
+		t.Errorf("Expected initial failures 0, got %d", initialFailures)
+	}
+
+	// Call TripCircuitBreakerOnFullQuarantine
+	TripCircuitBreakerOnFullQuarantine()
+
+	// Circuit should now be OPEN
+	state, failures, _ := GetCircuitBreakerStats()
+	if state != "OPEN" {
+		t.Errorf("Expected state OPEN after tripping, got %s", state)
+	}
+
+	threshold := apiCircuitBreaker.Threshold()
+	if failures < threshold {
+		t.Errorf("Expected failures >= threshold (%d), got %d", threshold, failures)
+	}
+
+	// Reset for cleanup
+	ResetCircuitBreaker()
+}
+
+func TestTripCircuitBreakerOnFullQuarantine_AlreadyOpen(t *testing.T) {
+	// Reset circuit breaker
+	apiCircuitBreaker = nil
+	initCircuitBreaker()
+	ResetCircuitBreaker()
+
+	// First, trip the circuit
+	TripCircuitBreakerOnFullQuarantine()
+
+	state1, failures1, _ := GetCircuitBreakerStats()
+	if state1 != "OPEN" {
+		t.Fatalf("Expected state OPEN, got %s", state1)
+	}
+
+	// Call again when already open
+	TripCircuitBreakerOnFullQuarantine()
+
+	// Should still be open, failures should not increase beyond threshold
+	state2, failures2, _ := GetCircuitBreakerStats()
+	if state2 != "OPEN" {
+		t.Errorf("Expected state OPEN, got %s", state2)
+	}
+
+	// Failures shouldn't increase significantly when already at/above threshold
+	if failures2 < failures1 {
+		t.Errorf("Failures should not decrease: was %d, now %d", failures1, failures2)
+	}
+
+	// Reset for cleanup
+	ResetCircuitBreaker()
+}
+
+func TestTripCircuitBreakerOnFullQuarantine_NilCircuitBreaker(t *testing.T) {
+	// Reset global circuit breaker to nil
+	savedCB := apiCircuitBreaker
+	apiCircuitBreaker = nil
+
+	// This should initialize and then trip
+	TripCircuitBreakerOnFullQuarantine()
+
+	// Circuit breaker should be initialized
+	if apiCircuitBreaker == nil {
+		t.Error("Expected circuit breaker to be initialized")
+	}
+
+	// Should be in OPEN state
+	state, _, _ := GetCircuitBreakerStats()
+	if state != "OPEN" {
+		t.Errorf("Expected state OPEN, got %s", state)
+	}
+
+	// Restore original
+	if savedCB != nil {
+		apiCircuitBreaker = savedCB
+		ResetCircuitBreaker()
+	}
+}

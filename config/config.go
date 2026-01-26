@@ -114,9 +114,25 @@ type TTMLAccount struct {
 	Name           string
 	BearerToken    string
 	MediaUserToken string
+	OutOfService   bool // true if account has empty credentials (excluded from rotation)
 }
 
-// GetTTMLAccounts parses the comma-separated tokens and returns a slice of accounts.
+// funNames contains artist names for account logging
+var funNames = []string{
+	"Billie", "Toliver", "Taylor", "Dua", "Olivia",
+	"Charli", "Khalid", "Tyler", "Gunna", "Future",
+	"Offset", "Metro", "Burna", "Phoebe", "Mitski",
+	"Finneas", "Clairo", "Raye", "Hozier", "Gracie",
+	"Adele", "Ye", "Abel", "Keem", "Yeat",
+	"Cannons", "Roosevelt", "Kygo", "Uchis", "Laufey",
+	"Impala", "Denzel", "Garrix", "Illenium", "June",
+	"Winona", "Carti", "Sivan", "Larsson", "Midnight",
+	"Marias", "Lanez", "Odesza", "Flume", "Mura",
+	"Gryffin", "Rüfüs", "Jai", "Disclosure", "Kaytranada",
+}
+
+// GetTTMLAccounts parses the comma-separated tokens and returns only ACTIVE accounts.
+// Accounts with empty bearer token or media user token are excluded from rotation.
 // Returns an error if the number of bearer tokens doesn't match media user tokens.
 // Falls back to single token env vars if multi-account vars are not set.
 func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
@@ -128,18 +144,24 @@ func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
 		if c.Configuration.TTMLBearerToken == "" {
 			return nil, nil // No accounts configured
 		}
+		// Check if single account has valid credentials
+		if c.Configuration.TTMLMediaUserToken == "" {
+			log.Warnf("%s Account 'Billie' has empty credentials, excluding from rotation", logcolors.LogConfig)
+			return nil, nil
+		}
 		return []TTMLAccount{
 			{
 				Name:           "Billie",
 				BearerToken:    c.Configuration.TTMLBearerToken,
 				MediaUserToken: c.Configuration.TTMLMediaUserToken,
+				OutOfService:   false,
 			},
 		}, nil
 	}
 
-	// Parse comma-separated values
-	bearerList := SplitAndTrim(bearerTokens)
-	mediaUserList := SplitAndTrim(mediaUserTokens)
+	// Parse comma-separated values (preserve empty strings to maintain index alignment)
+	bearerList := splitAndTrimPreserveEmpty(bearerTokens)
+	mediaUserList := splitAndTrimPreserveEmpty(mediaUserTokens)
 
 	// Validate: must have same number of tokens
 	if len(bearerList) != len(mediaUserList) {
@@ -149,30 +171,79 @@ func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
 		)
 	}
 
-	// Artist names for account logging
-	funNames := []string{
-		"Billie", "Toliver", "Taylor", "Dua", "Olivia",
-		"Charli", "Khalid", "Tyler", "Gunna", "Future",
-		"Offset", "Metro", "Burna", "Phoebe", "Mitski",
-		"Finneas", "Clairo", "Raye", "Hozier", "Gracie",
-		"Adele", "Ye", "Abel", "Keem", "Yeat",
-		"Cannons", "Roosevelt", "Kygo", "Uchis", "Laufey",
-		"Impala", "Denzel", "Garrix", "Illenium", "June",
-		"Winona", "Carti", "Sivan", "Larsson", "Midnight",
-		"Marias", "Lanez", "Odesza", "Flume", "Mura",
-		"Gryffin", "Rüfüs", "Jai", "Disclosure", "Kaytranada",
+	// Build list of active accounts only (those with valid credentials)
+	accounts := make([]TTMLAccount, 0, len(bearerList))
+	for i := range bearerList {
+		name := fmt.Sprintf("Account-%d", i+1)
+		if i < len(funNames) {
+			name = funNames[i]
+		}
+
+		// Skip accounts with empty credentials - they're out of service
+		if bearerList[i] == "" || mediaUserList[i] == "" {
+			log.Warnf("%s Account '%s' has empty credentials, excluding from rotation", logcolors.LogConfig, name)
+			continue
+		}
+
+		accounts = append(accounts, TTMLAccount{
+			Name:           name,
+			BearerToken:    bearerList[i],
+			MediaUserToken: mediaUserList[i],
+			OutOfService:   false,
+		})
 	}
 
+	return accounts, nil
+}
+
+// GetAllTTMLAccounts returns ALL accounts including out-of-service ones (for monitoring/display).
+// Use GetTTMLAccounts() for active accounts only.
+func (c *Config) GetAllTTMLAccounts() ([]TTMLAccount, error) {
+	bearerTokens := c.Configuration.TTMLBearerTokens
+	mediaUserTokens := c.Configuration.TTMLMediaUserTokens
+
+	// If multi-account vars are empty, fall back to single account
+	if bearerTokens == "" {
+		if c.Configuration.TTMLBearerToken == "" {
+			return nil, nil // No accounts configured
+		}
+		outOfService := c.Configuration.TTMLMediaUserToken == ""
+		return []TTMLAccount{
+			{
+				Name:           "Billie",
+				BearerToken:    c.Configuration.TTMLBearerToken,
+				MediaUserToken: c.Configuration.TTMLMediaUserToken,
+				OutOfService:   outOfService,
+			},
+		}, nil
+	}
+
+	// Parse comma-separated values (preserve empty strings to maintain index alignment)
+	bearerList := splitAndTrimPreserveEmpty(bearerTokens)
+	mediaUserList := splitAndTrimPreserveEmpty(mediaUserTokens)
+
+	// Validate: must have same number of tokens
+	if len(bearerList) != len(mediaUserList) {
+		return nil, fmt.Errorf(
+			"TTML account mismatch: %d bearer tokens but %d media user tokens. Each account needs both tokens",
+			len(bearerList), len(mediaUserList),
+		)
+	}
+
+	// Build list of ALL accounts (including out-of-service)
 	accounts := make([]TTMLAccount, len(bearerList))
 	for i := range bearerList {
 		name := fmt.Sprintf("Account-%d", i+1)
 		if i < len(funNames) {
 			name = funNames[i]
 		}
+
+		outOfService := bearerList[i] == "" || mediaUserList[i] == ""
 		accounts[i] = TTMLAccount{
 			Name:           name,
 			BearerToken:    bearerList[i],
 			MediaUserToken: mediaUserList[i],
+			OutOfService:   outOfService,
 		}
 	}
 
@@ -205,6 +276,20 @@ func SplitAndTrim(s string) []string {
 		if trimmed != "" {
 			result = append(result, trimmed)
 		}
+	}
+	return result
+}
+
+// splitAndTrimPreserveEmpty splits a comma-separated string and trims whitespace from each part.
+// Empty strings are preserved to maintain index alignment (for multi-account token parsing).
+func splitAndTrimPreserveEmpty(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	result := make([]string, len(parts))
+	for i, p := range parts {
+		result[i] = strings.TrimSpace(p)
 	}
 	return result
 }

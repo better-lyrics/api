@@ -3,6 +3,7 @@ package notifier
 import (
 	"fmt"
 	"lyrics-api-go/logcolors"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,10 +100,17 @@ func (h *AlertHandler) formatAlert(event *Event) (subject, message string) {
 
 	case EventAllAccountsQuarantine:
 		accounts := event.Data["accounts"].(map[string]int64)
-		subject = "All Accounts Quarantined"
-		message = "All TTML accounts are currently rate-limited:\n\n"
+		outOfService := getStringSlice(event.Data, "accounts_out_of_service")
+		subject = "All Active Accounts Quarantined"
+		message = "All active TTML accounts are currently rate-limited:\n\n"
 		for name, remaining := range accounts {
 			message += fmt.Sprintf("  • %s: %s remaining\n", name, formatDuration(remaining))
+		}
+		if len(outOfService) > 0 {
+			message += "\n📌 Out of service (empty credentials):\n"
+			for _, name := range outOfService {
+				message += fmt.Sprintf("  • %s\n", name)
+			}
 		}
 		message += "\nThe API is degraded and may return errors until accounts recover."
 
@@ -141,24 +149,38 @@ func (h *AlertHandler) formatAlert(event *Event) (subject, message string) {
 
 	case EventHalfAccountsQuarantine:
 		quarantined := event.Data["quarantined"].(int)
-		total := event.Data["total"].(int)
+		totalActive := event.Data["total_active"].(int)
 		accounts := event.Data["accounts"].(map[string]int64)
-		subject = "Half Accounts Quarantined"
-		message = fmt.Sprintf("%d of %d accounts are rate-limited:\n\n", quarantined, total)
+		outOfService := getStringSlice(event.Data, "accounts_out_of_service")
+		subject = "Half Active Accounts Quarantined"
+		message = fmt.Sprintf("%d of %d active accounts are rate-limited:\n\n", quarantined, totalActive)
 		for name, remaining := range accounts {
 			message += fmt.Sprintf("  • %s: %s remaining\n", name, formatDuration(remaining))
+		}
+		if len(outOfService) > 0 {
+			message += "\n📌 Out of service (empty credentials):\n"
+			for _, name := range outOfService {
+				message += fmt.Sprintf("  • %s\n", name)
+			}
 		}
 		message += "\nAPI capacity is reduced. Monitor for further degradation."
 
 	case EventOneAwayFromQuarantine:
 		remaining := event.Data["remaining_account"].(string)
 		quarantined := event.Data["quarantined"].(map[string]int64)
-		subject = "One Account Away from Full Quarantine"
-		message = fmt.Sprintf("Only '%s' remains healthy.\n\nQuarantined accounts:\n", remaining)
+		outOfService := getStringSlice(event.Data, "accounts_out_of_service")
+		subject = "One Active Account Away from Full Quarantine"
+		message = fmt.Sprintf("Only '%s' remains healthy among active accounts.\n\nQuarantined:\n", remaining)
 		for name, secs := range quarantined {
 			message += fmt.Sprintf("  • %s: %s remaining\n", name, formatDuration(secs))
 		}
-		message += "\nIf this account gets rate-limited, all accounts will be quarantined."
+		if len(outOfService) > 0 {
+			message += "\n📌 Out of service (empty credentials):\n"
+			for _, name := range outOfService {
+				message += fmt.Sprintf("  • %s\n", name)
+			}
+		}
+		message += "\nIf this account gets rate-limited, all active accounts will be quarantined."
 
 	case EventCacheBackupFailed:
 		errMsg := event.Data["error"].(string)
@@ -177,9 +199,19 @@ func (h *AlertHandler) formatAlert(event *Event) (subject, message string) {
 
 	case EventServerStarted:
 		port := event.Data["port"].(string)
-		accountCount := event.Data["account_count"].(int)
+		activeCount := event.Data["accounts_active"].(int)
+		outOfService := getStringSlice(event.Data, "accounts_out_of_service")
 		subject = "Server Started"
-		message = fmt.Sprintf("Server started successfully on port %s with %d account(s).", port, accountCount)
+		if len(outOfService) > 0 {
+			message = fmt.Sprintf(
+				"Server started successfully on port %s.\n\n"+
+					"Accounts:\n"+
+					"  • Active: %d\n"+
+					"  • Out of service: %s (empty credentials)",
+				port, activeCount, strings.Join(outOfService, ", "))
+		} else {
+			message = fmt.Sprintf("Server started successfully on port %s with %d account(s).", port, activeCount)
+		}
 
 	case EventCacheCleared:
 		backupPath := event.Data["backup_path"].(string)
@@ -254,4 +286,12 @@ func (h *AlertHandler) ResetAllCooldowns() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.cooldowns = make(map[EventType]time.Time)
+}
+
+// getStringSlice safely gets a string slice from event data, returning empty slice if missing
+func getStringSlice(data map[string]interface{}, key string) []string {
+	if val, ok := data[key].([]string); ok {
+		return val
+	}
+	return nil
 }

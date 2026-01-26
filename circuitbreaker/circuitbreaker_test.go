@@ -506,3 +506,69 @@ func TestCircuitBreaker_ResetClearsHalfOpenStart(t *testing.T) {
 		t.Error("Expected halfOpenStart to be cleared after Reset()")
 	}
 }
+
+func TestCircuitBreaker_Threshold(t *testing.T) {
+	tests := []struct {
+		name             string
+		configThreshold  int
+		expectedThreshold int
+	}{
+		{
+			name:             "Custom threshold",
+			configThreshold:  10,
+			expectedThreshold: 10,
+		},
+		{
+			name:             "Small threshold",
+			configThreshold:  2,
+			expectedThreshold: 2,
+		},
+		{
+			name:             "Default threshold when zero",
+			configThreshold:  0,
+			expectedThreshold: 5, // Default value
+		},
+		{
+			name:             "Default threshold when negative",
+			configThreshold:  -1,
+			expectedThreshold: 5, // Default value
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cb := New(Config{
+				Threshold: tt.configThreshold,
+				Cooldown:  time.Minute,
+			})
+
+			threshold := cb.Threshold()
+			if threshold != tt.expectedThreshold {
+				t.Errorf("Expected threshold %d, got %d", tt.expectedThreshold, threshold)
+			}
+		})
+	}
+}
+
+func TestCircuitBreaker_Threshold_ConcurrentAccess(t *testing.T) {
+	cb := New(Config{Threshold: 10, Cooldown: time.Minute})
+
+	// Simulate concurrent access to Threshold()
+	done := make(chan bool)
+	for i := 0; i < 50; i++ {
+		go func() {
+			for j := 0; j < 10; j++ {
+				threshold := cb.Threshold()
+				if threshold != 10 {
+					t.Errorf("Expected threshold 10, got %d", threshold)
+				}
+			}
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 50; i++ {
+		<-done
+	}
+}

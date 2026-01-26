@@ -3,7 +3,7 @@ package ttml
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"lyrics-api-go/circuitbreaker"
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
@@ -66,6 +66,29 @@ func GetCircuitBreakerStats() (state string, failures int, timeUntilRetry time.D
 func ResetCircuitBreaker() {
 	if apiCircuitBreaker != nil {
 		apiCircuitBreaker.Reset()
+	}
+}
+
+// TripCircuitBreakerOnFullQuarantine opens the circuit breaker when all accounts are quarantined.
+// This is called by the account manager when all accounts become unavailable.
+func TripCircuitBreakerOnFullQuarantine() {
+	if apiCircuitBreaker == nil {
+		initCircuitBreaker()
+	}
+	if apiCircuitBreaker == nil {
+		return
+	}
+
+	// Record enough failures to trip the circuit if not already open
+	threshold := apiCircuitBreaker.Threshold()
+	currentFailures := apiCircuitBreaker.Failures()
+
+	if currentFailures < threshold {
+		log.Warnf("%s All accounts quarantined, tripping circuit breaker (adding %d failures)",
+			logcolors.LogCircuitBreaker, threshold-currentFailures)
+		for i := currentFailures; i < threshold; i++ {
+			apiCircuitBreaker.RecordFailure()
+		}
 	}
 }
 
@@ -269,7 +292,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)
 		}
 
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		log.Errorf("%s All %d retries exhausted, last account: %s", logcolors.LogRateLimit, maxRetries, logcolors.Account(account.NameID))
 		return nil, account, fmt.Errorf("TTML API returned status 429: %s", string(body))
@@ -298,7 +321,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		apiCircuitBreaker.RecordFailure()
 		log.Errorf("%s Unexpected status %d from %s: %s", logcolors.LogHTTP, resp.StatusCode, logcolors.Account(account.NameID), string(body))
@@ -342,7 +365,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, 0.0, successAccount, fmt.Errorf("failed to read search response: %v", err)
 	}
@@ -482,7 +505,7 @@ func fetchLyricsTTML(trackID string, storefront string, account MusicAccount) (s
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read lyrics response: %v", err)
 	}

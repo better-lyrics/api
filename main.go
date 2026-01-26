@@ -117,9 +117,17 @@ func main() {
 
 	handler := limitMiddleware(apiKeyHandler, limiter)
 
-	// Get account count for startup notification
-	accounts, _ := conf.GetTTMLAccounts()
-	accountCount := len(accounts)
+	// Get account info for startup notification
+	activeAccounts, _ := conf.GetTTMLAccounts()
+	allAccounts, _ := conf.GetAllTTMLAccounts()
+
+	// Collect out-of-service account names
+	var outOfServiceNames []string
+	for _, acc := range allAccounts {
+		if acc.OutOfService {
+			outOfServiceNames = append(outOfServiceNames, acc.Name)
+		}
+	}
 
 	// Log API key status
 	if conf.Configuration.APIKeyRequired {
@@ -135,7 +143,7 @@ func main() {
 	log.Infof("%s Listening on port %s", logcolors.LogServer, port)
 
 	// Publish server started event
-	notifier.PublishServerStarted(port, accountCount)
+	notifier.PublishServerStarted(port, len(activeAccounts), outOfServiceNames)
 
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }

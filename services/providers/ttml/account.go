@@ -157,12 +157,17 @@ func (m *AccountManager) checkQuarantineThresholds() {
 		return
 	}
 
+	// Get out-of-service account names for notifications
+	outOfServiceNames := getOutOfServiceAccountNames()
+
 	quarantined := total - m.availableAccountCount()
 	status := m.getQuarantineStatus()
 
 	// All accounts quarantined
 	if quarantined == total {
-		notifier.PublishAllAccountsQuarantined(status)
+		notifier.PublishAllAccountsQuarantined(status, outOfServiceNames)
+		// Trip circuit breaker since we have no healthy accounts
+		TripCircuitBreakerOnFullQuarantine()
 		return
 	}
 
@@ -172,7 +177,7 @@ func (m *AccountManager) checkQuarantineThresholds() {
 		now := time.Now().Unix()
 		for i, acc := range m.accounts {
 			if !m.isQuarantined(i, now) {
-				notifier.PublishOneAwayFromQuarantine(acc.NameID, status)
+				notifier.PublishOneAwayFromQuarantine(acc.NameID, status, outOfServiceNames)
 				return
 			}
 		}
@@ -181,8 +186,24 @@ func (m *AccountManager) checkQuarantineThresholds() {
 
 	// Half or more accounts quarantined
 	if quarantined >= total/2 && quarantined > 0 {
-		notifier.PublishHalfAccountsQuarantined(quarantined, total, status)
+		notifier.PublishHalfAccountsQuarantined(quarantined, total, status, outOfServiceNames)
 	}
+}
+
+// getOutOfServiceAccountNames returns names of accounts with empty credentials
+func getOutOfServiceAccountNames() []string {
+	conf := config.Get()
+	allAccounts, err := conf.GetAllTTMLAccounts()
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, acc := range allAccounts {
+		if acc.OutOfService {
+			names = append(names, acc.Name)
+		}
+	}
+	return names
 }
 
 // clearQuarantine removes quarantine from an account (called on successful request)

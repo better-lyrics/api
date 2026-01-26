@@ -150,29 +150,32 @@ func PublishHighFailureRate(name string, failures, threshold int) {
 }
 
 // PublishAllAccountsQuarantined publishes when all accounts are quarantined
-func PublishAllAccountsQuarantined(accountStatus map[string]int64) {
+func PublishAllAccountsQuarantined(accountStatus map[string]int64, outOfServiceAccounts []string) {
 	event := NewEvent(EventAllAccountsQuarantine, SeverityCritical,
-		"All API accounts are currently rate-limited").
-		WithData("accounts", accountStatus)
+		"All active API accounts are currently rate-limited").
+		WithData("accounts", accountStatus).
+		WithData("accounts_out_of_service", outOfServiceAccounts)
 	GetEventBus().Publish(event)
 }
 
 // PublishHalfAccountsQuarantined publishes when half or more accounts are quarantined
-func PublishHalfAccountsQuarantined(quarantined, total int, accountStatus map[string]int64) {
+func PublishHalfAccountsQuarantined(quarantined, totalActive int, accountStatus map[string]int64, outOfServiceAccounts []string) {
 	event := NewEvent(EventHalfAccountsQuarantine, SeverityWarning,
-		"Half or more API accounts are rate-limited").
+		"Half or more active API accounts are rate-limited").
 		WithData("quarantined", quarantined).
-		WithData("total", total).
-		WithData("accounts", accountStatus)
+		WithData("total_active", totalActive).
+		WithData("accounts", accountStatus).
+		WithData("accounts_out_of_service", outOfServiceAccounts)
 	GetEventBus().Publish(event)
 }
 
 // PublishOneAwayFromQuarantine publishes when only one account remains healthy
-func PublishOneAwayFromQuarantine(remainingAccount string, quarantinedStatus map[string]int64) {
+func PublishOneAwayFromQuarantine(remainingAccount string, quarantinedStatus map[string]int64, outOfServiceAccounts []string) {
 	event := NewEvent(EventOneAwayFromQuarantine, SeverityWarning,
-		"Only one API account remains healthy").
+		"Only one active API account remains healthy").
 		WithData("remaining_account", remainingAccount).
-		WithData("quarantined", quarantinedStatus)
+		WithData("quarantined", quarantinedStatus).
+		WithData("accounts_out_of_service", outOfServiceAccounts)
 	GetEventBus().Publish(event)
 }
 
@@ -202,11 +205,12 @@ func PublishCacheCleared(backupPath string) {
 }
 
 // PublishServerStarted publishes when server starts successfully
-func PublishServerStarted(port string, accountCount int) {
+func PublishServerStarted(port string, activeCount int, outOfServiceAccounts []string) {
 	event := NewEvent(EventServerStarted, SeverityInfo,
 		"Server started successfully").
 		WithData("port", port).
-		WithData("account_count", accountCount)
+		WithData("accounts_active", activeCount).
+		WithData("accounts_out_of_service", outOfServiceAccounts)
 	GetEventBus().Publish(event)
 }
 
