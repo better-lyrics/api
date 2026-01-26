@@ -1,10 +1,12 @@
 package ttml
 
 import (
+	"strings"
 	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
+
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/services/notifier"
 )
@@ -31,7 +33,10 @@ var (
 	healthMu       sync.RWMutex
 )
 
-// CheckMUTHealth tests a single account's MUT against the canary song
+// CheckMUTHealth tests a single account's MUT against the canary song.
+// Only 404 errors are considered "unhealthy" (stale MUT) - the canary song definitely
+// has lyrics, so 404 means the MUT can't access them (stale/expired).
+// 429 is handled by quarantine, 401 is a bearer token issue (separate system).
 func CheckMUTHealth(account MusicAccount) *MUTHealthStatus {
 	status := &MUTHealthStatus{
 		AccountName: account.NameID,
@@ -45,9 +50,20 @@ func CheckMUTHealth(account MusicAccount) *MUTHealthStatus {
 		status.Healthy = true
 		log.Debugf("%s Account %s: healthy", logcolors.LogHealthCheck, logcolors.Account(account.NameID))
 	} else {
-		status.Healthy = false
 		status.LastError = err.Error()
-		log.Warnf("%s Account %s: unhealthy - %v", logcolors.LogHealthCheck, logcolors.Account(account.NameID), err)
+
+		// 404 on canary song = stale MUT (song definitely has lyrics, MUT can't access them)
+		if strings.Contains(err.Error(), "404") {
+			status.Healthy = false
+			log.Warnf("%s Account %s: STALE MUT (404 on canary) - %v", logcolors.LogHealthCheck, logcolors.Account(account.NameID), err)
+
+			// Permanently disable this account
+			accountManager.DisableAccount(account)
+		} else {
+			// 429, 401, network errors don't mean the MUT is stale
+			status.Healthy = true
+			log.Debugf("%s Account %s: transient error (not stale) - %v", logcolors.LogHealthCheck, logcolors.Account(account.NameID), err)
+		}
 	}
 
 	healthMu.Lock()
@@ -58,7 +74,8 @@ func CheckMUTHealth(account MusicAccount) *MUTHealthStatus {
 }
 
 // CheckAllMUTHealth runs health checks on all ACTIVE accounts.
-// Skips out-of-service accounts (empty MUT).
+// Skips out-of-service accounts (empty MUT), quarantined accounts (rate limited),
+// and already disabled accounts (stale MUT detected previously).
 func CheckAllMUTHealth() []*MUTHealthStatus {
 	if accountManager == nil {
 		initAccountManager()
@@ -73,6 +90,19 @@ func CheckAllMUTHealth() []*MUTHealthStatus {
 			log.Debugf("%s Skipping out-of-service account: %s", logcolors.LogHealthCheck, account.NameID)
 			continue
 		}
+
+		// Skip quarantined accounts (rate limited, not stale)
+		if accountManager.IsAccountQuarantinedByName(account.NameID) {
+			log.Debugf("%s Skipping quarantined account: %s", logcolors.LogHealthCheck, account.NameID)
+			continue
+		}
+
+		// Skip already disabled accounts (stale MUT detected previously)
+		if accountManager.IsAccountDisabled(account.NameID) {
+			log.Debugf("%s Skipping disabled account: %s", logcolors.LogHealthCheck, account.NameID)
+			continue
+		}
+
 		status := CheckMUTHealth(account)
 		results = append(results, status)
 	}
@@ -113,32 +143,34 @@ func runHealthCheck() {
 
 	results := CheckAllMUTHealth()
 
-	healthy := 0
-	var unhealthy []*MUTHealthStatus
+	var healthy int
+	var staleMUTs []*MUTHealthStatus
 
 	for _, status := range results {
 		if status.Healthy {
 			healthy++
 		} else {
-			unhealthy = append(unhealthy, status)
+			// Only 404s (stale MUT) are marked unhealthy by CheckMUTHealth
+			staleMUTs = append(staleMUTs, status)
 		}
 	}
 
-	log.Infof("%s Health check complete: %d healthy, %d unhealthy",
-		logcolors.LogHealthCheck, healthy, len(unhealthy))
+	log.Infof("%s Health check complete: %d healthy, %d stale MUTs (404)",
+		logcolors.LogHealthCheck, healthy, len(staleMUTs))
 
-	// Emit notification if any unhealthy MUTs detected
-	if len(unhealthy) > 0 {
-		// Convert to simplified format to avoid circular imports in notifier
-		unhealthyData := make([]map[string]string, 0, len(unhealthy))
-		for _, status := range unhealthy {
-			unhealthyData = append(unhealthyData, map[string]string{
-				"name":  status.AccountName,
-				"error": status.LastError,
-			})
-		}
-		notifier.PublishMUTHealthCheckFailed(unhealthyData)
+	if len(staleMUTs) == 0 {
+		return
 	}
+
+	// Convert to simplified format for notifier
+	unhealthyData := make([]map[string]string, 0, len(staleMUTs))
+	for _, status := range staleMUTs {
+		unhealthyData = append(unhealthyData, map[string]string{
+			"name":  status.AccountName,
+			"error": status.LastError,
+		})
+	}
+	notifier.PublishMUTHealthCheckFailed(unhealthyData)
 }
 
 // getAllAccounts returns all accounts from the manager (for health checks)

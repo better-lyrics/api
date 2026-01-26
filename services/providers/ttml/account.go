@@ -1,14 +1,15 @@
 package ttml
 
 import (
-	"lyrics-api-go/config"
-	"lyrics-api-go/logcolors"
-	"lyrics-api-go/services/notifier"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
+
+	"lyrics-api-go/config"
+	"lyrics-api-go/logcolors"
+	"lyrics-api-go/services/notifier"
 )
 
 const (
@@ -17,8 +18,10 @@ const (
 )
 
 var (
-	accountManager  *AccountManager
-	quarantineMutex sync.RWMutex // Protects quarantineTime map
+	accountManager   *AccountManager
+	quarantineMutex  sync.RWMutex          // Protects quarantineTime map
+	disabledAccounts = make(map[string]bool) // Permanently disabled accounts (stale MUT)
+	disabledMutex    sync.RWMutex          // Protects disabledAccounts map
 )
 
 func initAccountManager() {
@@ -61,8 +64,8 @@ func initAccountManager() {
 	log.Infof("Initialized %d TTML account(s) with round-robin load balancing", len(accounts))
 }
 
-// getNextAccount returns the next non-quarantined account in round-robin fashion (thread-safe)
-// If all accounts are quarantined, returns the one with the shortest remaining quarantine
+// getNextAccount returns the next non-quarantined, non-disabled account in round-robin fashion (thread-safe)
+// If all accounts are quarantined or disabled, returns the one with the shortest remaining quarantine
 func (m *AccountManager) getNextAccount() MusicAccount {
 	if len(m.accounts) == 0 {
 		return MusicAccount{}
@@ -71,23 +74,36 @@ func (m *AccountManager) getNextAccount() MusicAccount {
 	now := time.Now().Unix()
 	numAccounts := len(m.accounts)
 
-	// Try to find a non-quarantined account
+	// Try to find a non-quarantined, non-disabled account
 	for i := 0; i < numAccounts; i++ {
 		idx := atomic.AddUint64(&m.currentIndex, 1) - 1
 		accountIdx := int(idx % uint64(numAccounts))
 
+		// Skip disabled accounts (stale MUT - permanent)
+		if m.IsAccountDisabled(m.accounts[accountIdx].NameID) {
+			log.Debugf("%s Skipping %s (disabled - stale MUT)", logcolors.LogQuarantine, logcolors.Account(m.accounts[accountIdx].NameID))
+			continue
+		}
+
+		// Skip quarantined accounts (rate limited - temporary)
 		if !m.isQuarantined(accountIdx, now) {
 			return m.accounts[accountIdx]
 		}
 		log.Debugf("%s Skipping %s (quarantined)", logcolors.LogQuarantine, logcolors.Account(m.accounts[accountIdx].NameID))
 	}
 
-	// All accounts quarantined - find the one with shortest remaining time
-	shortestIdx := 0
+	// All accounts quarantined or disabled - find the one with shortest remaining time
+	// (only consider non-disabled accounts)
+	shortestIdx := -1
 	shortestTime := int64(^uint64(0) >> 1) // Max int64
 
 	quarantineMutex.RLock()
 	for i := 0; i < numAccounts; i++ {
+		// Skip disabled accounts entirely
+		if m.IsAccountDisabled(m.accounts[i].NameID) {
+			continue
+		}
+
 		if endTime, exists := m.quarantineTime[i]; exists {
 			remaining := endTime - now
 			if remaining < shortestTime {
@@ -103,8 +119,14 @@ func (m *AccountManager) getNextAccount() MusicAccount {
 	}
 	quarantineMutex.RUnlock()
 
+	// If all accounts are disabled, return empty
+	if shortestIdx == -1 {
+		log.Errorf("%s All accounts are disabled! No accounts available.", logcolors.LogQuarantine)
+		return MusicAccount{}
+	}
+
 	if shortestTime > 0 {
-		log.Warnf("%s All accounts quarantined! Using %s (shortest wait: %ds)",
+		log.Warnf("%s All available accounts quarantined! Using %s (shortest wait: %ds)",
 			logcolors.LogQuarantine, logcolors.Account(m.accounts[shortestIdx].NameID), shortestTime)
 	}
 
@@ -254,14 +276,49 @@ func (m *AccountManager) accountCount() int {
 	return len(m.accounts)
 }
 
-// availableAccountCount returns the number of non-quarantined accounts
+// availableAccountCount returns the number of non-quarantined, non-disabled accounts
 func (m *AccountManager) availableAccountCount() int {
 	now := time.Now().Unix()
 	count := 0
-	for i := range m.accounts {
+	for i, acc := range m.accounts {
+		// Skip disabled accounts (stale MUT)
+		if m.IsAccountDisabled(acc.NameID) {
+			continue
+		}
 		if !m.isQuarantined(i, now) {
 			count++
 		}
 	}
 	return count
+}
+
+// IsAccountQuarantinedByName checks if an account is quarantined by its name ID
+func (m *AccountManager) IsAccountQuarantinedByName(nameID string) bool {
+	now := time.Now().Unix()
+	for i, acc := range m.accounts {
+		if acc.NameID == nameID {
+			return m.isQuarantined(i, now)
+		}
+	}
+	return false
+}
+
+// IsAccountDisabled checks if an account is permanently disabled (stale MUT)
+func (m *AccountManager) IsAccountDisabled(nameID string) bool {
+	disabledMutex.RLock()
+	defer disabledMutex.RUnlock()
+	return disabledAccounts[nameID]
+}
+
+// DisableAccount permanently disables an account (called when MUT is detected as stale via 404 on canary)
+func (m *AccountManager) DisableAccount(account MusicAccount) {
+	disabledMutex.Lock()
+	disabledAccounts[account.NameID] = true
+	disabledMutex.Unlock()
+
+	log.Errorf("%s Account %s PERMANENTLY DISABLED (stale MUT - 404 on canary)",
+		logcolors.LogQuarantine, logcolors.Account(account.NameID))
+
+	// Check if this triggers circuit breaker (all accounts unavailable)
+	m.checkQuarantineThresholds()
 }

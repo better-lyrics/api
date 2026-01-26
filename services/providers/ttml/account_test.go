@@ -352,3 +352,273 @@ func TestAccountManager_IsQuarantined(t *testing.T) {
 		t.Error("Account should be quarantined (future expiry)")
 	}
 }
+
+func TestAccountManager_DisableAccount(t *testing.T) {
+	// Reset disabled accounts
+	disabledMutex.Lock()
+	originalDisabled := disabledAccounts
+	disabledAccounts = make(map[string]bool)
+	disabledMutex.Unlock()
+	defer func() {
+		disabledMutex.Lock()
+		disabledAccounts = originalDisabled
+		disabledMutex.Unlock()
+	}()
+
+	account := MusicAccount{NameID: "TestAccount", MediaUserToken: "mut"}
+
+	manager := &AccountManager{
+		accounts:       []MusicAccount{account},
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+
+	// Not disabled initially
+	if manager.IsAccountDisabled("TestAccount") {
+		t.Error("Account should not be disabled initially")
+	}
+
+	// Disable it
+	manager.DisableAccount(account)
+
+	// Should be disabled now
+	if !manager.IsAccountDisabled("TestAccount") {
+		t.Error("Account should be disabled after DisableAccount call")
+	}
+}
+
+func TestAccountManager_IsAccountQuarantinedByName(t *testing.T) {
+	accounts := []MusicAccount{
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
+	}
+
+	manager := &AccountManager{
+		accounts:       accounts,
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+
+	// Not quarantined initially
+	if manager.IsAccountQuarantinedByName("Account1") {
+		t.Error("Account1 should not be quarantined initially")
+	}
+
+	// Quarantine Account1
+	manager.quarantineAccount(accounts[0])
+
+	// Should be quarantined now
+	if !manager.IsAccountQuarantinedByName("Account1") {
+		t.Error("Account1 should be quarantined")
+	}
+
+	// Account2 should not be quarantined
+	if manager.IsAccountQuarantinedByName("Account2") {
+		t.Error("Account2 should not be quarantined")
+	}
+
+	// Non-existent account should return false
+	if manager.IsAccountQuarantinedByName("NonExistent") {
+		t.Error("Non-existent account should return false")
+	}
+}
+
+func TestAccountManager_GetNextAccount_SkipsDisabled(t *testing.T) {
+	// Reset disabled accounts
+	disabledMutex.Lock()
+	originalDisabled := disabledAccounts
+	disabledAccounts = make(map[string]bool)
+	disabledMutex.Unlock()
+	defer func() {
+		disabledMutex.Lock()
+		disabledAccounts = originalDisabled
+		disabledMutex.Unlock()
+	}()
+
+	accounts := []MusicAccount{
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
+		{NameID: "Account3", MediaUserToken: "mut3"},
+	}
+
+	manager := &AccountManager{
+		accounts:       accounts,
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+
+	// Disable Account1
+	disabledMutex.Lock()
+	disabledAccounts["Account1"] = true
+	disabledMutex.Unlock()
+
+	// Should skip Account1 and return Account2
+	acc := manager.getNextAccount()
+	if acc.NameID == "Account1" {
+		t.Error("Should have skipped disabled Account1")
+	}
+}
+
+func TestAccountManager_AvailableAccountCount_ExcludesDisabled(t *testing.T) {
+	// Reset disabled accounts
+	disabledMutex.Lock()
+	originalDisabled := disabledAccounts
+	disabledAccounts = make(map[string]bool)
+	disabledMutex.Unlock()
+	defer func() {
+		disabledMutex.Lock()
+		disabledAccounts = originalDisabled
+		disabledMutex.Unlock()
+	}()
+
+	accounts := []MusicAccount{
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
+		{NameID: "Account3", MediaUserToken: "mut3"},
+	}
+
+	manager := &AccountManager{
+		accounts:       accounts,
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+
+	// All available initially
+	if manager.availableAccountCount() != 3 {
+		t.Errorf("Expected 3 available accounts, got %d", manager.availableAccountCount())
+	}
+
+	// Disable one
+	disabledMutex.Lock()
+	disabledAccounts["Account1"] = true
+	disabledMutex.Unlock()
+
+	if manager.availableAccountCount() != 2 {
+		t.Errorf("Expected 2 available accounts after disable, got %d", manager.availableAccountCount())
+	}
+
+	// Quarantine another
+	manager.quarantineAccount(accounts[1])
+	if manager.availableAccountCount() != 1 {
+		t.Errorf("Expected 1 available account after disable+quarantine, got %d", manager.availableAccountCount())
+	}
+}
+
+func TestAccountManager_DisabledAndQuarantinedCombination(t *testing.T) {
+	// Reset disabled accounts
+	disabledMutex.Lock()
+	originalDisabled := disabledAccounts
+	disabledAccounts = make(map[string]bool)
+	disabledMutex.Unlock()
+	defer func() {
+		disabledMutex.Lock()
+		disabledAccounts = originalDisabled
+		disabledMutex.Unlock()
+	}()
+
+	accounts := []MusicAccount{
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
+		{NameID: "Account3", MediaUserToken: "mut3"},
+	}
+
+	manager := &AccountManager{
+		accounts:       accounts,
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+
+	// Disable Account1
+	disabledMutex.Lock()
+	disabledAccounts["Account1"] = true
+	disabledMutex.Unlock()
+
+	// Quarantine Account2
+	manager.quarantineAccount(accounts[1])
+
+	// Only Account3 should be available
+	if manager.availableAccountCount() != 1 {
+		t.Errorf("Expected 1 available account, got %d", manager.availableAccountCount())
+	}
+
+	// getNextAccount should eventually return Account3
+	foundAccount3 := false
+	for i := 0; i < 5; i++ {
+		acc := manager.getNextAccount()
+		if acc.NameID == "Account3" {
+			foundAccount3 = true
+			break
+		}
+		if acc.NameID == "Account1" {
+			t.Error("Should never return disabled Account1")
+		}
+	}
+	if !foundAccount3 {
+		t.Error("Should have returned Account3 at least once")
+	}
+}
+
+func TestAccountManager_AllAccountsDisabled(t *testing.T) {
+	// Reset disabled accounts
+	disabledMutex.Lock()
+	originalDisabled := disabledAccounts
+	disabledAccounts = make(map[string]bool)
+	disabledMutex.Unlock()
+	defer func() {
+		disabledMutex.Lock()
+		disabledAccounts = originalDisabled
+		disabledMutex.Unlock()
+	}()
+
+	accounts := []MusicAccount{
+		{NameID: "Account1", MediaUserToken: "mut1"},
+		{NameID: "Account2", MediaUserToken: "mut2"},
+	}
+
+	manager := &AccountManager{
+		accounts:       accounts,
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+
+	// Disable all accounts
+	disabledMutex.Lock()
+	disabledAccounts["Account1"] = true
+	disabledAccounts["Account2"] = true
+	disabledMutex.Unlock()
+
+	// Should return empty account when all are disabled
+	acc := manager.getNextAccount()
+	if acc.NameID != "" {
+		t.Errorf("Expected empty account when all are disabled, got %q", acc.NameID)
+	}
+
+	// Available count should be 0
+	if manager.availableAccountCount() != 0 {
+		t.Errorf("Expected 0 available accounts, got %d", manager.availableAccountCount())
+	}
+}
+
+func TestAccountManager_IsAccountDisabled_NotFound(t *testing.T) {
+	// Reset disabled accounts
+	disabledMutex.Lock()
+	originalDisabled := disabledAccounts
+	disabledAccounts = make(map[string]bool)
+	disabledMutex.Unlock()
+	defer func() {
+		disabledMutex.Lock()
+		disabledAccounts = originalDisabled
+		disabledMutex.Unlock()
+	}()
+
+	manager := &AccountManager{
+		accounts:       []MusicAccount{{NameID: "Account1", MediaUserToken: "mut1"}},
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+
+	// Non-existent account should return false
+	if manager.IsAccountDisabled("NonExistent") {
+		t.Error("Non-existent account should not be disabled")
+	}
+}
