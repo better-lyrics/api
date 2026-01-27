@@ -46,8 +46,8 @@ type DownloadResponse struct {
 
 // SongSearchResponse represents the response from Kugou song search API
 type SongSearchResponse struct {
-	Status  int    `json:"status"`
-	ErrCode int    `json:"errcode"`
+	Status  int `json:"status"`
+	ErrCode int `json:"errcode"`
 	Data    struct {
 		Timestamp int64      `json:"timestamp"`
 		Total     int        `json:"total"`

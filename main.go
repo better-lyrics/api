@@ -6,6 +6,7 @@ import (
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/middleware"
 	"lyrics-api-go/services/notifier"
+	"lyrics-api-go/services/providers/ttml"
 	"lyrics-api-go/stats"
 	"net/http"
 	"os"
@@ -29,14 +30,26 @@ var (
 )
 
 func init() {
-	log.SetFormatter(&log.JSONFormatter{})
-	log.SetOutput(os.Stdout)
-	log.SetLevel(log.InfoLevel)
-
+	// Load .env first so config is available for logger setup
 	err := godotenv.Load()
 	if err != nil {
-		log.Warnf("%s Error loading .env file, using environment variables", logcolors.LogConfig)
+		// Can't use colored log prefix here since formatter isn't set yet
+		log.Warn("Error loading .env file, using environment variables")
 	}
+
+	// Configure logger based on feature flag
+	cfg := config.Get()
+	if cfg.FeatureFlags.PrettyLogs {
+		log.SetFormatter(&log.TextFormatter{
+			ForceColors:     true,
+			FullTimestamp:   true,
+			TimestampFormat: "15:04:05",
+		})
+	} else {
+		log.SetFormatter(&log.JSONFormatter{})
+	}
+	log.SetOutput(os.Stdout)
+	log.SetLevel(log.InfoLevel)
 }
 
 func main() {
@@ -79,7 +92,11 @@ func main() {
 		log.Infof("%s Alert handler initialized with %d notifier(s)", logcolors.LogNotifier, len(alertNotifiers))
 	}
 
-	go startTokenMonitor()
+	// Start bearer token auto-scraper (proactive refresh based on JWT expiry)
+	ttml.StartBearerTokenMonitor()
+
+	// Start MUT health check scheduler (daily canary checks)
+	ttml.StartHealthCheckScheduler()
 
 	router := mux.NewRouter()
 	setupRoutes(router)
@@ -90,7 +107,7 @@ func main() {
 	}
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"https://music.youtube.com", "http://localhost:3000","http://localhost:4321","https://lyrics-api-docs.boidu.dev"},
+		AllowedOrigins:   []string{"https://music.youtube.com", "http://localhost:3000", "http://localhost:4321", "https://lyrics-api-docs.boidu.dev"},
 		AllowCredentials: true,
 	})
 

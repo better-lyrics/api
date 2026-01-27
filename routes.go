@@ -33,6 +33,7 @@ func setupRoutes(router *mux.Router) {
 
 	// Health and stats endpoints
 	router.HandleFunc("/health", getHealthStatus)
+	router.HandleFunc("/health/mut", handleMUTHealth)
 	router.HandleFunc("/stats", getStats)
 
 	// Circuit breaker endpoints

@@ -9,7 +9,6 @@ import (
 	"lyrics-api-go/stats"
 	"net/http"
 	"os"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -47,7 +46,7 @@ func setupNotifiers() []notifier.Notifier {
 			ToEmail:      os.Getenv("NOTIFIER_TO_EMAIL"),
 		}
 		notifiers = append(notifiers, emailNotifier)
-		log.Infof("%s Email notifier enabled", logcolors.LogTokenMonitor)
+		log.Infof("%s Email notifier enabled", logcolors.LogNotifier)
 	}
 
 	if botToken := os.Getenv("NOTIFIER_TELEGRAM_BOT_TOKEN"); botToken != "" {
@@ -56,7 +55,7 @@ func setupNotifiers() []notifier.Notifier {
 			ChatID:   os.Getenv("NOTIFIER_TELEGRAM_CHAT_ID"),
 		}
 		notifiers = append(notifiers, telegramNotifier)
-		log.Infof("%s Telegram notifier enabled", logcolors.LogTokenMonitor)
+		log.Infof("%s Telegram notifier enabled", logcolors.LogNotifier)
 	}
 
 	if topic := os.Getenv("NOTIFIER_NTFY_TOPIC"); topic != "" {
@@ -65,52 +64,10 @@ func setupNotifiers() []notifier.Notifier {
 			Server: getEnvOrDefault("NOTIFIER_NTFY_SERVER", "https://ntfy.sh"),
 		}
 		notifiers = append(notifiers, ntfyNotifier)
-		log.Infof("%s Ntfy.sh notifier enabled", logcolors.LogTokenMonitor)
+		log.Infof("%s Ntfy.sh notifier enabled", logcolors.LogNotifier)
 	}
 
 	return notifiers
-}
-
-func startTokenMonitor() {
-	accounts, err := conf.GetTTMLAccounts()
-	if err != nil {
-		log.Warnf("%s Failed to get TTML accounts: %v", logcolors.LogTokenMonitor, err)
-		return
-	}
-
-	if len(accounts) == 0 {
-		log.Warnf("%s No TTML accounts configured, token monitoring disabled", logcolors.LogTokenMonitor)
-		return
-	}
-
-	notifiers := setupNotifiers()
-
-	if len(notifiers) == 0 {
-		log.Infof("%s No notifiers configured, token monitoring disabled", logcolors.LogTokenMonitor)
-		log.Infof("%s To enable notifications, configure at least one notifier (Email, Telegram, or Ntfy.sh)", logcolors.LogTokenMonitor)
-		return
-	}
-
-	// Convert accounts to TokenInfo for the monitor
-	tokens := make([]notifier.TokenInfo, len(accounts))
-	for i, acc := range accounts {
-		tokens[i] = notifier.TokenInfo{
-			Name:        acc.Name,
-			BearerToken: acc.BearerToken,
-		}
-	}
-
-	log.Infof("%s Starting with %d account(s) and %d notifier(s) configured", logcolors.LogTokenMonitor, len(tokens), len(notifiers))
-
-	monitor := notifier.NewTokenMonitor(notifier.MonitorConfig{
-		Tokens:           tokens,
-		WarningThreshold: 7,
-		ReminderInterval: 24,
-		StateFile:        "/tmp/ttml-pager.state",
-		Notifiers:        notifiers,
-	})
-
-	monitor.Run(6 * time.Hour)
 }
 
 func limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.Handler {

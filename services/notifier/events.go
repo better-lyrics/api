@@ -14,12 +14,13 @@ const (
 	EventAllAccountsQuarantine EventType = "all_accounts_quarantined"
 	EventAccountAuthFailure    EventType = "account_auth_failure"
 	EventServerStartupFailed   EventType = "server_startup_failed"
+	EventMUTHealthCheckFailed  EventType = "mut_health_check_failed"
 
 	// Warning events
-	EventHighFailureRate         EventType = "high_failure_rate"
-	EventHalfAccountsQuarantine  EventType = "half_accounts_quarantined"
-	EventOneAwayFromQuarantine   EventType = "one_away_from_quarantine"
-	EventCacheBackupFailed       EventType = "cache_backup_failed"
+	EventHighFailureRate        EventType = "high_failure_rate"
+	EventHalfAccountsQuarantine EventType = "half_accounts_quarantined"
+	EventOneAwayFromQuarantine  EventType = "one_away_from_quarantine"
+	EventCacheBackupFailed      EventType = "cache_backup_failed"
 
 	// Info events
 	EventCircuitBreakerRecovered EventType = "circuit_breaker_recovered"
@@ -67,9 +68,9 @@ type EventHandler func(event *Event)
 
 // EventBus manages event publishing and subscription
 type EventBus struct {
-	handlers map[EventType][]EventHandler
+	handlers    map[EventType][]EventHandler
 	allHandlers []EventHandler // handlers that receive all events
-	mu       sync.RWMutex
+	mu          sync.RWMutex
 }
 
 // Global event bus instance
@@ -220,5 +221,13 @@ func PublishServerStartupFailed(component string, err error) {
 		"Server failed to start").
 		WithData("component", component).
 		WithData("error", err.Error())
+	GetEventBus().Publish(event)
+}
+
+// PublishMUTHealthCheckFailed publishes when MUT health check detects unhealthy accounts
+func PublishMUTHealthCheckFailed(unhealthyAccounts interface{}) {
+	event := NewEvent(EventMUTHealthCheckFailed, SeverityCritical,
+		"MUT health check detected unhealthy accounts").
+		WithData("unhealthy_accounts", unhealthyAccounts)
 	GetEventBus().Publish(event)
 }

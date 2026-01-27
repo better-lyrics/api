@@ -24,18 +24,18 @@ type Config struct {
 		CachedRateLimitBurstLimit          int    `envconfig:"CACHED_RATE_LIMIT_BURST_LIMIT" default:"20"`
 		CacheInvalidationIntervalInSeconds int    `envconfig:"CACHE_INVALIDATION_INTERVAL_IN_SECONDS" default:"3600"`
 		LyricsCacheTTLInSeconds            int    `envconfig:"LYRICS_CACHE_TTL_IN_SECONDS" default:"86400"`
-		CacheAccessToken string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
-		APIKey           string `envconfig:"API_KEY" default:""`
-		APIKeyRequired   bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
+		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
+		APIKey                             string `envconfig:"API_KEY" default:""`
+		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
 
 		// TTML API Configuration
-		// Single account (backwards compatible)
-		TTMLBearerToken    string `envconfig:"TTML_BEARER_TOKEN" default:""`
+		// Token source for auto-scraping bearer tokens (web frontend URL)
+		TTMLTokenSourceURL string `envconfig:"TTML_TOKEN_SOURCE_URL" default:""`
+		// Single account (backwards compatible) - only MUT needed, bearer is auto-scraped
 		TTMLMediaUserToken string `envconfig:"TTML_MEDIA_USER_TOKEN" default:""`
-		// Multi-account support (comma-separated)
-		TTMLBearerTokens           string  `envconfig:"TTML_BEARER_TOKENS" default:""`
+		// Multi-account support (comma-separated media user tokens)
 		TTMLMediaUserTokens        string  `envconfig:"TTML_MEDIA_USER_TOKENS" default:""`
-		TTMLStorefront             string  `envconfig:"TTML_STOREFRONT" default:"us"`
+		TTMLStorefront             string  `envconfig:"TTML_STOREFRONT" default:"in"`
 		TTMLBaseURL                string  `envconfig:"TTML_BASE_URL" default:""`
 		TTMLSearchPath             string  `envconfig:"TTML_SEARCH_PATH" default:""`
 		TTMLLyricsPath             string  `envconfig:"TTML_LYRICS_PATH" default:""`
@@ -46,24 +46,25 @@ type Config struct {
 		CircuitBreakerCooldownSecs int     `envconfig:"CIRCUIT_BREAKER_COOLDOWN_SECS" default:"300"` // Seconds to wait before retrying (default: 5 minutes)
 
 		// Legacy Provider Configuration (Spotify-based)
-		LyricsUrl          string `envconfig:"LYRICS_URL" default:""`
-		TrackUrl           string `envconfig:"TRACK_URL" default:""`
-		TokenUrl           string `envconfig:"TOKEN_URL" default:""`
-		TokenKey           string `envconfig:"TOKEN_KEY" default:"sp_dc_token"`
-		AppPlatform        string `envconfig:"APP_PLATFORM" default:"WebPlayer"`
-		UserAgent          string `envconfig:"USER_AGENT" default:"Mozilla/5.0"`
-		CookieStringFormat string `envconfig:"COOKIE_STRING_FORMAT" default:"sp_dc=%s"`
-		CookieValue        string `envconfig:"COOKIE_VALUE" default:""`
-		ClientID           string `envconfig:"CLIENT_ID" default:""`
-		ClientSecret       string `envconfig:"CLIENT_SECRET" default:""`
-		OauthTokenUrl      string `envconfig:"OAUTH_TOKEN_URL" default:"https://accounts.spotify.com/api/token"`
-		OauthTokenKey      string `envconfig:"OAUTH_TOKEN_KEY" default:"oauth_token"`
-		TrackCacheTTLInSeconds int `envconfig:"TRACK_CACHE_TTL_IN_SECONDS" default:"86400"`
+		LyricsUrl              string `envconfig:"LYRICS_URL" default:""`
+		TrackUrl               string `envconfig:"TRACK_URL" default:""`
+		TokenUrl               string `envconfig:"TOKEN_URL" default:""`
+		TokenKey               string `envconfig:"TOKEN_KEY" default:"sp_dc_token"`
+		AppPlatform            string `envconfig:"APP_PLATFORM" default:"WebPlayer"`
+		UserAgent              string `envconfig:"USER_AGENT" default:"Mozilla/5.0"`
+		CookieStringFormat     string `envconfig:"COOKIE_STRING_FORMAT" default:"sp_dc=%s"`
+		CookieValue            string `envconfig:"COOKIE_VALUE" default:""`
+		ClientID               string `envconfig:"CLIENT_ID" default:""`
+		ClientSecret           string `envconfig:"CLIENT_SECRET" default:""`
+		OauthTokenUrl          string `envconfig:"OAUTH_TOKEN_URL" default:"https://accounts.spotify.com/api/token"`
+		OauthTokenKey          string `envconfig:"OAUTH_TOKEN_KEY" default:"oauth_token"`
+		TrackCacheTTLInSeconds int    `envconfig:"TRACK_CACHE_TTL_IN_SECONDS" default:"86400"`
 	}
 
 	FeatureFlags struct {
 		CacheCompression bool `envconfig:"FF_CACHE_COMPRESSION" default:"true"`
 		CacheOnlyMode    bool `envconfig:"FF_CACHE_ONLY_MODE" default:"false"`
+		PrettyLogs       bool `envconfig:"FF_PRETTY_LOGS" default:"false"`
 	}
 }
 
@@ -111,17 +112,17 @@ var APIKeyProtectedPaths = []string{
 }
 
 // TTMLAccount represents a single TTML API account
+// Bearer token is now auto-scraped, only MUT is needed per account
 type TTMLAccount struct {
 	Name           string
-	BearerToken    string
 	MediaUserToken string
-	OutOfService   bool // true if account has empty credentials (excluded from rotation)
+	OutOfService   bool // true if account has empty MUT (excluded from rotation)
 }
 
 // funNames contains artist names for account logging
 var funNames = []string{
 	"Billie", "Toliver", "Taylor", "Dua", "Olivia",
-	"Charli", "Khalid", "Tyler", "Gunna", "Future",
+	"Charli", "Khalid", "Tyler", "Crywank", "Future",
 	"Offset", "Metro", "Burna", "Phoebe", "Mitski",
 	"Finneas", "Clairo", "Raye", "Hozier", "Gracie",
 	"Adele", "Ye", "Abel", "Keem", "Yeat",
@@ -132,28 +133,22 @@ var funNames = []string{
 	"Gryffin", "Rüfüs", "Jai", "Disclosure", "Kaytranada",
 }
 
-// GetTTMLAccounts parses the comma-separated tokens and returns only ACTIVE accounts.
-// Accounts with empty bearer token or media user token are excluded from rotation.
-// Returns an error if the number of bearer tokens doesn't match media user tokens.
-// Falls back to single token env vars if multi-account vars are not set.
+// GetTTMLAccounts parses the comma-separated media user tokens and returns only ACTIVE accounts.
+// Accounts with empty media user token are excluded from rotation.
+// Bearer token is now auto-scraped - only MUTs needed per account.
+// Falls back to single token env var if multi-account var is not set.
 func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
-	bearerTokens := c.Configuration.TTMLBearerTokens
 	mediaUserTokens := c.Configuration.TTMLMediaUserTokens
 
-	// If multi-account vars are empty, fall back to single account
-	if bearerTokens == "" {
-		if c.Configuration.TTMLBearerToken == "" {
-			return nil, nil // No accounts configured
-		}
-		// Check if single account has valid credentials
+	// If multi-account var is empty, fall back to single account
+	if mediaUserTokens == "" {
+		// Check if single account has valid MUT
 		if c.Configuration.TTMLMediaUserToken == "" {
-			log.Warnf("%s Account 'Billie' has empty credentials, excluding from rotation", logcolors.LogConfig)
-			return nil, nil
+			return nil, nil // No accounts configured
 		}
 		return []TTMLAccount{
 			{
 				Name:           "Billie",
-				BearerToken:    c.Configuration.TTMLBearerToken,
 				MediaUserToken: c.Configuration.TTMLMediaUserToken,
 				OutOfService:   false,
 			},
@@ -161,35 +156,25 @@ func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
 	}
 
 	// Parse comma-separated values (preserve empty strings to maintain index alignment)
-	bearerList := splitAndTrimPreserveEmpty(bearerTokens)
 	mediaUserList := splitAndTrimPreserveEmpty(mediaUserTokens)
 
-	// Validate: must have same number of tokens
-	if len(bearerList) != len(mediaUserList) {
-		return nil, fmt.Errorf(
-			"TTML account mismatch: %d bearer tokens but %d media user tokens. Each account needs both tokens",
-			len(bearerList), len(mediaUserList),
-		)
-	}
-
-	// Build list of active accounts only (those with valid credentials)
-	accounts := make([]TTMLAccount, 0, len(bearerList))
-	for i := range bearerList {
+	// Build list of active accounts only (those with valid MUT)
+	accounts := make([]TTMLAccount, 0, len(mediaUserList))
+	for i, mut := range mediaUserList {
 		name := fmt.Sprintf("Account-%d", i+1)
 		if i < len(funNames) {
 			name = funNames[i]
 		}
 
-		// Skip accounts with empty credentials - they're out of service
-		if bearerList[i] == "" || mediaUserList[i] == "" {
-			log.Warnf("%s Account '%s' has empty credentials, excluding from rotation", logcolors.LogConfig, name)
+		// Skip accounts with empty MUT - they're out of service
+		if mut == "" {
+			log.Warnf("%s Account '%s' has empty MUT, excluding from rotation", logcolors.LogConfig, name)
 			continue
 		}
 
 		accounts = append(accounts, TTMLAccount{
 			Name:           name,
-			BearerToken:    bearerList[i],
-			MediaUserToken: mediaUserList[i],
+			MediaUserToken: mut,
 			OutOfService:   false,
 		})
 	}
@@ -199,70 +184,44 @@ func (c *Config) GetTTMLAccounts() ([]TTMLAccount, error) {
 
 // GetAllTTMLAccounts returns ALL accounts including out-of-service ones (for monitoring/display).
 // Use GetTTMLAccounts() for active accounts only.
+// Bearer token is now auto-scraped - only MUTs are configured per account.
 func (c *Config) GetAllTTMLAccounts() ([]TTMLAccount, error) {
-	bearerTokens := c.Configuration.TTMLBearerTokens
 	mediaUserTokens := c.Configuration.TTMLMediaUserTokens
 
-	// If multi-account vars are empty, fall back to single account
-	if bearerTokens == "" {
-		if c.Configuration.TTMLBearerToken == "" {
+	// If multi-account var is empty, fall back to single account
+	if mediaUserTokens == "" {
+		// Check if single account is configured (empty MUT = out of service)
+		if c.Configuration.TTMLMediaUserToken == "" {
 			return nil, nil // No accounts configured
 		}
-		outOfService := c.Configuration.TTMLMediaUserToken == ""
 		return []TTMLAccount{
 			{
 				Name:           "Billie",
-				BearerToken:    c.Configuration.TTMLBearerToken,
 				MediaUserToken: c.Configuration.TTMLMediaUserToken,
-				OutOfService:   outOfService,
+				OutOfService:   false, // MUT is present
 			},
 		}, nil
 	}
 
 	// Parse comma-separated values (preserve empty strings to maintain index alignment)
-	bearerList := splitAndTrimPreserveEmpty(bearerTokens)
 	mediaUserList := splitAndTrimPreserveEmpty(mediaUserTokens)
 
-	// Validate: must have same number of tokens
-	if len(bearerList) != len(mediaUserList) {
-		return nil, fmt.Errorf(
-			"TTML account mismatch: %d bearer tokens but %d media user tokens. Each account needs both tokens",
-			len(bearerList), len(mediaUserList),
-		)
-	}
-
 	// Build list of ALL accounts (including out-of-service)
-	accounts := make([]TTMLAccount, len(bearerList))
-	for i := range bearerList {
+	accounts := make([]TTMLAccount, len(mediaUserList))
+	for i, mut := range mediaUserList {
 		name := fmt.Sprintf("Account-%d", i+1)
 		if i < len(funNames) {
 			name = funNames[i]
 		}
 
-		outOfService := bearerList[i] == "" || mediaUserList[i] == ""
 		accounts[i] = TTMLAccount{
 			Name:           name,
-			BearerToken:    bearerList[i],
-			MediaUserToken: mediaUserList[i],
-			OutOfService:   outOfService,
+			MediaUserToken: mut,
+			OutOfService:   mut == "", // Out of service if empty MUT
 		}
 	}
 
 	return accounts, nil
-}
-
-// GetAllBearerTokens returns all configured bearer tokens (for monitoring purposes)
-func (c *Config) GetAllBearerTokens() []string {
-	accounts, err := c.GetTTMLAccounts()
-	if err != nil || len(accounts) == 0 {
-		return nil
-	}
-
-	tokens := make([]string, len(accounts))
-	for i, acc := range accounts {
-		tokens[i] = acc.BearerToken
-	}
-	return tokens
 }
 
 // SplitAndTrim splits a comma-separated string and trims whitespace from each element

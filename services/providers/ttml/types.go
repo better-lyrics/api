@@ -20,9 +20,10 @@ type Syllable = providers.Syllable
 // ACCOUNT MANAGEMENT TYPES
 // =============================================================================
 
+// MusicAccount represents a single TTML API account.
+// Bearer token is now shared and auto-scraped - only MUT is per-account.
 type MusicAccount struct {
 	NameID         string
-	BearerToken    string
 	MediaUserToken string
 	Storefront     string
 }
@@ -66,6 +67,24 @@ type LyricsResponse struct {
 			TTMLLocalizations string `json:"ttmlLocalizations"`
 		} `json:"attributes"`
 	} `json:"data"`
+}
+
+// =============================================================================
+// ACCOUNT API RESPONSE STRUCTURES
+// =============================================================================
+
+// AccountResponse for /v1/me/account endpoint
+type AccountResponse struct {
+	Meta AccountMeta `json:"meta"`
+}
+
+type AccountMeta struct {
+	Subscription SubscriptionInfo `json:"subscription"`
+}
+
+type SubscriptionInfo struct {
+	Active     bool   `json:"active"`
+	Storefront string `json:"storefront"`
 }
 
 // =============================================================================

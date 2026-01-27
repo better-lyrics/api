@@ -35,10 +35,7 @@ func initCircuitBreaker() {
 	// Scale threshold by number of accounts for fair distribution
 	// With round-robin, each account may fail independently, so we need
 	// a higher threshold to avoid premature circuit opening
-	numAccounts := accountManager.accountCount()
-	if numAccounts < 1 {
-		numAccounts = 1
-	}
+	numAccounts := max(accountManager.accountCount(), 1)
 	scaledThreshold := baseThreshold * numAccounts
 
 	apiCircuitBreaker = circuitbreaker.New(circuitbreaker.Config{
@@ -126,14 +123,8 @@ func stringSimilarity(s1, s2 string) float64 {
 
 	// One contains the other
 	if strings.Contains(n1, n2) || strings.Contains(n2, n1) {
-		shorter := len(n1)
-		if len(n2) < shorter {
-			shorter = len(n2)
-		}
-		longer := len(n1)
-		if len(n2) > longer {
-			longer = len(n2)
-		}
+		shorter := min(len(n1), len(n2))
+		longer := max(len(n1), len(n2))
 		return 0.7 + (0.3 * float64(shorter) / float64(longer))
 	}
 
@@ -232,8 +223,15 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 		return nil, account, err
 	}
 
+	// Get shared bearer token (auto-scraped)
+	bearerToken, err := GetBearerToken()
+	if err != nil {
+		log.Errorf("%s Failed to get bearer token: %v", logcolors.LogHTTP, err)
+		return nil, account, fmt.Errorf("failed to get bearer token: %w", err)
+	}
+
 	// Set headers for web auth
-	req.Header.Set("Authorization", "Bearer "+account.BearerToken)
+	req.Header.Set("Authorization", "Bearer "+bearerToken)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	req.Header.Set("Origin", "https://music.apple.com")
 	req.Header.Set("Referer", "https://music.apple.com")
@@ -250,6 +248,9 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 	}
 
 	log.Infof("%s Response from %s: status %d", logcolors.LogHTTP, logcolors.Account(account.NameID), resp.StatusCode)
+
+	// Calculate max retries based on account count (capped at 3)
+	maxRetries := min(accountManager.accountCount(), 3)
 
 	// Handle rate limiting - quarantine account and retry with different one
 	if resp.StatusCode == 429 {
@@ -270,18 +271,12 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 		accountManager.quarantineAccount(account)
 
 		// Only count toward circuit breaker if no healthy accounts remain
-		// This prevents circuit breaker from opening when we still have working accounts
 		availableAccounts := accountManager.availableAccountCount()
 		if availableAccounts == 0 {
 			apiCircuitBreaker.RecordFailure()
 			log.Warnf("%s All accounts quarantined, recording circuit breaker failure", logcolors.LogRateLimit)
 		}
 
-		// Get next available (non-quarantined) account and retry
-		maxRetries := accountManager.accountCount()
-		if maxRetries > 3 {
-			maxRetries = 3 // Cap at 3 retries even with more accounts
-		}
 		if retries < maxRetries {
 			resp.Body.Close()
 			nextAccount := accountManager.getNextAccount()
@@ -298,13 +293,11 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 		return nil, account, fmt.Errorf("TTML API returned status 429: %s", string(body))
 	}
 
-	// Handle auth errors (don't count as circuit breaker failure, just retry)
-	maxRetries := accountManager.accountCount()
-	if maxRetries > 3 {
-		maxRetries = 3
-	}
+	// Handle auth errors - since bearer is auto-refreshed, 401 indicates MUT issue
+	// Don't count as circuit breaker failure, just retry with different account
 	if resp.StatusCode == 401 {
 		// Emit auth failure event (only on first occurrence per account to avoid spam during retries)
+		// Since bearer is always fresh, this indicates the MUT is invalid/expired
 		if retries == 0 {
 			notifier.PublishAccountAuthFailure(account.NameID, resp.StatusCode)
 		}
@@ -313,7 +306,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 			resp.Body.Close()
 			nextAccount := accountManager.getNextAccount()
 			sleepDuration := time.Duration(retries+1) * time.Second
-			log.Warnf("%s 401 on %s, switching to %s (attempt %d/%d, sleeping %v)...",
+			log.Warnf("%s 401 on %s (MUT invalid), switching to %s (attempt %d/%d, sleeping %v)...",
 				logcolors.LogAuthError, logcolors.Account(account.NameID), logcolors.Account(nextAccount.NameID), attemptNum, maxRetries, sleepDuration)
 			time.Sleep(sleepDuration)
 			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)

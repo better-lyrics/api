@@ -509,28 +509,28 @@ func TestCircuitBreaker_ResetClearsHalfOpenStart(t *testing.T) {
 
 func TestCircuitBreaker_Threshold(t *testing.T) {
 	tests := []struct {
-		name             string
-		configThreshold  int
+		name              string
+		configThreshold   int
 		expectedThreshold int
 	}{
 		{
-			name:             "Custom threshold",
-			configThreshold:  10,
+			name:              "Custom threshold",
+			configThreshold:   10,
 			expectedThreshold: 10,
 		},
 		{
-			name:             "Small threshold",
-			configThreshold:  2,
+			name:              "Small threshold",
+			configThreshold:   2,
 			expectedThreshold: 2,
 		},
 		{
-			name:             "Default threshold when zero",
-			configThreshold:  0,
+			name:              "Default threshold when zero",
+			configThreshold:   0,
 			expectedThreshold: 5, // Default value
 		},
 		{
-			name:             "Default threshold when negative",
-			configThreshold:  -1,
+			name:              "Default threshold when negative",
+			configThreshold:   -1,
 			expectedThreshold: 5, // Default value
 		},
 	}

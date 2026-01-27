@@ -19,7 +19,6 @@ var (
 	// Banned pattern for credit lines (e.g., "[00:05.00]Composed by：xxx")
 	// Reference: https://github.com/mostafaalagamy/Metrolist/blob/1152eb28a9c6c0e9f7fa63c87ef50e2e4fa1eae1/kugou/src/main/kotlin/com/metrolist/kugou/KuGou.kt#L149
 	bannedRegex = regexp.MustCompile(`^\[\d{2}:\d{2}[\.:]\d{2,3}\].+：.+`)
-
 )
 
 const (
