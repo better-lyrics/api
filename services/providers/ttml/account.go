@@ -1,6 +1,14 @@
 package ttml
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +23,9 @@ import (
 const (
 	// QuarantineDuration is how long an account is quarantined after a 429
 	QuarantineDuration = 5 * time.Minute
+
+	// StorefrontCacheFile is the filename for persistent storefront cache
+	StorefrontCacheFile = "storefront_cache.json"
 )
 
 var (
@@ -22,6 +33,11 @@ var (
 	quarantineMutex  sync.RWMutex            // Protects quarantineTime map
 	disabledAccounts = make(map[string]bool) // Permanently disabled accounts (stale MUT)
 	disabledMutex    sync.RWMutex            // Protects disabledAccounts map
+
+	// Storefront cache: maps MUT hash -> storefront code
+	storefrontCache     = make(map[string]string)
+	storefrontCachePath string
+	storefrontMutex     sync.RWMutex
 )
 
 func initAccountManager() {
@@ -321,4 +337,220 @@ func (m *AccountManager) DisableAccount(account MusicAccount) {
 
 	// Check if this triggers circuit breaker (all accounts unavailable)
 	m.checkQuarantineThresholds()
+}
+
+// =============================================================================
+// STOREFRONT CACHE
+// =============================================================================
+
+// hashMUT returns a SHA256 hash of the media user token
+func hashMUT(mut string) string {
+	h := sha256.Sum256([]byte(mut))
+	return hex.EncodeToString(h[:])
+}
+
+// loadStorefrontCache loads the storefront cache from disk
+func loadStorefrontCache() {
+	storefrontMutex.Lock()
+	defer storefrontMutex.Unlock()
+
+	// Determine cache path (same directory as cache.db) if not already set
+	if storefrontCachePath == "" {
+		cacheDir := os.Getenv("CACHE_DB_PATH")
+		if cacheDir == "" {
+			cacheDir = "./cache.db"
+		}
+		storefrontCachePath = filepath.Join(filepath.Dir(cacheDir), StorefrontCacheFile)
+	}
+
+	data, err := os.ReadFile(storefrontCachePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Warnf("%s Failed to read storefront cache: %v", logcolors.LogAccountInit, err)
+		}
+		return
+	}
+
+	if err := json.Unmarshal(data, &storefrontCache); err != nil {
+		log.Warnf("%s Failed to parse storefront cache: %v", logcolors.LogAccountInit, err)
+		return
+	}
+
+	log.Debugf("%s Loaded %d cached storefronts", logcolors.LogAccountInit, len(storefrontCache))
+}
+
+// saveStorefrontCache persists the storefront cache to disk
+func saveStorefrontCache() {
+	storefrontMutex.RLock()
+	data, err := json.MarshalIndent(storefrontCache, "", "  ")
+	storefrontMutex.RUnlock()
+
+	if err != nil {
+		log.Warnf("%s Failed to marshal storefront cache: %v", logcolors.LogAccountInit, err)
+		return
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(storefrontCachePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Warnf("%s Failed to create cache directory: %v", logcolors.LogAccountInit, err)
+		return
+	}
+
+	if err := os.WriteFile(storefrontCachePath, data, 0644); err != nil {
+		log.Warnf("%s Failed to write storefront cache: %v", logcolors.LogAccountInit, err)
+		return
+	}
+
+	log.Debugf("%s Saved %d storefronts to cache", logcolors.LogAccountInit, len(storefrontCache))
+}
+
+// getCachedStorefront returns the cached storefront for a MUT, or empty string if not cached
+func getCachedStorefront(mut string) string {
+	storefrontMutex.RLock()
+	defer storefrontMutex.RUnlock()
+	return storefrontCache[hashMUT(mut)]
+}
+
+// setCachedStorefront stores a storefront for a MUT in the cache
+func setCachedStorefront(mut, storefront string) {
+	storefrontMutex.Lock()
+	defer storefrontMutex.Unlock()
+	storefrontCache[hashMUT(mut)] = storefront
+}
+
+// =============================================================================
+// STOREFRONT FETCHING
+// =============================================================================
+
+// fetchAccountStorefront fetches the storefront for a specific account from Apple Music's account API.
+// Returns the storefront code (e.g., "us", "in", "gb") or an error.
+func fetchAccountStorefront(account MusicAccount) (string, error) {
+	if account.MediaUserToken == "" {
+		return "", fmt.Errorf("account has no media user token")
+	}
+
+	// Get bearer token for auth
+	bearerToken, err := GetBearerToken()
+	if err != nil {
+		return "", fmt.Errorf("failed to get bearer token: %w", err)
+	}
+
+	conf := config.Get()
+	accountURL := conf.Configuration.TTMLBaseURL + "/me/account?meta=subscription"
+
+	req, err := http.NewRequest("GET", accountURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set headers (same as lyrics API)
+	req.Header.Set("Authorization", "Bearer "+bearerToken)
+	req.Header.Set("media-user-token", account.MediaUserToken)
+	req.Header.Set("Origin", "https://music.apple.com")
+	req.Header.Set("Referer", "https://music.apple.com/")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var accountResp AccountResponse
+	if err := json.Unmarshal(body, &accountResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	storefront := accountResp.Meta.Subscription.Storefront
+	if storefront == "" {
+		return "", fmt.Errorf("empty storefront in response")
+	}
+
+	return storefront, nil
+}
+
+// InitializeAccountStorefronts fetches and sets the storefront for each account.
+// Uses persistent cache to avoid refetching storefronts when MUT hasn't changed.
+// This should be called after the bearer token is available.
+// On failure, accounts retain their default storefront from config.
+func InitializeAccountStorefronts() {
+	// Ensure account manager is initialized
+	if accountManager == nil {
+		initAccountManager()
+	}
+
+	if accountManager == nil || len(accountManager.accounts) == 0 {
+		log.Warnf("%s No accounts to initialize storefronts for", logcolors.LogAccountInit)
+		return
+	}
+
+	// Load cached storefronts from disk
+	loadStorefrontCache()
+
+	log.Infof("%s Initializing storefronts for %d account(s)...", logcolors.LogAccountInit, len(accountManager.accounts))
+
+	cacheUpdated := false
+	for i := range accountManager.accounts {
+		account := &accountManager.accounts[i]
+
+		// Skip accounts with empty MUT (out-of-service)
+		if account.MediaUserToken == "" {
+			log.Debugf("%s Skipping %s (no MUT)", logcolors.LogAccountInit, logcolors.Account(account.NameID))
+			continue
+		}
+
+		// Check cache first
+		cachedStorefront := getCachedStorefront(account.MediaUserToken)
+		if cachedStorefront != "" {
+			if cachedStorefront != account.Storefront {
+				log.Infof("%s %s storefront: %s → %s (from cache)",
+					logcolors.LogAccountInit, logcolors.Account(account.NameID), account.Storefront, cachedStorefront)
+				account.Storefront = cachedStorefront
+			} else {
+				log.Infof("%s %s storefront: %s (cached)",
+					logcolors.LogAccountInit, logcolors.Account(account.NameID), cachedStorefront)
+			}
+			continue
+		}
+
+		// Not in cache - fetch from API
+		storefront, err := fetchAccountStorefront(*account)
+		if err != nil {
+			log.Warnf("%s Failed to fetch storefront for %s, keeping default %q: %v",
+				logcolors.LogAccountInit, logcolors.Account(account.NameID), account.Storefront, err)
+			continue
+		}
+
+		// Update account and cache
+		if storefront != account.Storefront {
+			log.Infof("%s %s storefront: %s → %s (fetched)",
+				logcolors.LogAccountInit, logcolors.Account(account.NameID), account.Storefront, storefront)
+			account.Storefront = storefront
+		} else {
+			log.Infof("%s %s storefront: %s (fetched)",
+				logcolors.LogAccountInit, logcolors.Account(account.NameID), storefront)
+		}
+
+		// Cache the fetched storefront
+		setCachedStorefront(account.MediaUserToken, storefront)
+		cacheUpdated = true
+	}
+
+	// Save cache if updated
+	if cacheUpdated {
+		saveStorefrontCache()
+	}
+
+	log.Infof("%s Storefront initialization complete", logcolors.LogAccountInit)
 }

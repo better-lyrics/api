@@ -102,4 +102,5 @@ const (
 const (
 	LogBearerToken = Cyan + "[Bearer Token]" + Reset
 	LogHealthCheck = Cyan + "[Health Check]" + Reset
+	LogAccountInit = Cyan + "[Account Init]" + Reset
 )

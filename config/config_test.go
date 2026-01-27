@@ -16,6 +16,7 @@ func TestConfigDefaultValues(t *testing.T) {
 		"LYRICS_CACHE_TTL_IN_SECONDS",
 		"FF_CACHE_COMPRESSION",
 		"FF_CACHE_ONLY_MODE",
+		"FF_PRETTY_LOGS",
 		"TTML_STOREFRONT",
 	}
 
@@ -78,7 +79,7 @@ func TestConfigDefaultValues(t *testing.T) {
 		{
 			name:     "TTMLStorefront default",
 			got:      cfg.Configuration.TTMLStorefront,
-			expected: "us",
+			expected: "in",
 		},
 		{
 			name:     "CacheCompression default",
@@ -88,6 +89,11 @@ func TestConfigDefaultValues(t *testing.T) {
 		{
 			name:     "CacheOnlyMode default",
 			got:      cfg.FeatureFlags.CacheOnlyMode,
+			expected: false,
+		},
+		{
+			name:     "PrettyLogs default",
+			got:      cfg.FeatureFlags.PrettyLogs,
 			expected: false,
 		},
 	}
@@ -366,6 +372,66 @@ func TestFeatureFlagCacheOnlyModeDefault(t *testing.T) {
 	// Default should be false (upstream requests enabled)
 	if cfg.FeatureFlags.CacheOnlyMode != false {
 		t.Errorf("Expected CacheOnlyMode default to be false, got %v", cfg.FeatureFlags.CacheOnlyMode)
+	}
+}
+
+func TestFeatureFlagPrettyLogs(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		expected bool
+	}{
+		{
+			name:     "Pretty logs enabled (true)",
+			envValue: "true",
+			expected: true,
+		},
+		{
+			name:     "Pretty logs disabled (false)",
+			envValue: "false",
+			expected: false,
+		},
+		{
+			name:     "Pretty logs enabled (1)",
+			envValue: "1",
+			expected: true,
+		},
+		{
+			name:     "Pretty logs disabled (0)",
+			envValue: "0",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Setenv("FF_PRETTY_LOGS", tt.envValue)
+			defer os.Unsetenv("FF_PRETTY_LOGS")
+
+			cfg, err := load()
+			if err != nil {
+				t.Fatalf("Failed to load config: %v", err)
+			}
+
+			if cfg.FeatureFlags.PrettyLogs != tt.expected {
+				t.Errorf("Expected PrettyLogs %v, got %v", tt.expected, cfg.FeatureFlags.PrettyLogs)
+			}
+		})
+	}
+}
+
+func TestFeatureFlagPrettyLogsDefault(t *testing.T) {
+	// Ensure the env var is not set
+	os.Unsetenv("FF_PRETTY_LOGS")
+
+	cfg, err := load()
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Default should be false (JSON format)
+	if cfg.FeatureFlags.PrettyLogs != false {
+		t.Errorf("Expected PrettyLogs default to be false, got %v", cfg.FeatureFlags.PrettyLogs)
 	}
 }
 

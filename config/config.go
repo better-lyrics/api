@@ -35,7 +35,7 @@ type Config struct {
 		TTMLMediaUserToken string `envconfig:"TTML_MEDIA_USER_TOKEN" default:""`
 		// Multi-account support (comma-separated media user tokens)
 		TTMLMediaUserTokens        string  `envconfig:"TTML_MEDIA_USER_TOKENS" default:""`
-		TTMLStorefront             string  `envconfig:"TTML_STOREFRONT" default:"us"`
+		TTMLStorefront             string  `envconfig:"TTML_STOREFRONT" default:"in"`
 		TTMLBaseURL                string  `envconfig:"TTML_BASE_URL" default:""`
 		TTMLSearchPath             string  `envconfig:"TTML_SEARCH_PATH" default:""`
 		TTMLLyricsPath             string  `envconfig:"TTML_LYRICS_PATH" default:""`
@@ -64,6 +64,7 @@ type Config struct {
 	FeatureFlags struct {
 		CacheCompression bool `envconfig:"FF_CACHE_COMPRESSION" default:"true"`
 		CacheOnlyMode    bool `envconfig:"FF_CACHE_ONLY_MODE" default:"false"`
+		PrettyLogs       bool `envconfig:"FF_PRETTY_LOGS" default:"false"`
 	}
 }
 

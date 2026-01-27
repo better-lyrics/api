@@ -70,6 +70,24 @@ type LyricsResponse struct {
 }
 
 // =============================================================================
+// ACCOUNT API RESPONSE STRUCTURES
+// =============================================================================
+
+// AccountResponse for /v1/me/account endpoint
+type AccountResponse struct {
+	Meta AccountMeta `json:"meta"`
+}
+
+type AccountMeta struct {
+	Subscription SubscriptionInfo `json:"subscription"`
+}
+
+type SubscriptionInfo struct {
+	Active     bool   `json:"active"`
+	Storefront string `json:"storefront"`
+}
+
+// =============================================================================
 // TTML XML STRUCTURES
 // =============================================================================
 

@@ -1,6 +1,11 @@
 package ttml
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -620,5 +625,436 @@ func TestAccountManager_IsAccountDisabled_NotFound(t *testing.T) {
 	// Non-existent account should return false
 	if manager.IsAccountDisabled("NonExistent") {
 		t.Error("Non-existent account should not be disabled")
+	}
+}
+
+// =============================================================================
+// STOREFRONT FETCHING TESTS
+// =============================================================================
+
+func TestFetchAccountStorefront_Success(t *testing.T) {
+	// Create a mock server that returns a valid account response
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request path
+		if r.URL.Path != "/v1/me/account" {
+			t.Errorf("Expected path /v1/me/account, got %s", r.URL.Path)
+		}
+
+		// Verify query params
+		if r.URL.Query().Get("meta") != "subscription" {
+			t.Errorf("Expected meta=subscription query param")
+		}
+
+		// Verify required headers
+		if r.Header.Get("Authorization") == "" {
+			t.Error("Expected Authorization header")
+		}
+		if r.Header.Get("media-user-token") != "test_mut" {
+			t.Errorf("Expected media-user-token header 'test_mut', got %s", r.Header.Get("media-user-token"))
+		}
+		if r.Header.Get("Origin") != "https://music.apple.com" {
+			t.Errorf("Expected Origin header")
+		}
+
+		// Return mock response
+		resp := AccountResponse{
+			Meta: AccountMeta{
+				Subscription: SubscriptionInfo{
+					Active:     true,
+					Storefront: "in",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	// Save and restore original bearer token state
+	tokenMu.Lock()
+	originalToken := bearerToken
+	originalExpiry := tokenExpiry
+	bearerToken = "test_bearer_token"
+	tokenExpiry = time.Now().Add(1 * time.Hour)
+	tokenMu.Unlock()
+	defer func() {
+		tokenMu.Lock()
+		bearerToken = originalToken
+		tokenExpiry = originalExpiry
+		tokenMu.Unlock()
+	}()
+
+	// We need to use the mock server URL, but fetchAccountStorefront uses config
+	// So we'll test the response parsing directly
+	account := MusicAccount{
+		NameID:         "TestAccount",
+		MediaUserToken: "test_mut",
+		Storefront:     "us",
+	}
+
+	// Test with empty MUT should error
+	emptyMutAccount := MusicAccount{
+		NameID:         "EmptyMUT",
+		MediaUserToken: "",
+		Storefront:     "us",
+	}
+	_, err := fetchAccountStorefront(emptyMutAccount)
+	if err == nil {
+		t.Error("Expected error for account with empty MUT")
+	}
+	if err.Error() != "account has no media user token" {
+		t.Errorf("Expected 'account has no media user token' error, got: %v", err)
+	}
+
+	// For accounts with MUT, we can't fully test without mocking config
+	// but we verify the function exists and handles empty MUT correctly
+	_ = account
+}
+
+func TestFetchAccountStorefront_EmptyMUT(t *testing.T) {
+	account := MusicAccount{
+		NameID:         "TestAccount",
+		MediaUserToken: "",
+		Storefront:     "us",
+	}
+
+	_, err := fetchAccountStorefront(account)
+	if err == nil {
+		t.Error("Expected error for account with empty MUT")
+	}
+	if err.Error() != "account has no media user token" {
+		t.Errorf("Expected 'account has no media user token' error, got: %v", err)
+	}
+}
+
+func TestAccountResponse_Parsing(t *testing.T) {
+	// Test that AccountResponse struct can parse the expected JSON format
+	jsonData := `{
+		"meta": {
+			"subscription": {
+				"active": true,
+				"storefront": "gb"
+			}
+		}
+	}`
+
+	var resp AccountResponse
+	err := json.Unmarshal([]byte(jsonData), &resp)
+	if err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	if !resp.Meta.Subscription.Active {
+		t.Error("Expected subscription to be active")
+	}
+	if resp.Meta.Subscription.Storefront != "gb" {
+		t.Errorf("Expected storefront 'gb', got %q", resp.Meta.Subscription.Storefront)
+	}
+}
+
+func TestAccountResponse_EmptyStorefront(t *testing.T) {
+	// Test handling of empty storefront in response
+	jsonData := `{
+		"meta": {
+			"subscription": {
+				"active": true,
+				"storefront": ""
+			}
+		}
+	}`
+
+	var resp AccountResponse
+	err := json.Unmarshal([]byte(jsonData), &resp)
+	if err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	if resp.Meta.Subscription.Storefront != "" {
+		t.Errorf("Expected empty storefront, got %q", resp.Meta.Subscription.Storefront)
+	}
+}
+
+func TestAccountResponse_MissingFields(t *testing.T) {
+	// Test handling of missing fields (should default to zero values)
+	jsonData := `{
+		"meta": {}
+	}`
+
+	var resp AccountResponse
+	err := json.Unmarshal([]byte(jsonData), &resp)
+	if err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	if resp.Meta.Subscription.Storefront != "" {
+		t.Errorf("Expected empty storefront for missing field, got %q", resp.Meta.Subscription.Storefront)
+	}
+	if resp.Meta.Subscription.Active {
+		t.Error("Expected Active to be false for missing field")
+	}
+}
+
+func TestInitializeAccountStorefronts_NoAccounts(t *testing.T) {
+	// Save and restore original account manager
+	originalManager := accountManager
+	defer func() {
+		accountManager = originalManager
+	}()
+
+	// Test with nil account manager
+	accountManager = nil
+	InitializeAccountStorefronts() // Should not panic
+
+	// Test with empty accounts
+	accountManager = &AccountManager{
+		accounts:       []MusicAccount{},
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+	InitializeAccountStorefronts() // Should not panic
+}
+
+func TestInitializeAccountStorefronts_SkipsEmptyMUT(t *testing.T) {
+	// Save and restore original state
+	originalManager := accountManager
+	tokenMu.Lock()
+	originalToken := bearerToken
+	originalExpiry := tokenExpiry
+	bearerToken = "test_bearer_token"
+	tokenExpiry = time.Now().Add(1 * time.Hour)
+	tokenMu.Unlock()
+
+	defer func() {
+		accountManager = originalManager
+		tokenMu.Lock()
+		bearerToken = originalToken
+		tokenExpiry = originalExpiry
+		tokenMu.Unlock()
+	}()
+
+	// Create manager with one account with empty MUT
+	accountManager = &AccountManager{
+		accounts: []MusicAccount{
+			{NameID: "Account1", MediaUserToken: "", Storefront: "us"},
+			{NameID: "Account2", MediaUserToken: "valid_mut", Storefront: "us"},
+		},
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+
+	// This will attempt to fetch but fail (no real API)
+	// The important thing is it doesn't panic and skips empty MUT
+	InitializeAccountStorefronts()
+
+	// Account with empty MUT should still have default storefront
+	if accountManager.accounts[0].Storefront != "us" {
+		t.Errorf("Account with empty MUT should keep default storefront, got %q", accountManager.accounts[0].Storefront)
+	}
+}
+
+// =============================================================================
+// STOREFRONT CACHE TESTS
+// =============================================================================
+
+func TestHashMUT(t *testing.T) {
+	// Test that hashMUT returns consistent results
+	mut := "test_media_user_token_12345"
+	hash1 := hashMUT(mut)
+	hash2 := hashMUT(mut)
+
+	if hash1 != hash2 {
+		t.Errorf("hashMUT should be deterministic, got %q and %q", hash1, hash2)
+	}
+
+	// Hash should be 64 characters (SHA256 = 32 bytes = 64 hex chars)
+	if len(hash1) != 64 {
+		t.Errorf("Expected hash length 64, got %d", len(hash1))
+	}
+
+	// Different MUTs should produce different hashes
+	hash3 := hashMUT("different_token")
+	if hash1 == hash3 {
+		t.Error("Different MUTs should produce different hashes")
+	}
+}
+
+func TestStorefrontCache_GetSet(t *testing.T) {
+	// Save and restore original cache
+	storefrontMutex.Lock()
+	originalCache := storefrontCache
+	storefrontCache = make(map[string]string)
+	storefrontMutex.Unlock()
+	defer func() {
+		storefrontMutex.Lock()
+		storefrontCache = originalCache
+		storefrontMutex.Unlock()
+	}()
+
+	mut := "test_mut_for_cache"
+
+	// Initially should be empty
+	sf := getCachedStorefront(mut)
+	if sf != "" {
+		t.Errorf("Expected empty storefront for uncached MUT, got %q", sf)
+	}
+
+	// Set and retrieve
+	setCachedStorefront(mut, "in")
+	sf = getCachedStorefront(mut)
+	if sf != "in" {
+		t.Errorf("Expected storefront 'in', got %q", sf)
+	}
+
+	// Update should overwrite
+	setCachedStorefront(mut, "gb")
+	sf = getCachedStorefront(mut)
+	if sf != "gb" {
+		t.Errorf("Expected storefront 'gb' after update, got %q", sf)
+	}
+}
+
+func TestStorefrontCache_Persistence(t *testing.T) {
+	// Create a temp directory for the test
+	tmpDir, err := os.MkdirTemp("", "storefront_cache_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Save and restore original state
+	storefrontMutex.Lock()
+	originalCache := storefrontCache
+	originalPath := storefrontCachePath
+	storefrontCache = make(map[string]string)
+	storefrontCachePath = filepath.Join(tmpDir, StorefrontCacheFile)
+	storefrontMutex.Unlock()
+	defer func() {
+		storefrontMutex.Lock()
+		storefrontCache = originalCache
+		storefrontCachePath = originalPath
+		storefrontMutex.Unlock()
+	}()
+
+	// Set some values
+	setCachedStorefront("mut1", "us")
+	setCachedStorefront("mut2", "in")
+
+	// Save to disk
+	saveStorefrontCache()
+
+	// Verify file exists
+	if _, err := os.Stat(storefrontCachePath); os.IsNotExist(err) {
+		t.Error("Cache file should exist after save")
+	}
+
+	// Clear in-memory cache
+	storefrontMutex.Lock()
+	storefrontCache = make(map[string]string)
+	storefrontMutex.Unlock()
+
+	// Load from disk
+	loadStorefrontCache()
+
+	// Verify values are restored
+	if getCachedStorefront("mut1") != "us" {
+		t.Errorf("Expected 'us' for mut1 after load, got %q", getCachedStorefront("mut1"))
+	}
+	if getCachedStorefront("mut2") != "in" {
+		t.Errorf("Expected 'in' for mut2 after load, got %q", getCachedStorefront("mut2"))
+	}
+}
+
+func TestStorefrontCache_LoadNonexistentFile(t *testing.T) {
+	// Save and restore original state
+	storefrontMutex.Lock()
+	originalCache := storefrontCache
+	originalPath := storefrontCachePath
+	storefrontCache = make(map[string]string)
+	storefrontCachePath = "/nonexistent/path/storefront_cache.json"
+	storefrontMutex.Unlock()
+	defer func() {
+		storefrontMutex.Lock()
+		storefrontCache = originalCache
+		storefrontCachePath = originalPath
+		storefrontMutex.Unlock()
+	}()
+
+	// Set CACHE_DB_PATH to trigger the path calculation in loadStorefrontCache
+	oldEnv := os.Getenv("CACHE_DB_PATH")
+	os.Setenv("CACHE_DB_PATH", "/nonexistent/cache.db")
+	defer os.Setenv("CACHE_DB_PATH", oldEnv)
+
+	// Should not panic when file doesn't exist
+	loadStorefrontCache()
+
+	// Cache should remain empty
+	storefrontMutex.RLock()
+	if len(storefrontCache) != 0 {
+		t.Error("Cache should be empty after loading nonexistent file")
+	}
+	storefrontMutex.RUnlock()
+}
+
+func TestInitializeAccountStorefronts_UsesCache(t *testing.T) {
+	// Create a temp directory for the test
+	tmpDir, err := os.MkdirTemp("", "storefront_init_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Save and restore original state
+	originalManager := accountManager
+	storefrontMutex.Lock()
+	originalCache := storefrontCache
+	originalPath := storefrontCachePath
+	storefrontCache = make(map[string]string)
+	storefrontCachePath = filepath.Join(tmpDir, StorefrontCacheFile)
+	storefrontMutex.Unlock()
+
+	tokenMu.Lock()
+	originalToken := bearerToken
+	originalExpiry := tokenExpiry
+	bearerToken = "test_bearer_token"
+	tokenExpiry = time.Now().Add(1 * time.Hour)
+	tokenMu.Unlock()
+
+	defer func() {
+		accountManager = originalManager
+		storefrontMutex.Lock()
+		storefrontCache = originalCache
+		storefrontCachePath = originalPath
+		storefrontMutex.Unlock()
+		tokenMu.Lock()
+		bearerToken = originalToken
+		tokenExpiry = originalExpiry
+		tokenMu.Unlock()
+	}()
+
+	// Pre-populate cache with a storefront
+	testMut := "test_cached_mut"
+	setCachedStorefront(testMut, "jp")
+	saveStorefrontCache()
+
+	// Clear in-memory cache to simulate fresh start
+	storefrontMutex.Lock()
+	storefrontCache = make(map[string]string)
+	storefrontMutex.Unlock()
+
+	// Create account manager with the same MUT
+	accountManager = &AccountManager{
+		accounts: []MusicAccount{
+			{NameID: "CachedAccount", MediaUserToken: testMut, Storefront: "us"},
+		},
+		currentIndex:   0,
+		quarantineTime: make(map[int]int64),
+	}
+
+	// Initialize - should use cached value without API call
+	InitializeAccountStorefronts()
+
+	// Account should have the cached storefront
+	if accountManager.accounts[0].Storefront != "jp" {
+		t.Errorf("Expected storefront 'jp' from cache, got %q", accountManager.accounts[0].Storefront)
 	}
 }

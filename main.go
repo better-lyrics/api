@@ -30,14 +30,26 @@ var (
 )
 
 func init() {
-	log.SetFormatter(&log.JSONFormatter{})
-	log.SetOutput(os.Stdout)
-	log.SetLevel(log.InfoLevel)
-
+	// Load .env first so config is available for logger setup
 	err := godotenv.Load()
 	if err != nil {
-		log.Warnf("%s Error loading .env file, using environment variables", logcolors.LogConfig)
+		// Can't use colored log prefix here since formatter isn't set yet
+		log.Warn("Error loading .env file, using environment variables")
 	}
+
+	// Configure logger based on feature flag
+	cfg := config.Get()
+	if cfg.FeatureFlags.PrettyLogs {
+		log.SetFormatter(&log.TextFormatter{
+			ForceColors:     true,
+			FullTimestamp:   true,
+			TimestampFormat: "15:04:05",
+		})
+	} else {
+		log.SetFormatter(&log.JSONFormatter{})
+	}
+	log.SetOutput(os.Stdout)
+	log.SetLevel(log.InfoLevel)
 }
 
 func main() {

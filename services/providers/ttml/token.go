@@ -219,17 +219,20 @@ func scrapeToken() (string, error) {
 	return "", fmt.Errorf("could not extract JWT from JS bundle")
 }
 
-// StartBearerTokenMonitor starts a background goroutine that proactively refreshes
-// the bearer token before it expires
+// StartBearerTokenMonitor fetches the initial bearer token and storefronts synchronously,
+// then starts a background goroutine that proactively refreshes the token before it expires.
 func StartBearerTokenMonitor() {
-	go func() {
-		// Initial fetch
-		_, err := GetBearerToken()
-		if err != nil {
-			log.Errorf("%s Initial token fetch failed: %v", logcolors.LogBearerToken, err)
-		}
+	// Initial fetch - synchronous to ensure storefronts are available before server starts
+	_, err := GetBearerToken()
+	if err != nil {
+		log.Errorf("%s Initial token fetch failed: %v", logcolors.LogBearerToken, err)
+	} else {
+		// Bearer token available - fetch per-account storefronts
+		InitializeAccountStorefronts()
+	}
 
-		// Check every minute if refresh is needed
+	// Background monitor for proactive refresh
+	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 
