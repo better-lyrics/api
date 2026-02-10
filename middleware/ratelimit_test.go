@@ -151,6 +151,76 @@ func TestLimiterPairTokens(t *testing.T) {
 	}
 }
 
+// TestCleanupEvictsStaleIPs tests that the cleanup method removes stale IPs.
+func TestCleanupEvictsStaleIPs(t *testing.T) {
+	rl := NewIPRateLimiter(1, 5, 10, 20)
+
+	// Add two IPs
+	rl.GetLimiter("10.0.0.1")
+	rl.GetLimiter("10.0.0.2")
+
+	if rl.Len() != 2 {
+		t.Fatalf("Expected 2 IPs, got %d", rl.Len())
+	}
+
+	// Manually backdate one entry so it appears stale
+	rl.mu.Lock()
+	rl.ips["10.0.0.1"].lastSeen = time.Now().Add(-20 * time.Minute)
+	rl.mu.Unlock()
+
+	// Run cleanup with a 10-minute idle timeout
+	rl.cleanup(10 * time.Minute)
+
+	if rl.Len() != 1 {
+		t.Fatalf("Expected 1 IP after cleanup, got %d", rl.Len())
+	}
+
+	// The recent IP should still exist
+	rl.mu.RLock()
+	_, exists := rl.ips["10.0.0.2"]
+	rl.mu.RUnlock()
+	if !exists {
+		t.Error("Expected 10.0.0.2 to survive cleanup")
+	}
+}
+
+// TestCleanupKeepsActiveIPs tests that active IPs are not evicted.
+func TestCleanupKeepsActiveIPs(t *testing.T) {
+	rl := NewIPRateLimiter(1, 5, 10, 20)
+
+	rl.GetLimiter("10.0.0.1")
+	rl.GetLimiter("10.0.0.2")
+
+	// Cleanup with a 10-minute timeout should not evict anything
+	rl.cleanup(10 * time.Minute)
+
+	if rl.Len() != 2 {
+		t.Fatalf("Expected 2 IPs after cleanup (all active), got %d", rl.Len())
+	}
+}
+
+// TestGetLimiterRefreshesLastSeen tests that GetLimiter updates lastSeen.
+func TestGetLimiterRefreshesLastSeen(t *testing.T) {
+	rl := NewIPRateLimiter(1, 5, 10, 20)
+
+	rl.GetLimiter("10.0.0.1")
+
+	// Backdate it
+	rl.mu.Lock()
+	rl.ips["10.0.0.1"].lastSeen = time.Now().Add(-20 * time.Minute)
+	rl.mu.Unlock()
+
+	// Access it again — should refresh lastSeen
+	rl.GetLimiter("10.0.0.1")
+
+	// Now cleanup should NOT evict it
+	rl.cleanup(10 * time.Minute)
+
+	if rl.Len() != 1 {
+		t.Fatalf("Expected 1 IP (refreshed by GetLimiter), got %d", rl.Len())
+	}
+}
+
 // TestGetLimits tests the limit getter methods.
 func TestGetLimits(t *testing.T) {
 	rl := NewIPRateLimiter(rate.Limit(2), 5, rate.Limit(10), 20)

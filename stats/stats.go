@@ -56,6 +56,8 @@ type Stats struct {
 
 	// User agent tracking
 	userAgentUsage sync.Map // map[string]*atomic.Int64
+	uniqueUACount  atomic.Int64
+	uaMu           sync.Mutex
 }
 
 // Global stats instance
@@ -99,7 +101,9 @@ func (s *Stats) RecordRequest(endpoint string) {
 		return s.requestTimes[i].After(cutoff)
 	})
 	if idx > 0 {
-		s.requestTimes = s.requestTimes[idx:]
+		remaining := make([]time.Time, len(s.requestTimes)-idx)
+		copy(remaining, s.requestTimes[idx:])
+		s.requestTimes = remaining
 	}
 	s.requestTimesMu.Unlock()
 }
@@ -145,13 +149,46 @@ func (s *Stats) AccountUsageSnapshot() map[string]int64 {
 	return result
 }
 
-// RecordUserAgent records a request from a specific user agent
+// maxUniqueUserAgents is the cap on distinct user agent strings tracked.
+const maxUniqueUserAgents = 1000
+
+// RecordUserAgent records a request from a specific user agent.
+// After maxUniqueUserAgents distinct agents, new ones are bucketed as "(other)".
 func (s *Stats) RecordUserAgent(userAgent string) {
 	if userAgent == "" {
 		userAgent = "(empty)"
 	}
-	counter, _ := s.userAgentUsage.LoadOrStore(userAgent, &atomic.Int64{})
-	counter.(*atomic.Int64).Add(1)
+
+	// Fast path: UA already tracked
+	if counter, ok := s.userAgentUsage.Load(userAgent); ok {
+		counter.(*atomic.Int64).Add(1)
+		return
+	}
+
+	// Slow path: new UA — acquire lock for cap-safe insertion
+	s.uaMu.Lock()
+
+	// Re-check after lock (another goroutine may have added this UA)
+	if counter, ok := s.userAgentUsage.Load(userAgent); ok {
+		s.uaMu.Unlock()
+		counter.(*atomic.Int64).Add(1)
+		return
+	}
+
+	// Check cap under lock — no TOCTOU possible
+	if s.uniqueUACount.Load() >= maxUniqueUserAgents {
+		s.uaMu.Unlock()
+		counter, _ := s.userAgentUsage.LoadOrStore("(other)", &atomic.Int64{})
+		counter.(*atomic.Int64).Add(1)
+		return
+	}
+
+	// Store new UA and increment count atomically (under lock)
+	counter := &atomic.Int64{}
+	s.userAgentUsage.Store(userAgent, counter)
+	s.uniqueUACount.Add(1)
+	s.uaMu.Unlock()
+	counter.Add(1)
 }
 
 // UserAgentSnapshot returns a map of user agents to request counts

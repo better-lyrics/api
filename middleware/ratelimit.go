@@ -1,15 +1,18 @@
 package middleware
 
 import (
-	"golang.org/x/time/rate"
 	"math"
 	"sync"
+	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // LimiterPair holds both normal and cached tier limiters for an IP
 type LimiterPair struct {
-	Normal *rate.Limiter
-	Cached *rate.Limiter
+	Normal   *rate.Limiter
+	Cached   *rate.Limiter
+	lastSeen time.Time
 }
 
 // GetNormalTokens returns the number of tokens available in the normal tier
@@ -61,8 +64,9 @@ func (i *IPRateLimiter) AddIP(ip string) *LimiterPair {
 	defer i.mu.Unlock()
 
 	pair := &LimiterPair{
-		Normal: rate.NewLimiter(i.normalRate, i.normalBurst),
-		Cached: rate.NewLimiter(i.cachedRate, i.cachedBurst),
+		Normal:   rate.NewLimiter(i.normalRate, i.normalBurst),
+		Cached:   rate.NewLimiter(i.cachedRate, i.cachedBurst),
+		lastSeen: time.Now(),
 	}
 
 	i.ips[ip] = pair
@@ -79,7 +83,40 @@ func (i *IPRateLimiter) GetLimiter(ip string) *LimiterPair {
 		return i.AddIP(ip)
 	}
 
+	limiter.lastSeen = time.Now()
 	i.mu.Unlock()
 
 	return limiter
+}
+
+// StartCleanup launches a background goroutine that periodically removes
+// IP entries that haven't been seen within the given idle timeout.
+func (i *IPRateLimiter) StartCleanup(interval, idleTimeout time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			i.cleanup(idleTimeout)
+		}
+	}()
+}
+
+// cleanup removes IP entries that haven't been accessed within the idle timeout.
+func (i *IPRateLimiter) cleanup(idleTimeout time.Duration) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	cutoff := time.Now().Add(-idleTimeout)
+	for ip, pair := range i.ips {
+		if pair.lastSeen.Before(cutoff) {
+			delete(i.ips, ip)
+		}
+	}
+}
+
+// Len returns the number of tracked IPs (for testing).
+func (i *IPRateLimiter) Len() int {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return len(i.ips)
 }
