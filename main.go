@@ -117,6 +117,7 @@ func main() {
 		rate.Limit(conf.Configuration.CachedRateLimitPerSecond),
 		conf.Configuration.CachedRateLimitBurstLimit,
 	)
+	limiter.StartCleanup(5*time.Minute, 10*time.Minute)
 
 	loggedRouter := middleware.LoggingMiddleware(router)
 	corsHandler := c.Handler(loggedRouter)

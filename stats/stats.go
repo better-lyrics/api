@@ -56,6 +56,7 @@ type Stats struct {
 
 	// User agent tracking
 	userAgentUsage sync.Map // map[string]*atomic.Int64
+	uniqueUACount  atomic.Int64
 }
 
 // Global stats instance
@@ -99,7 +100,9 @@ func (s *Stats) RecordRequest(endpoint string) {
 		return s.requestTimes[i].After(cutoff)
 	})
 	if idx > 0 {
-		s.requestTimes = s.requestTimes[idx:]
+		remaining := make([]time.Time, len(s.requestTimes)-idx)
+		copy(remaining, s.requestTimes[idx:])
+		s.requestTimes = remaining
 	}
 	s.requestTimesMu.Unlock()
 }
@@ -145,12 +148,34 @@ func (s *Stats) AccountUsageSnapshot() map[string]int64 {
 	return result
 }
 
-// RecordUserAgent records a request from a specific user agent
+// maxUniqueUserAgents is the cap on distinct user agent strings tracked.
+const maxUniqueUserAgents = 1000
+
+// RecordUserAgent records a request from a specific user agent.
+// After maxUniqueUserAgents distinct agents, new ones are bucketed as "(other)".
 func (s *Stats) RecordUserAgent(userAgent string) {
 	if userAgent == "" {
 		userAgent = "(empty)"
 	}
-	counter, _ := s.userAgentUsage.LoadOrStore(userAgent, &atomic.Int64{})
+
+	// Fast path: UA already tracked
+	if counter, ok := s.userAgentUsage.Load(userAgent); ok {
+		counter.(*atomic.Int64).Add(1)
+		return
+	}
+
+	// New UA — check if we're over the cap
+	if s.uniqueUACount.Load() >= maxUniqueUserAgents {
+		counter, _ := s.userAgentUsage.LoadOrStore("(other)", &atomic.Int64{})
+		counter.(*atomic.Int64).Add(1)
+		return
+	}
+
+	// Try to store the new UA
+	counter, loaded := s.userAgentUsage.LoadOrStore(userAgent, &atomic.Int64{})
+	if !loaded {
+		s.uniqueUACount.Add(1)
+	}
 	counter.(*atomic.Int64).Add(1)
 }
 
