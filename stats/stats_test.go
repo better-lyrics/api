@@ -476,35 +476,46 @@ func TestGet_ReturnsGlobalInstance(t *testing.T) {
 
 func TestRecordUserAgent_ConcurrentAccess(t *testing.T) {
 	s := newStats()
+
+	const goroutines = 50
+	const uasPerGoroutine = 100
+	const totalRecords = goroutines * uasPerGoroutine // 5000
+
 	done := make(chan struct{})
 
-	// 10 goroutines each recording different UAs
-	for g := range 10 {
+	// 50 goroutines × 100 unique UAs each = 5000 distinct UAs (5× the cap)
+	for g := range goroutines {
 		go func(id int) {
-			for i := range 100 {
+			for i := range uasPerGoroutine {
 				s.RecordUserAgent(fmt.Sprintf("ua-g%d-%d", id, i))
 			}
 			done <- struct{}{}
 		}(g)
 	}
 
-	for range 10 {
+	for range goroutines {
 		<-done
 	}
 
+	// Assert uniqueUACount never exceeded the cap (strict — not a soft check)
+	uniqueCount := s.uniqueUACount.Load()
+	if uniqueCount > maxUniqueUserAgents {
+		t.Fatalf("uniqueUACount %d exceeded cap %d", uniqueCount, maxUniqueUserAgents)
+	}
+
+	// Assert total record count equals 5000 (no lost records)
 	snap := s.UserAgentSnapshot()
 	total := int64(0)
 	for _, v := range snap {
 		total += v
 	}
-	if total != 1000 {
-		t.Fatalf("expected 1000 total UA records, got %d", total)
+	if total != totalRecords {
+		t.Fatalf("expected %d total UA records, got %d", totalRecords, total)
 	}
 
-	// uniqueUACount + possible "(other)" entries should account for all
-	uniqueCount := s.uniqueUACount.Load()
-	if uniqueCount > maxUniqueUserAgents {
-		t.Fatalf("uniqueUACount %d should not exceed cap %d", uniqueCount, maxUniqueUserAgents)
+	// Assert tracked UAs + "(other)" bucket doesn't exceed cap + 1
+	if len(snap) > maxUniqueUserAgents+1 {
+		t.Fatalf("snapshot has %d entries, expected at most %d (cap + other bucket)", len(snap), maxUniqueUserAgents+1)
 	}
 }
 
