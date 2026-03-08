@@ -3,6 +3,7 @@ package bini
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
 	"net/http"
@@ -65,6 +66,7 @@ func PostLyrics(trackName, artistName, albumName string, durationMs int, ttmlRaw
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		log.Infof("%s Posted lyrics for: %s - %s (ISRC: %s)", logcolors.LogBini, trackName, artistName, isrc)
 	} else {
-		log.Warnf("%s POST returned status %d for: %s - %s", logcolors.LogBini, resp.StatusCode, trackName, artistName)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		log.Warnf("%s POST returned status %d for: %s - %s | body: %s", logcolors.LogBini, resp.StatusCode, trackName, artistName, string(respBody))
 	}
 }
