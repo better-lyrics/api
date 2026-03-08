@@ -42,6 +42,8 @@ func PostLyrics(trackName, artistName, albumName string, durationMs int, ttmlRaw
 		ISRC:           isrc,
 	}
 
+	log.Infof("%s Payload: track=%q artist=%q album=%q duration=%d isrc=%q", logcolors.LogBini, trackName, artistName, albumName, payload.Duration, isrc)
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Errorf("%s Failed to marshal payload: %v", logcolors.LogBini, err)
