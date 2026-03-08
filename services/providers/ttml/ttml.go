@@ -9,14 +9,14 @@ import (
 
 // FetchTTMLLyrics is the main function to fetch TTML API lyrics
 // durationMs is optional (0 means no duration filter), used to find closest matching track by duration
-// Returns: raw TTML string, track duration in ms, similarity score, error
-func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (string, int, float64, error) {
+// Returns: raw TTML string, track duration in ms, similarity score, track metadata, error
+func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (string, int, float64, *TrackMeta, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
 
 	if !accountManager.hasAccounts() {
-		return "", 0, 0.0, fmt.Errorf("no TTML accounts configured")
+		return "", 0, 0.0, nil, fmt.Errorf("no TTML accounts configured")
 	}
 
 	// Early-exit if circuit breaker is definitely open (avoid unnecessary work)
@@ -28,7 +28,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	if apiCircuitBreaker.IsOpen() {
 		timeUntilRetry := apiCircuitBreaker.TimeUntilRetry()
 		if timeUntilRetry > 0 {
-			return "", 0, 0.0, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
+			return "", 0, 0.0, nil, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
 		}
 		// Cooldown passed - let it through, Allow() will handle the HALF-OPEN transition
 	}
@@ -41,7 +41,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 
 	if songName == "" && artistName == "" {
-		return "", 0, 0.0, fmt.Errorf("song name and artist name cannot both be empty")
+		return "", 0, 0.0, nil, fmt.Errorf("song name and artist name cannot both be empty")
 	}
 
 	query := songName + " " + artistName
@@ -58,11 +58,11 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	// Search returns the account that succeeded (may differ if retry occurred)
 	track, score, workingAccount, err := searchTrack(query, storefront, songName, artistName, albumName, durationMs, account)
 	if err != nil {
-		return "", 0, 0.0, fmt.Errorf("search failed: %v", err)
+		return "", 0, 0.0, nil, fmt.Errorf("search failed: %v", err)
 	}
 
 	if track == nil {
-		return "", 0, 0.0, fmt.Errorf("no track found for query: %s", query)
+		return "", 0, 0.0, nil, fmt.Errorf("no track found for query: %s", query)
 	}
 
 	trackDurationMs := track.Attributes.DurationInMillis
@@ -84,15 +84,20 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	// This ensures we don't hit a quarantined account
 	ttml, err := fetchLyricsTTML(track.ID, storefront, workingAccount)
 	if err != nil {
-		return "", 0, 0.0, fmt.Errorf("failed to fetch TTML: %v", err)
+		return "", 0, 0.0, nil, fmt.Errorf("failed to fetch TTML: %v", err)
 	}
 
 	if ttml == "" {
-		return "", 0, 0.0, fmt.Errorf("TTML content is empty")
+		return "", 0, 0.0, nil, fmt.Errorf("TTML content is empty")
 	}
 
 	log.Infof("%s Fetched TTML via %s for: %s - %s (%d bytes)",
 		logcolors.LogSuccess, logcolors.Account(workingAccount.NameID), track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
 
-	return ttml, trackDurationMs, score, nil
+	return ttml, trackDurationMs, score, &TrackMeta{
+		Name:       track.Attributes.Name,
+		ArtistName: track.Attributes.ArtistName,
+		AlbumName:  track.Attributes.AlbumName,
+		ISRC:       track.Attributes.ISRC,
+	}, nil
 }

@@ -16,6 +16,14 @@ type Line = providers.Line
 // Syllable is an alias for the shared Syllable type
 type Syllable = providers.Syllable
 
+// TrackMeta contains metadata about the matched track from Apple Music
+type TrackMeta struct {
+	Name       string
+	ArtistName string
+	AlbumName  string
+	ISRC       string
+}
+
 // =============================================================================
 // ACCOUNT MANAGEMENT TYPES
 // =============================================================================
