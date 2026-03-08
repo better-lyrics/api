@@ -15,6 +15,7 @@ func setupRoutes(router *mux.Router) {
 	// Provider-specific endpoints - return {"lyrics": ..., "provider": ...}
 	router.HandleFunc("/ttml/getLyrics", getLyricsWithProvider("ttml"))
 	router.HandleFunc("/kugou/getLyrics", getLyricsWithProvider("kugou"))
+	router.HandleFunc("/qq/getLyrics", getLyricsWithProvider("qq"))
 	router.HandleFunc("/legacy/getLyrics", getLyricsWithProvider("legacy"))
 
 	// Cache management endpoints
