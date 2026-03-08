@@ -153,7 +153,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		durationMs = durationMs * 1000 // Convert seconds to milliseconds
 	}
 
-	ttmlString, trackDurationMs, score, isrc, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
+	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
 
 	req.err = err
 	if err == nil {
@@ -213,7 +213,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	log.Infof("%s Caching TTML for: %s (trackDuration: %dms)", logcolors.LogCacheLyrics, query, trackDurationMs)
 	setCachedLyrics(cacheKey, ttmlString, trackDurationMs, score, "", false)
 
-	go bini.PostLyrics(songName, artistName, albumName, trackDurationMs, ttmlString, isrc)
+	go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
 
 	Respond(w, r).SetCacheStatus("MISS").JSON(map[string]interface{}{
 		"ttml":  ttmlString,
@@ -1137,7 +1137,7 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Infof("%s Revalidating cache for: %s %s", logcolors.LogRevalidate, songName, artistName)
-	ttmlString, trackDurationMs, score, isrc, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
+	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
 
 	if err != nil {
 		log.Warnf("%s Revalidation fetch failed: %v", logcolors.LogRevalidate, err)
@@ -1169,7 +1169,7 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// Update cache with fresh content
 		setCachedLyrics(usedKey, ttmlString, trackDurationMs, score, "", false)
-		go bini.PostLyrics(songName, artistName, albumName, trackDurationMs, ttmlString, isrc)
+		go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
 		log.Infof("%s Content changed, cache updated for: %s", logcolors.LogRevalidate, usedKey)
 	} else {
 		log.Infof("%s Content unchanged for: %s", logcolors.LogRevalidate, usedKey)
