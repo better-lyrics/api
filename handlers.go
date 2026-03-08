@@ -17,6 +17,7 @@ import (
 	// Import providers to trigger their init() registration
 	_ "lyrics-api-go/services/providers/kugou"
 	_ "lyrics-api-go/services/providers/legacy"
+	_ "lyrics-api-go/services/providers/qq"
 	ttml "lyrics-api-go/services/providers/ttml"
 
 	"github.com/gorilla/mux"

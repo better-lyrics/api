@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/gorilla/mux v1.8.1
+	github.com/jixunmoe-go/qrc v0.0.0-20230917162828-866e996416b0
 	github.com/joho/godotenv v1.5.1
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/rs/cors v1.11.0
