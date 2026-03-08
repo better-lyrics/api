@@ -35,7 +35,7 @@ func (p *TTMLProvider) CacheKeyPrefix() string {
 // FetchLyrics fetches lyrics from TTML API
 func (p *TTMLProvider) FetchLyrics(ctx context.Context, song, artist, album string, durationMs int) (*providers.LyricsResult, error) {
 	// Use the existing FetchTTMLLyrics function
-	rawTTML, trackDurationMs, score, err := FetchTTMLLyrics(song, artist, album, durationMs)
+	rawTTML, trackDurationMs, score, _, err := FetchTTMLLyrics(song, artist, album, durationMs)
 	if err != nil {
 		return nil, providers.NewProviderError(ProviderName, "failed to fetch lyrics", err)
 	}

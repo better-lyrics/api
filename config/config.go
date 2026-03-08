@@ -27,6 +27,8 @@ type Config struct {
 		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
 		APIKey                             string `envconfig:"API_KEY" default:""`
 		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
+		BiniAPIKey                         string `envconfig:"BINI_API_KEY" default:""`
+		BiniAPIURL                         string `envconfig:"BINI_API_URL" default:"https://lyric-api.binimum.org/"`
 
 		// TTML API Configuration
 		// Token source for auto-scraping bearer tokens (web frontend URL)

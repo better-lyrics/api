@@ -104,3 +104,8 @@ const (
 	LogHealthCheck = Cyan + "[Health Check]" + Reset
 	LogAccountInit = Cyan + "[Account Init]" + Reset
 )
+
+// External API log prefixes
+const (
+	LogBini = Cyan + "[Bini]" + Reset
+)
