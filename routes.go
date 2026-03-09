@@ -31,6 +31,7 @@ func setupRoutes(router *mux.Router) {
 	router.HandleFunc("/cache/lookup", cacheLookup)
 	router.HandleFunc("/cache/debug", cacheDebug)
 	router.HandleFunc("/cache/keys", cacheKeys)
+	router.HandleFunc("/cache/dump", cacheDump)
 
 	// Health and stats endpoints
 	router.HandleFunc("/health", getHealthStatus)

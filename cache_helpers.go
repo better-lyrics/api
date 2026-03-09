@@ -440,6 +440,14 @@ func cacheHelp(w http.ResponseWriter, r *http.Request) {
 				},
 				"response": "Job status, progress percentage, results when complete",
 			},
+			{
+				"path":        "/cache/dump",
+				"method":      "GET",
+				"auth":        "Authorization header required",
+				"description": "Stream the raw BoltDB database file as a consistent snapshot",
+				"response":    "Binary file (application/octet-stream)",
+				"notes":       "Uses BoltDB transaction snapshot — safe to call while the server is running",
+			},
 		},
 		"cache_key_format": map[string]string{
 			"lyrics":   "ttml_lyrics:{song} {artist} [{album}] [{duration}s]",
@@ -663,6 +671,25 @@ func cacheKeys(w http.ResponseWriter, r *http.Request) {
 		"limit":        limit,
 		"keys":         keys,
 	})
+}
+
+// cacheDump streams the raw BoltDB database file as a consistent snapshot.
+// Used by external services (e.g., reprise-api) to get a copy of the cache.
+func cacheDump(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=cache.db")
+
+	n, err := persistentCache.WriteTo(w)
+	if err != nil {
+		log.Errorf("%s Failed to stream cache dump: %v", logcolors.LogCache, err)
+		return
+	}
+	log.Infof("%s Cache dump streamed: %d bytes", logcolors.LogCache, n)
 }
 
 // truncateString truncates a string to maxLen and adds "..." if truncated

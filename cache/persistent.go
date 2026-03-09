@@ -317,6 +317,18 @@ func copyFile(src, dst string) error {
 	return destFile.Sync()
 }
 
+// WriteTo streams a consistent snapshot of the database to the writer.
+// Uses BoltDB's built-in transaction-based snapshot (no lock contention with writes).
+func (pc *PersistentCache) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+	err := pc.db.View(func(tx *bolt.Tx) error {
+		var txErr error
+		n, txErr = tx.WriteTo(w)
+		return txErr
+	})
+	return n, err
+}
+
 // Close closes the database connection
 func (pc *PersistentCache) Close() error {
 	if pc.db != nil {
