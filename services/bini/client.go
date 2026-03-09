@@ -57,6 +57,9 @@ func PostLyrics(trackName, artistName, albumName string, durationMs int, ttmlRaw
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", cfg.Configuration.BiniAPIKey)
+	if cfg.Configuration.BiniSecretKey != "" {
+		req.Header.Set("X-Bini-Secret", cfg.Configuration.BiniSecretKey)
+	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

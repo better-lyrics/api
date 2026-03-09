@@ -28,7 +28,8 @@ type Config struct {
 		APIKey                             string `envconfig:"API_KEY" default:""`
 		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
 		BiniAPIKey                         string `envconfig:"BINI_API_KEY" default:""`
-		BiniAPIURL                         string `envconfig:"BINI_API_URL" default:"https://lyrics-api.binimum.org/"`
+		BiniAPIURL                         string `envconfig:"BINI_API_URL" default:"https://kansas.lyric-api.binimum.org/"`
+		BiniSecretKey                      string `envconfig:"BINI_SECRET_KEY" default:""`
 
 		// TTML API Configuration
 		// Token source for auto-scraping bearer tokens (web frontend URL)
