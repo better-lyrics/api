@@ -53,6 +53,15 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	// Check cache first with fuzzy duration matching (handles normalized + legacy keys)
 	// This allows cache hits when duration differs by up to DURATION_MATCH_DELTA_MS (default 2s)
 	if cached, foundKey, ok := getCachedLyricsWithDurationTolerance(songName, artistName, albumName, durationStr); ok {
+		// Check for no-lyrics sentinel — return 404 as if no lyrics exist
+		if cached.TTML == NoLyricsSentinel {
+			stats.Get().RecordCacheHit()
+			log.Infof("%s No-lyrics marker found for: %s", logcolors.LogCacheLyrics, query)
+			Respond(w, r).SetCacheStatus("HIT").Error(http.StatusNotFound, map[string]interface{}{
+				"error": "No lyrics available for this track",
+			})
+			return
+		}
 		stats.Get().RecordCacheHit()
 		if foundKey != cacheKey {
 			log.Infof("%s Found cached TTML via fuzzy duration match: %s", logcolors.LogCacheLyrics, foundKey)
@@ -257,6 +266,15 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 
 		// Check cache first
 		if cached, ok := getCachedLyrics(cacheKey); ok {
+			// Check for no-lyrics sentinel — return 404 as if no lyrics exist
+			if cached.TTML == NoLyricsSentinel {
+				stats.Get().RecordCacheHit()
+				log.Infof("%s [%s] No-lyrics marker found", logcolors.LogCacheLyrics, providerName)
+				Respond(w, r).SetProvider(providerName).SetCacheStatus("HIT").Error(http.StatusNotFound, map[string]interface{}{
+					"error": "No lyrics available for this track",
+				})
+				return
+			}
 			stats.Get().RecordCacheHit()
 			log.Infof("%s [%s] Found cached lyrics", logcolors.LogCacheLyrics, providerName)
 			Respond(w, r).SetProvider(providerName).SetCacheStatus("HIT").JSON(map[string]interface{}{
@@ -1059,6 +1077,7 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album") + r.URL.Query().Get("albumName")
 	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
 	dryRun := r.URL.Query().Get("dry_run") == "true"
+	noLyrics := r.URL.Query().Get("no_lyrics") == "true"
 
 	// 3. Validate required params
 	if songName == "" || artistName == "" {
@@ -1068,7 +1087,7 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if trackID == "" && !dryRun {
+	if trackID == "" && !dryRun && !noLyrics {
 		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
 			"error": "id parameter is required (Apple Music track ID)",
 		})
@@ -1085,70 +1104,13 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 4. Find matching cache keys
-	matchString := strings.ToLower(strings.TrimSpace(songName)) + " " + strings.ToLower(strings.TrimSpace(artistName))
-	normalizedAlbum := strings.ToLower(strings.TrimSpace(albumName))
-
-	var durationSec int
-	hasDuration := false
-	if durationStr != "" {
-		if _, err := fmt.Sscanf(durationStr, "%d", &durationSec); err == nil {
-			hasDuration = true
-		}
-	}
-
-	deltaMs := conf.Configuration.DurationMatchDeltaMs
-	deltaSec := deltaMs / 1000
-	if deltaSec < 1 {
-		deltaSec = 1
-	}
-
-	var matchingKeys []string
-	persistentCache.Range(func(key string, entry cache.CacheEntry) bool {
-		if !strings.HasPrefix(key, "ttml_lyrics:") {
-			return true
-		}
-
-		query := strings.TrimPrefix(key, "ttml_lyrics:")
-
-		// Key must contain the song+artist match string
-		if !strings.Contains(query, matchString) {
-			return true
-		}
-
-		// If album provided, key must contain normalized album name
-		if normalizedAlbum != "" && !strings.Contains(query, normalizedAlbum) {
-			return true
-		}
-
-		// If duration provided, extract duration from key and check within ±delta
-		if hasDuration {
-			var keyDuration int
-			// Cache key format: "song artist [album] [123s]"
-			if idx := strings.LastIndex(query, " "); idx != -1 {
-				suffix := query[idx+1:]
-				if strings.HasSuffix(suffix, "s") {
-					fmt.Sscanf(strings.TrimSuffix(suffix, "s"), "%d", &keyDuration)
-				}
-			}
-			if keyDuration > 0 {
-				diff := keyDuration - durationSec
-				if diff < 0 {
-					diff = -diff
-				}
-				if diff > deltaSec {
-					return true
-				}
-			}
-		}
-
-		matchingKeys = append(matchingKeys, key)
-		return true
-	})
+	// 4. Find matching cache keys using direct lookups (avoids full cache scan)
+	matchingKeys := findMatchingCacheKeys(songName, artistName, albumName, durationStr)
 
 	// 5. Dry run: return matching keys without modifying anything
 	if dryRun {
-		log.Infof("%s Dry run: found %d matching keys for %s", logcolors.LogOverride, len(matchingKeys), matchString)
+		query := strings.ToLower(strings.TrimSpace(songName)) + " " + strings.ToLower(strings.TrimSpace(artistName))
+		log.Infof("%s Dry run: found %d matching keys for %s", logcolors.LogOverride, len(matchingKeys), query)
 		Respond(w, r).JSON(map[string]interface{}{
 			"dry_run": true,
 			"count":   len(matchingKeys),
@@ -1157,7 +1119,42 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 6. Fetch lyrics by track ID
+	// 6. Handle no_lyrics mode: store sentinel to permanently mark as "no lyrics"
+	if noLyrics {
+		var updatedKeys []string
+		created := false
+
+		if len(matchingKeys) == 0 {
+			cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
+			setCachedLyrics(cacheKey, NoLyricsSentinel, 0, 0, "", false)
+			updatedKeys = append(updatedKeys, cacheKey)
+			created = true
+			log.Infof("%s Created no_lyrics marker for %s", logcolors.LogOverride, cacheKey)
+		} else {
+			for _, key := range matchingKeys {
+				cached, ok := getCachedLyrics(key)
+				if !ok {
+					continue
+				}
+				setCachedLyrics(key, NoLyricsSentinel, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL)
+				updatedKeys = append(updatedKeys, key)
+			}
+			log.Infof("%s Set no_lyrics marker on %d cache entries", logcolors.LogOverride, len(updatedKeys))
+		}
+
+		// Clear any negative cache entries for this query
+		deleteNegativeCache(buildNormalizedCacheKey(songName, artistName, albumName, durationStr))
+
+		Respond(w, r).JSON(map[string]interface{}{
+			"updated":   len(updatedKeys),
+			"created":   created,
+			"keys":      updatedKeys,
+			"no_lyrics": true,
+		})
+		return
+	}
+
+	// 7. Fetch lyrics by track ID
 	log.Infof("%s Fetching lyrics for track ID %s to override %d cache entries", logcolors.LogOverride, trackID, len(matchingKeys))
 	ttmlString, err := ttml.FetchLyricsByTrackID(trackID)
 	if err != nil {
@@ -1169,7 +1166,7 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7. Update matching cache entries, or create a new one if none exist
+	// 8. Update matching cache entries, or create a new one if none exist
 	var updatedKeys []string
 	created := false
 
@@ -1201,7 +1198,7 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 		log.Infof("%s Updated %d cache entries with lyrics from track ID %s", logcolors.LogOverride, len(updatedKeys), trackID)
 	}
 
-	// 8. Clear any negative cache entries for this query
+	// 9. Clear any negative cache entries for this query
 	deleteNegativeCache(buildNormalizedCacheKey(songName, artistName, albumName, durationStr))
 
 	Respond(w, r).JSON(map[string]interface{}{
@@ -1274,6 +1271,9 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		usedKey = legacyCacheKey
 	}
 
+	// Treat no-lyrics sentinel entries like negative cache (allow revalidation to replace them)
+	wasNoLyricsSentinel := found && cached.TTML == NoLyricsSentinel
+
 	// Check if this was in negative cache (allows revalidation of "no lyrics" entries)
 	wasInNegativeCache := false
 	if !found {
@@ -1298,9 +1298,9 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Compute hash of cached content (empty if from negative cache)
+	// 5. Compute hash of cached content (empty if from negative cache or no-lyrics sentinel)
 	var oldHash [16]byte
-	if !wasInNegativeCache {
+	if !wasInNegativeCache && !wasNoLyricsSentinel {
 		oldHash = md5.Sum([]byte(cached.TTML))
 	}
 
@@ -1333,9 +1333,9 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7. Compare hashes (if from negative cache, always treat as updated)
+	// 7. Compare hashes (if from negative cache or no-lyrics sentinel, always treat as updated)
 	newHash := md5.Sum([]byte(ttmlString))
-	updated := wasInNegativeCache || oldHash != newHash
+	updated := wasInNegativeCache || wasNoLyricsSentinel || oldHash != newHash
 
 	if updated {
 		// Delete negative cache if it existed

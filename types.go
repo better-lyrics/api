@@ -15,6 +15,10 @@ const (
 	apiKeyInvalidKey          contextKey = "apiKeyInvalid"
 )
 
+// NoLyricsSentinel is stored as TTML content to permanently mark a track as having no lyrics.
+// Unlike negative cache entries (which expire), this is stored in the positive cache and persists indefinitely.
+const NoLyricsSentinel = "__NO_LYRICS__"
+
 // CacheDump represents the full cache contents
 type CacheDump map[string]cache.CacheEntry
 
