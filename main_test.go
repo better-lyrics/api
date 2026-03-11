@@ -845,6 +845,7 @@ func TestOverrideHandler_DryRunFindsMatchingKeys(t *testing.T) {
 	setCachedLyrics("ttml_lyrics:viva la vida coldplay 242s", "<tt>old with dur</tt>", 242000, 0.9, "en", false)
 	setCachedLyrics("ttml_lyrics:other song other artist", "<tt>unrelated</tt>", 200000, 0.8, "en", false)
 
+	// Without duration: only finds the no-duration key
 	req, _ := http.NewRequest("GET", "/override?s=viva+la+vida&a=coldplay&dry_run=true", nil)
 	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
 	rr := httptest.NewRecorder()
@@ -862,8 +863,26 @@ func TestOverrideHandler_DryRunFindsMatchingKeys(t *testing.T) {
 	}
 
 	count := int(body["count"].(float64))
-	if count != 2 {
-		t.Errorf("Expected 2 matching keys, got %d", count)
+	if count != 1 {
+		t.Errorf("Expected 1 matching key (no-duration key only), got %d", count)
+	}
+
+	// With duration: finds both no-duration and duration keys
+	req2, _ := http.NewRequest("GET", "/override?s=viva+la+vida&a=coldplay&d=242&dry_run=true", nil)
+	req2 = req2.WithContext(context.WithValue(req2.Context(), apiKeyAuthenticatedKey, true))
+	rr2 := httptest.NewRecorder()
+	overrideHandler(rr2, req2)
+
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", rr2.Code, rr2.Body.String())
+	}
+
+	var body2 map[string]interface{}
+	json.Unmarshal(rr2.Body.Bytes(), &body2)
+
+	count2 := int(body2["count"].(float64))
+	if count2 != 2 {
+		t.Errorf("Expected 2 matching keys (with duration), got %d", count2)
 	}
 }
 
@@ -983,5 +1002,104 @@ func TestOverrideHandler_DryRunDoesNotRequireTrackID(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected 200 for dry_run without id, got %d", rr.Code)
+	}
+}
+
+func TestOverrideHandler_NoLyricsSetsMarker(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	req, _ := http.NewRequest("GET", "/override?s=instrumental+song&a=some+artist&no_lyrics=true", nil)
+	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var body map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &body)
+
+	if body["no_lyrics"] != true {
+		t.Error("Expected no_lyrics=true in response")
+	}
+
+	// Verify the sentinel was stored in cache
+	cacheKey := buildNormalizedCacheKey("instrumental song", "some artist", "", "")
+	cached, ok := getCachedLyrics(cacheKey)
+	if !ok {
+		t.Fatal("Expected cache entry to exist")
+	}
+	if cached.TTML != NoLyricsSentinel {
+		t.Errorf("Expected TTML to be %q, got %q", NoLyricsSentinel, cached.TTML)
+	}
+}
+
+func TestOverrideHandler_NoLyricsOverwritesExisting(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Pre-populate cache with real lyrics
+	setCachedLyrics("ttml_lyrics:my song my artist", "<tt>real lyrics</tt>", 200000, 0.9, "en", false)
+
+	req, _ := http.NewRequest("GET", "/override?s=my+song&a=my+artist&no_lyrics=true", nil)
+	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify the sentinel replaced the real lyrics
+	cached, ok := getCachedLyrics("ttml_lyrics:my song my artist")
+	if !ok {
+		t.Fatal("Expected cache entry to exist")
+	}
+	if cached.TTML != NoLyricsSentinel {
+		t.Errorf("Expected TTML to be %q, got %q", NoLyricsSentinel, cached.TTML)
+	}
+	// Metadata should be preserved
+	if cached.TrackDurationMs != 200000 {
+		t.Errorf("Expected duration to be preserved (200000), got %d", cached.TrackDurationMs)
+	}
+}
+
+func TestOverrideHandler_NoLyricsDoesNotRequireTrackID(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// no_lyrics=true should work without id parameter
+	req, _ := http.NewRequest("GET", "/override?s=song&a=artist&no_lyrics=true", nil)
+	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected 200 for no_lyrics without id, got %d", rr.Code)
+	}
+}
+
+func TestGetLyrics_NoLyricsSentinelReturns404(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Store a no-lyrics sentinel
+	cacheKey := buildNormalizedCacheKey("instrumental", "artist", "", "")
+	setCachedLyrics(cacheKey, NoLyricsSentinel, 0, 0, "", false)
+
+	req, _ := http.NewRequest("GET", "/getLyrics?s=instrumental&a=artist", nil)
+	rr := httptest.NewRecorder()
+	getLyrics(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("Expected 404 for no-lyrics sentinel, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var body map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &body)
+	if !strings.Contains(body["error"].(string), "No lyrics available") {
+		t.Errorf("Expected 'No lyrics available' error, got %q", body["error"])
 	}
 }

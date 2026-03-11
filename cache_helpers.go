@@ -314,6 +314,60 @@ func buildLegacyCacheKey(songName, artistName, albumName, durationStr string) st
 	return fmt.Sprintf("ttml_lyrics:%s", query)
 }
 
+// findMatchingCacheKeys finds cache keys that match the given song/artist/album/duration
+// using direct key lookups instead of scanning the entire cache.
+// This is O(delta) instead of O(n) where n is the total number of cache entries.
+func findMatchingCacheKeys(songName, artistName, albumName, durationStr string) []string {
+	seen := make(map[string]bool)
+	var keys []string
+
+	addIfExists := func(key string) {
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		if _, ok := getCachedLyrics(key); ok {
+			keys = append(keys, key)
+		}
+	}
+
+	// Try exact normalized key
+	addIfExists(buildNormalizedCacheKey(songName, artistName, albumName, durationStr))
+
+	// Try legacy key
+	addIfExists(buildLegacyCacheKey(songName, artistName, albumName, durationStr))
+
+	// Try without duration (same song/artist/album but stored without duration)
+	if durationStr != "" {
+		addIfExists(buildNormalizedCacheKey(songName, artistName, albumName, ""))
+		addIfExists(buildLegacyCacheKey(songName, artistName, albumName, ""))
+	}
+
+	// Try nearby durations (fuzzy matching within ±delta)
+	if durationStr != "" {
+		var durationSec int
+		if _, err := fmt.Sscanf(durationStr, "%d", &durationSec); err == nil {
+			deltaMs := conf.Configuration.DurationMatchDeltaMs
+			deltaSec := deltaMs / 1000
+			if deltaSec < 1 {
+				deltaSec = 1
+			}
+			for offset := 1; offset <= deltaSec; offset++ {
+				if durationSec-offset >= 0 {
+					d := fmt.Sprintf("%d", durationSec-offset)
+					addIfExists(buildNormalizedCacheKey(songName, artistName, albumName, d))
+					addIfExists(buildLegacyCacheKey(songName, artistName, albumName, d))
+				}
+				d := fmt.Sprintf("%d", durationSec+offset)
+				addIfExists(buildNormalizedCacheKey(songName, artistName, albumName, d))
+				addIfExists(buildLegacyCacheKey(songName, artistName, albumName, d))
+			}
+		}
+	}
+
+	return keys
+}
+
 // buildFallbackCacheKeys returns a list of cache keys to try when the backend fails.
 // Keys are ordered from most specific to least specific, excluding the original key.
 // When duration is provided, fallback keys still include duration to maintain strict matching.
