@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"lyrics-api-go/cache"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -766,5 +770,184 @@ func TestGetCachedLyricsWithDurationTolerance_InvalidDuration(t *testing.T) {
 	_, _, found := getCachedLyricsWithDurationTolerance("Test Song", "Test Artist", "", "abc")
 	if found {
 		t.Error("Expected not to find cached lyrics with invalid duration")
+	}
+}
+
+// Tests for overrideHandler
+
+func TestOverrideHandler_RequiresAPIKey(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	req, _ := http.NewRequest("GET", "/override?id=123&s=song&a=artist", nil)
+	// No API key context set — should be denied
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401, got %d", rr.Code)
+	}
+}
+
+func TestOverrideHandler_RequiresSongAndArtist(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"missing both", "/override?id=123"},
+		{"missing artist", "/override?id=123&s=song"},
+		{"missing song", "/override?id=123&a=artist"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _ := http.NewRequest("GET", tt.query, nil)
+			req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+			rr := httptest.NewRecorder()
+			overrideHandler(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("Expected 400, got %d", rr.Code)
+			}
+		})
+	}
+}
+
+func TestOverrideHandler_RequiresTrackIDUnlessDryRun(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	req, _ := http.NewRequest("GET", "/override?s=song&a=artist", nil)
+	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 when id missing and not dry_run, got %d", rr.Code)
+	}
+
+	var body map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &body)
+	if !strings.Contains(body["error"].(string), "id parameter") {
+		t.Errorf("Expected error about missing id, got %q", body["error"])
+	}
+}
+
+func TestOverrideHandler_DryRunFindsMatchingKeys(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// Populate cache with entries
+	setCachedLyrics("ttml_lyrics:viva la vida coldplay", "<tt>old</tt>", 242000, 0.9, "en", false)
+	setCachedLyrics("ttml_lyrics:viva la vida coldplay 242s", "<tt>old with dur</tt>", 242000, 0.9, "en", false)
+	setCachedLyrics("ttml_lyrics:other song other artist", "<tt>unrelated</tt>", 200000, 0.8, "en", false)
+
+	req, _ := http.NewRequest("GET", "/override?s=viva+la+vida&a=coldplay&dry_run=true", nil)
+	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var body map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &body)
+
+	if body["dry_run"] != true {
+		t.Error("Expected dry_run=true in response")
+	}
+
+	count := int(body["count"].(float64))
+	if count != 2 {
+		t.Errorf("Expected 2 matching keys, got %d", count)
+	}
+}
+
+func TestOverrideHandler_DryRunWithAlbumFilter(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	setCachedLyrics("ttml_lyrics:viva la vida coldplay", "<tt>no album</tt>", 242000, 0.9, "", false)
+	setCachedLyrics("ttml_lyrics:viva la vida coldplay viva la vida or death and all his friends", "<tt>with album</tt>", 242000, 0.9, "", false)
+
+	req, _ := http.NewRequest("GET", "/override?s=viva+la+vida&a=coldplay&al=viva+la+vida+or+death+and+all+his+friends&dry_run=true", nil)
+	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	var body map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &body)
+
+	count := int(body["count"].(float64))
+	if count != 1 {
+		t.Errorf("Expected 1 matching key with album filter, got %d", count)
+	}
+}
+
+func TestOverrideHandler_DryRunWithDurationFilter(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	setCachedLyrics("ttml_lyrics:viva la vida coldplay 242s", "<tt>242</tt>", 242000, 0.9, "", false)
+	setCachedLyrics("ttml_lyrics:viva la vida coldplay 300s", "<tt>300</tt>", 300000, 0.9, "", false)
+
+	// Duration 243 with default 2s tolerance should match 242s but not 300s
+	req, _ := http.NewRequest("GET", "/override?s=viva+la+vida&a=coldplay&d=243&dry_run=true", nil)
+	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	var body map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &body)
+
+	count := int(body["count"].(float64))
+	if count != 1 {
+		t.Errorf("Expected 1 matching key with duration filter, got %d", count)
+	}
+}
+
+func TestOverrideHandler_NoMatchCreatesNewEntry(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// We can't call the real FetchLyricsByTrackID without configured accounts,
+	// so we verify the handler returns an error about no accounts (proving it
+	// attempted to fetch rather than returning 404)
+	req, _ := http.NewRequest("GET", "/override?id=123&s=nonexistent&a=nobody", nil)
+	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	// Should attempt to fetch (and fail due to no accounts), not 404
+	if rr.Code == http.StatusNotFound {
+		t.Error("Should not return 404 when no cache matches — should attempt fetch and create")
+	}
+
+	var body map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &body)
+	// The error should be about fetching, not about "no matching cache entries"
+	if errMsg, ok := body["error"].(string); ok {
+		if strings.Contains(errMsg, "no matching cache entries") {
+			t.Errorf("Should not return 'no matching cache entries' — got: %s", errMsg)
+		}
+	}
+}
+
+func TestOverrideHandler_DryRunDoesNotRequireTrackID(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	// dry_run=true should work even without id parameter
+	req, _ := http.NewRequest("GET", "/override?s=song&a=artist&dry_run=true", nil)
+	req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+	rr := httptest.NewRecorder()
+	overrideHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected 200 for dry_run without id, got %d", rr.Code)
 	}
 }

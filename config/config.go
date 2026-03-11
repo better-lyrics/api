@@ -112,6 +112,7 @@ var APIKeyProtectedPaths = []string{
 	"/getLyrics",
 	"/ttml/getLyrics",
 	"/revalidate",
+	"/override",
 }
 
 // TTMLAccount represents a single TTML API account

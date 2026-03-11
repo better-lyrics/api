@@ -1037,6 +1037,170 @@ func testNotifications(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// overrideHandler replaces cached lyrics with content fetched by a specific Apple Music track ID.
+// Finds all cache entries matching the song+artist query and updates their TTML field.
+// Requires a valid API key (same pattern as revalidateHandler).
+func overrideHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Require valid API key
+	apiKeyAuthenticated, _ := r.Context().Value(apiKeyAuthenticatedKey).(bool)
+	if !apiKeyAuthenticated {
+		Respond(w, r).Error(http.StatusUnauthorized, map[string]interface{}{
+			"error":   "API key required for override",
+			"message": "Provide a valid API key via X-API-Key header",
+		})
+		return
+	}
+
+	// 2. Parse params
+	trackID := r.URL.Query().Get("id")
+	songName := r.URL.Query().Get("s") + r.URL.Query().Get("song") + r.URL.Query().Get("songName")
+	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist") + r.URL.Query().Get("artistName")
+	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album") + r.URL.Query().Get("albumName")
+	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
+	dryRun := r.URL.Query().Get("dry_run") == "true"
+
+	// 3. Validate required params
+	if songName == "" || artistName == "" {
+		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+			"error": "song (s) and artist (a) parameters are required",
+		})
+		return
+	}
+
+	if trackID == "" && !dryRun {
+		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+			"error": "id parameter is required (Apple Music track ID)",
+		})
+		return
+	}
+
+	// 4. Find matching cache keys
+	matchString := strings.ToLower(strings.TrimSpace(songName)) + " " + strings.ToLower(strings.TrimSpace(artistName))
+	normalizedAlbum := strings.ToLower(strings.TrimSpace(albumName))
+
+	var durationSec int
+	hasDuration := false
+	if durationStr != "" {
+		if _, err := fmt.Sscanf(durationStr, "%d", &durationSec); err == nil {
+			hasDuration = true
+		}
+	}
+
+	deltaMs := conf.Configuration.DurationMatchDeltaMs
+	deltaSec := deltaMs / 1000
+	if deltaSec < 1 {
+		deltaSec = 1
+	}
+
+	var matchingKeys []string
+	persistentCache.Range(func(key string, entry cache.CacheEntry) bool {
+		if !strings.HasPrefix(key, "ttml_lyrics:") {
+			return true
+		}
+
+		query := strings.TrimPrefix(key, "ttml_lyrics:")
+
+		// Key must contain the song+artist match string
+		if !strings.Contains(query, matchString) {
+			return true
+		}
+
+		// If album provided, key must contain normalized album name
+		if normalizedAlbum != "" && !strings.Contains(query, normalizedAlbum) {
+			return true
+		}
+
+		// If duration provided, extract duration from key and check within ±delta
+		if hasDuration {
+			var keyDuration int
+			// Cache key format: "song artist [album] [123s]"
+			if idx := strings.LastIndex(query, " "); idx != -1 {
+				suffix := query[idx+1:]
+				if strings.HasSuffix(suffix, "s") {
+					fmt.Sscanf(strings.TrimSuffix(suffix, "s"), "%d", &keyDuration)
+				}
+			}
+			if keyDuration > 0 {
+				diff := keyDuration - durationSec
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff > deltaSec {
+					return true
+				}
+			}
+		}
+
+		matchingKeys = append(matchingKeys, key)
+		return true
+	})
+
+	// 5. Dry run: return matching keys without modifying anything
+	if dryRun {
+		log.Infof("%s Dry run: found %d matching keys for %s", logcolors.LogOverride, len(matchingKeys), matchString)
+		Respond(w, r).JSON(map[string]interface{}{
+			"dry_run": true,
+			"count":   len(matchingKeys),
+			"keys":    matchingKeys,
+		})
+		return
+	}
+
+	// 6. Fetch lyrics by track ID
+	log.Infof("%s Fetching lyrics for track ID %s to override %d cache entries", logcolors.LogOverride, trackID, len(matchingKeys))
+	ttmlString, err := ttml.FetchLyricsByTrackID(trackID)
+	if err != nil {
+		log.Errorf("%s Failed to fetch lyrics for track ID %s: %v", logcolors.LogOverride, trackID, err)
+		Respond(w, r).Error(http.StatusInternalServerError, map[string]interface{}{
+			"error":    fmt.Sprintf("failed to fetch lyrics: %v", err),
+			"track_id": trackID,
+		})
+		return
+	}
+
+	// 7. Update matching cache entries, or create a new one if none exist
+	var updatedKeys []string
+	created := false
+
+	if len(matchingKeys) == 0 {
+		// No existing entries — create a new cache entry using the same key format as /getLyrics
+		cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
+
+		var durationMs int
+		if durationStr != "" {
+			fmt.Sscanf(durationStr, "%d", &durationMs)
+			durationMs = durationMs * 1000
+		}
+
+		setCachedLyrics(cacheKey, ttmlString, durationMs, 0, "", false)
+		updatedKeys = append(updatedKeys, cacheKey)
+		created = true
+		log.Infof("%s Created new cache entry %s with lyrics from track ID %s", logcolors.LogOverride, cacheKey, trackID)
+	} else {
+		for _, key := range matchingKeys {
+			cached, ok := getCachedLyrics(key)
+			if !ok {
+				continue
+			}
+
+			// Replace only the TTML content, preserve existing metadata
+			setCachedLyrics(key, ttmlString, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL)
+			updatedKeys = append(updatedKeys, key)
+		}
+		log.Infof("%s Updated %d cache entries with lyrics from track ID %s", logcolors.LogOverride, len(updatedKeys), trackID)
+	}
+
+	// 8. Clear any negative cache entries for this query
+	deleteNegativeCache(buildNormalizedCacheKey(songName, artistName, albumName, durationStr))
+
+	Respond(w, r).JSON(map[string]interface{}{
+		"updated":  len(updatedKeys),
+		"created":  created,
+		"keys":     updatedKeys,
+		"track_id": trackID,
+	})
+}
+
 // helpHandler returns API documentation
 func helpHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

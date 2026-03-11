@@ -12,6 +12,9 @@ func setupRoutes(router *mux.Router) {
 	// Revalidate endpoint - checks if cached lyrics are stale and updates if needed
 	router.HandleFunc("/revalidate", revalidateHandler)
 
+	// Override endpoint - replace cached lyrics with content fetched by Apple Music track ID
+	router.HandleFunc("/override", overrideHandler)
+
 	// Provider-specific endpoints - return {"lyrics": ..., "provider": ...}
 	router.HandleFunc("/ttml/getLyrics", getLyricsWithProvider("ttml"))
 	router.HandleFunc("/kugou/getLyrics", getLyricsWithProvider("kugou"))
