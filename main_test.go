@@ -937,6 +937,40 @@ func TestOverrideHandler_NoMatchCreatesNewEntry(t *testing.T) {
 	}
 }
 
+func TestOverrideHandler_RejectsNonNumericTrackID(t *testing.T) {
+	cleanup := setupTestEnvironment(t)
+	defer cleanup()
+
+	tests := []struct {
+		name    string
+		trackID string
+	}{
+		{"path traversal", "../1234"},
+		{"query injection", "1234?foo=bar"},
+		{"letters", "abc"},
+		{"mixed", "123abc"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _ := http.NewRequest("GET", "/override?id="+tt.trackID+"&s=song&a=artist", nil)
+			req = req.WithContext(context.WithValue(req.Context(), apiKeyAuthenticatedKey, true))
+			rr := httptest.NewRecorder()
+			overrideHandler(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("Expected 400 for track ID %q, got %d", tt.trackID, rr.Code)
+			}
+
+			var body map[string]interface{}
+			json.Unmarshal(rr.Body.Bytes(), &body)
+			if !strings.Contains(body["error"].(string), "numeric") {
+				t.Errorf("Expected error about numeric ID, got %q", body["error"])
+			}
+		})
+	}
+}
+
 func TestOverrideHandler_DryRunDoesNotRequireTrackID(t *testing.T) {
 	cleanup := setupTestEnvironment(t)
 	defer cleanup()

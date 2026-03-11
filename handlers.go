@@ -12,6 +12,7 @@ import (
 	"lyrics-api-go/services/providers"
 	"lyrics-api-go/stats"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1072,6 +1073,16 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 			"error": "id parameter is required (Apple Music track ID)",
 		})
 		return
+	}
+
+	// Validate track ID is numeric (Apple Music IDs are always numeric)
+	if trackID != "" {
+		if _, err := strconv.Atoi(trackID); err != nil {
+			Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+				"error": "id must be a numeric Apple Music track ID",
+			})
+			return
+		}
 	}
 
 	// 4. Find matching cache keys
