@@ -104,6 +104,9 @@ func setSongMetadata(meta *SongMetadata) {
 		return
 	}
 
+	log.Infof("%s Stored metadata for: %s - %s (videoIds: %v, ISRC: %s)",
+		logcolors.LogCache, meta.TrackName, meta.ArtistName, meta.VideoIDs, meta.ISRC)
+
 	// Update reverse indexes
 	if meta.ISRC != "" {
 		addToIndex("isrc:"+meta.ISRC, meta.CacheKey)

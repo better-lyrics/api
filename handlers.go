@@ -1462,3 +1462,86 @@ func videoMapImportHandler(w http.ResponseWriter, r *http.Request) {
 		"total":     len(entries),
 	})
 }
+
+// metadataLookupHandler returns stored metadata for a song.
+// Supports lookup by song+artist (builds cache key) or by videoId (reverse index).
+// Protected by CACHE_ACCESS_TOKEN.
+func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
+	if conf.Configuration.CacheAccessToken != "" {
+		token := r.Header.Get("Authorization")
+		if token != conf.Configuration.CacheAccessToken {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	videoID := r.URL.Query().Get("videoId")
+	songName := r.URL.Query().Get("s") + r.URL.Query().Get("song")
+	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist")
+	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album")
+	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
+
+	// Lookup by videoId
+	if videoID != "" {
+		cacheKeys := getCacheKeysByVideoID(videoID)
+		if len(cacheKeys) == 0 {
+			Respond(w, r).Error(http.StatusNotFound, map[string]interface{}{
+				"error": "no metadata found for videoId: " + videoID,
+			})
+			return
+		}
+		var results []*SongMetadata
+		for _, ck := range cacheKeys {
+			if meta, ok := getSongMetadata(ck); ok {
+				results = append(results, meta)
+			}
+		}
+		Respond(w, r).JSON(map[string]interface{}{
+			"videoId": videoID,
+			"results": results,
+		})
+		return
+	}
+
+	// Lookup by song+artist
+	if songName == "" && artistName == "" {
+		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+			"error": "provide song+artist (s, a) or videoId",
+		})
+		return
+	}
+
+	cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
+	meta, ok := getSongMetadata(cacheKey)
+	if !ok {
+		// Try song index for all duration variants
+		allVids := getAllVideoIDsForSong(songName, artistName)
+		songKey := buildSongIndexKey(songName, artistName)
+		cacheKeys := getIndex("song:" + songKey)
+		if len(cacheKeys) == 0 {
+			Respond(w, r).Error(http.StatusNotFound, map[string]interface{}{
+				"error":    "no metadata found",
+				"cacheKey": cacheKey,
+			})
+			return
+		}
+		var results []*SongMetadata
+		for _, ck := range cacheKeys {
+			if m, ok := getSongMetadata(ck); ok {
+				results = append(results, m)
+			}
+		}
+		Respond(w, r).JSON(map[string]interface{}{
+			"cacheKey":     cacheKey,
+			"allVideoIds":  allVids,
+			"allCacheKeys": cacheKeys,
+			"results":      results,
+		})
+		return
+	}
+
+	Respond(w, r).JSON(map[string]interface{}{
+		"cacheKey": cacheKey,
+		"metadata": meta,
+	})
+}

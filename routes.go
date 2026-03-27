@@ -21,8 +21,9 @@ func setupRoutes(router *mux.Router) {
 	router.HandleFunc("/qq/getLyrics", getLyricsWithProvider("qq"))
 	router.HandleFunc("/legacy/getLyrics", getLyricsWithProvider("legacy"))
 
-	// Video-map import endpoint - bulk import videoId-to-song mappings
+	// Metadata endpoints
 	router.HandleFunc("/video-map", videoMapImportHandler).Methods("POST")
+	router.HandleFunc("/metadata", metadataLookupHandler).Methods("GET")
 
 	// Cache management endpoints
 	router.HandleFunc("/cache", getCacheDump)
