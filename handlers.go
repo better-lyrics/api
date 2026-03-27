@@ -1269,6 +1269,7 @@ func helpHandler(w http.ResponseWriter, r *http.Request) {
 			"a, artist, artistName": "Artist name (required)",
 			"al, album, albumName":  "Album name (optional, improves matching)",
 			"d, duration":           "Duration in seconds (optional, improves matching)",
+			"videoId, v":            "YouTube video ID (optional, associates video with song for proxy revalidation)",
 		},
 		"example": "/getLyrics?s=Shape%20of%20You&a=Ed%20Sheeran",
 		"notes":   "The API uses provider-specific matching algorithms. Providing more parameters improves accuracy.",
