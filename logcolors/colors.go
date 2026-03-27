@@ -108,5 +108,6 @@ const (
 
 // External API log prefixes
 const (
-	LogBini = Cyan + "[Bini]" + Reset
+	LogBini  = Cyan + "[Bini]" + Reset
+	LogProxy = Cyan + "[Proxy]" + Reset
 )

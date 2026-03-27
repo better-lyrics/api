@@ -164,13 +164,16 @@ func TestScoreTrack(t *testing.T) {
 	track := &Track{
 		ID: "test123",
 		Attributes: struct {
-			Name             string `json:"name"`
-			ArtistName       string `json:"artistName"`
-			AlbumName        string `json:"albumName"`
-			DurationInMillis int    `json:"durationInMillis"`
-			URL              string `json:"url"`
-			ISRC             string `json:"isrc"`
-			SongwriterNames  string `json:"songwriterName"`
+			Name                string `json:"name"`
+			ArtistName          string `json:"artistName"`
+			AlbumName           string `json:"albumName"`
+			DurationInMillis    int    `json:"durationInMillis"`
+			URL                 string `json:"url"`
+			ISRC                string `json:"isrc"`
+			SongwriterNames     string `json:"songwriterName"`
+			ReleaseDate         string `json:"releaseDate"`
+			HasLyrics           *bool  `json:"hasLyrics"`
+			HasTimeSyncedLyrics *bool  `json:"hasTimeSyncedLyrics"`
 		}{
 			Name:             "Shape of You",
 			ArtistName:       "Ed Sheeran",
@@ -280,13 +283,16 @@ func TestScoreTrack(t *testing.T) {
 func TestScoreTrack_PerfectMatch(t *testing.T) {
 	track := &Track{
 		Attributes: struct {
-			Name             string `json:"name"`
-			ArtistName       string `json:"artistName"`
-			AlbumName        string `json:"albumName"`
-			DurationInMillis int    `json:"durationInMillis"`
-			URL              string `json:"url"`
-			ISRC             string `json:"isrc"`
-			SongwriterNames  string `json:"songwriterName"`
+			Name                string `json:"name"`
+			ArtistName          string `json:"artistName"`
+			AlbumName           string `json:"albumName"`
+			DurationInMillis    int    `json:"durationInMillis"`
+			URL                 string `json:"url"`
+			ISRC                string `json:"isrc"`
+			SongwriterNames     string `json:"songwriterName"`
+			ReleaseDate         string `json:"releaseDate"`
+			HasLyrics           *bool  `json:"hasLyrics"`
+			HasTimeSyncedLyrics *bool  `json:"hasTimeSyncedLyrics"`
 		}{
 			Name:             "Test Song",
 			ArtistName:       "Test Artist",
@@ -307,13 +313,16 @@ func TestScoreTrack_PerfectMatch(t *testing.T) {
 func TestScoreTrack_ComponentScores(t *testing.T) {
 	track := &Track{
 		Attributes: struct {
-			Name             string `json:"name"`
-			ArtistName       string `json:"artistName"`
-			AlbumName        string `json:"albumName"`
-			DurationInMillis int    `json:"durationInMillis"`
-			URL              string `json:"url"`
-			ISRC             string `json:"isrc"`
-			SongwriterNames  string `json:"songwriterName"`
+			Name                string `json:"name"`
+			ArtistName          string `json:"artistName"`
+			AlbumName           string `json:"albumName"`
+			DurationInMillis    int    `json:"durationInMillis"`
+			URL                 string `json:"url"`
+			ISRC                string `json:"isrc"`
+			SongwriterNames     string `json:"songwriterName"`
+			ReleaseDate         string `json:"releaseDate"`
+			HasLyrics           *bool  `json:"hasLyrics"`
+			HasTimeSyncedLyrics *bool  `json:"hasTimeSyncedLyrics"`
 		}{
 			Name:             "Test Song",
 			ArtistName:       "The Beatles",
@@ -401,13 +410,16 @@ func TestScoreTrack_Comparison(t *testing.T) {
 	perfectTrack := &Track{
 		ID: "perfect",
 		Attributes: struct {
-			Name             string `json:"name"`
-			ArtistName       string `json:"artistName"`
-			AlbumName        string `json:"albumName"`
-			DurationInMillis int    `json:"durationInMillis"`
-			URL              string `json:"url"`
-			ISRC             string `json:"isrc"`
-			SongwriterNames  string `json:"songwriterName"`
+			Name                string `json:"name"`
+			ArtistName          string `json:"artistName"`
+			AlbumName           string `json:"albumName"`
+			DurationInMillis    int    `json:"durationInMillis"`
+			URL                 string `json:"url"`
+			ISRC                string `json:"isrc"`
+			SongwriterNames     string `json:"songwriterName"`
+			ReleaseDate         string `json:"releaseDate"`
+			HasLyrics           *bool  `json:"hasLyrics"`
+			HasTimeSyncedLyrics *bool  `json:"hasTimeSyncedLyrics"`
 		}{
 			Name:             "Shape of You",
 			ArtistName:       "Ed Sheeran",
@@ -419,13 +431,16 @@ func TestScoreTrack_Comparison(t *testing.T) {
 	wrongTrack := &Track{
 		ID: "wrong",
 		Attributes: struct {
-			Name             string `json:"name"`
-			ArtistName       string `json:"artistName"`
-			AlbumName        string `json:"albumName"`
-			DurationInMillis int    `json:"durationInMillis"`
-			URL              string `json:"url"`
-			ISRC             string `json:"isrc"`
-			SongwriterNames  string `json:"songwriterName"`
+			Name                string `json:"name"`
+			ArtistName          string `json:"artistName"`
+			AlbumName           string `json:"albumName"`
+			DurationInMillis    int    `json:"durationInMillis"`
+			URL                 string `json:"url"`
+			ISRC                string `json:"isrc"`
+			SongwriterNames     string `json:"songwriterName"`
+			ReleaseDate         string `json:"releaseDate"`
+			HasLyrics           *bool  `json:"hasLyrics"`
+			HasTimeSyncedLyrics *bool  `json:"hasTimeSyncedLyrics"`
 		}{
 			Name:             "Shape of My Heart",
 			ArtistName:       "Sting",

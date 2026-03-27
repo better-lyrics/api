@@ -92,6 +92,9 @@ func main() {
 		log.Infof("%s Alert handler initialized with %d notifier(s)", logcolors.LogNotifier, len(alertNotifiers))
 	}
 
+	// Initialize metadata and indexes buckets (separate from cache bucket)
+	initMetadataBuckets()
+
 	// Start bearer token auto-scraper (proactive refresh based on JWT expiry)
 	ttml.StartBearerTokenMonitor()
 

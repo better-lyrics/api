@@ -18,10 +18,14 @@ type Syllable = providers.Syllable
 
 // TrackMeta contains metadata about the matched track from Apple Music
 type TrackMeta struct {
-	Name       string
-	ArtistName string
-	AlbumName  string
-	ISRC       string
+	TrackID             string // Apple Music track ID
+	Name                string
+	ArtistName          string
+	AlbumName           string
+	ISRC                string
+	ReleaseDate         string
+	HasTimeSyncedLyrics *bool  // nil = field absent from API, false = no synced lyrics, true = has synced lyrics
+	RawAttributes       string // JSON string of full Apple Music attributes
 }
 
 // =============================================================================
@@ -57,13 +61,16 @@ type SearchResponse struct {
 type Track struct {
 	ID         string `json:"id"`
 	Attributes struct {
-		Name             string `json:"name"`
-		ArtistName       string `json:"artistName"`
-		AlbumName        string `json:"albumName"`
-		DurationInMillis int    `json:"durationInMillis"`
-		URL              string `json:"url"`
-		ISRC             string `json:"isrc"`
-		SongwriterNames  string `json:"songwriterName"`
+		Name                string `json:"name"`
+		ArtistName          string `json:"artistName"`
+		AlbumName           string `json:"albumName"`
+		DurationInMillis    int    `json:"durationInMillis"`
+		URL                 string `json:"url"`
+		ISRC                string `json:"isrc"`
+		SongwriterNames     string `json:"songwriterName"`
+		ReleaseDate         string `json:"releaseDate"`         // ISO 8601 date, e.g. "2008-05-25"
+		HasLyrics           *bool  `json:"hasLyrics"`           // nil = field absent from API response
+		HasTimeSyncedLyrics *bool  `json:"hasTimeSyncedLyrics"` // nil = field absent from API response
 	} `json:"attributes"`
 }
 

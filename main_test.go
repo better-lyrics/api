@@ -109,7 +109,7 @@ func TestSetAndGetNegativeCache(t *testing.T) {
 	}
 
 	// Set negative cache
-	setNegativeCache(cacheKey, reason)
+	setNegativeCache(cacheKey, reason, "", false)
 
 	// Should now be found
 	retrievedReason, found := getNegativeCache(cacheKey)
@@ -201,7 +201,7 @@ func TestNegativeCacheKeyFormat(t *testing.T) {
 	cacheKey := "ttml_lyrics:Song Artist Album 234s"
 	reason := "Lyrics not available for this track"
 
-	setNegativeCache(cacheKey, reason)
+	setNegativeCache(cacheKey, reason, "", false)
 
 	// Verify it's stored with the correct prefix
 	expectedNegativeKey := "no_lyrics:" + cacheKey
@@ -644,7 +644,7 @@ func TestGetNegativeCacheWithDurationTolerance_ExactMatch(t *testing.T) {
 	// Set negative cache for duration 232s
 	cacheKey := buildNormalizedCacheKey("Unknown Song", "Unknown Artist", "", "232")
 	reason := "no track found"
-	setNegativeCache(cacheKey, reason)
+	setNegativeCache(cacheKey, reason, "", false)
 
 	// Request with exact duration should find it
 	foundReason, foundKey, found := getNegativeCacheWithDurationTolerance("Unknown Song", "Unknown Artist", "", "232")
@@ -666,7 +666,7 @@ func TestGetNegativeCacheWithDurationTolerance_FuzzyMatch(t *testing.T) {
 	// Set negative cache for duration 232s
 	cacheKey := buildNormalizedCacheKey("Unknown Song", "Unknown Artist", "", "232")
 	reason := "no track found"
-	setNegativeCache(cacheKey, reason)
+	setNegativeCache(cacheKey, reason, "", false)
 
 	tests := []struct {
 		name            string
@@ -723,7 +723,7 @@ func TestGetNegativeCacheWithDurationTolerance_NoDuration(t *testing.T) {
 	// Set negative cache without duration
 	cacheKey := buildNormalizedCacheKey("Unknown Song", "Unknown Artist", "", "")
 	reason := "no track found"
-	setNegativeCache(cacheKey, reason)
+	setNegativeCache(cacheKey, reason, "", false)
 
 	// Request without duration should find it
 	foundReason, foundKey, found := getNegativeCacheWithDurationTolerance("Unknown Song", "Unknown Artist", "", "")

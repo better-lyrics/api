@@ -329,6 +329,11 @@ func (pc *PersistentCache) WriteTo(w io.Writer) (int64, error) {
 	return n, err
 }
 
+// DB returns the underlying BoltDB handle for direct bucket operations (e.g., metadata store).
+func (pc *PersistentCache) DB() *bolt.DB {
+	return pc.db
+}
+
 // Close closes the database connection
 func (pc *PersistentCache) Close() error {
 	if pc.db != nil {

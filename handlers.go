@@ -10,6 +10,7 @@ import (
 	"lyrics-api-go/services/bini"
 	"lyrics-api-go/services/notifier"
 	"lyrics-api-go/services/providers"
+	"lyrics-api-go/services/proxy"
 	"lyrics-api-go/stats"
 	"net/http"
 	"strconv"
@@ -31,6 +32,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist") + r.URL.Query().Get("artistName")
 	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album") + r.URL.Query().Get("albumName")
 	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
+	videoID := r.URL.Query().Get("videoId") + r.URL.Query().Get("v")
 
 	if songName == "" && artistName == "" {
 		http.Error(w, "Song name or artist name not provided", http.StatusUnprocessableEntity)
@@ -67,6 +69,10 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			log.Infof("%s Found cached TTML via fuzzy duration match: %s", logcolors.LogCacheLyrics, foundKey)
 		} else {
 			log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
+		}
+		// Associate videoId on cache hits too
+		if videoID != "" {
+			go addVideoID(foundKey, videoID)
 		}
 		Respond(w, r).SetCacheStatus("HIT").JSON(map[string]interface{}{
 			"ttml": cached.TTML,
@@ -190,7 +196,13 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		// Cache permanent "no lyrics" errors to avoid repeated API calls
 		isPermanentError := shouldNegativeCache(err)
 		if isPermanentError {
-			setNegativeCache(cacheKey, err.Error())
+			releaseDate := ""
+			hasTimeSyncedLyricsKnown := false
+			if trackMeta != nil {
+				releaseDate = trackMeta.ReleaseDate
+				hasTimeSyncedLyricsKnown = trackMeta.HasTimeSyncedLyrics != nil
+			}
+			setNegativeCache(cacheKey, err.Error(), releaseDate, hasTimeSyncedLyricsKnown)
 		}
 
 		// No fallback found (or skipped due to duration), return the error
@@ -212,7 +224,13 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		stats.Get().RecordCacheMiss()
 		log.Warnf("No TTML found for: %s", query)
 		// Cache this negative result to avoid repeated API calls
-		setNegativeCache(cacheKey, "Lyrics not available for this track")
+		releaseDate := ""
+		hasTimeSyncedLyricsKnown := false
+		if trackMeta != nil {
+			releaseDate = trackMeta.ReleaseDate
+			hasTimeSyncedLyricsKnown = trackMeta.HasTimeSyncedLyrics != nil
+		}
+		setNegativeCache(cacheKey, "Lyrics not available for this track", releaseDate, hasTimeSyncedLyricsKnown)
 		Respond(w, r).SetCacheStatus("MISS").Error(http.StatusNotFound, map[string]interface{}{
 			"error": "Lyrics not available for this track",
 		})
@@ -224,6 +242,27 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	setCachedLyrics(cacheKey, ttmlString, trackDurationMs, score, "", false)
 
 	go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
+	go proxy.RevalidateAllForSong(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs/1000, getAllVideoIDsForSong)
+
+	// Store song metadata for future querying and proxy revalidation
+	if trackMeta != nil {
+		go setSongMetadata(&SongMetadata{
+			CacheKey:      cacheKey,
+			AppleTrackID:  trackMeta.TrackID,
+			ISRC:          trackMeta.ISRC,
+			TrackName:     trackMeta.Name,
+			ArtistName:    trackMeta.ArtistName,
+			AlbumName:     trackMeta.AlbumName,
+			DurationMs:    trackDurationMs,
+			ReleaseDate:   trackMeta.ReleaseDate,
+			RawAttributes: trackMeta.RawAttributes,
+		})
+	}
+
+	// Associate videoId with this cache key if provided
+	if videoID != "" {
+		go addVideoID(cacheKey, videoID)
+	}
 
 	Respond(w, r).SetCacheStatus("MISS").JSON(map[string]interface{}{
 		"ttml":  ttmlString,
@@ -397,7 +436,7 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 			// Cache negative result
 			isPermanentError := shouldNegativeCache(err)
 			if isPermanentError {
-				setNegativeCache(cacheKey, err.Error())
+				setNegativeCache(cacheKey, err.Error(), "", false)
 			}
 
 			stats.Get().RecordCacheMiss()
@@ -419,7 +458,7 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 		if result == nil || result.RawLyrics == "" {
 			stats.Get().RecordCacheMiss()
 			log.Warnf("[%s] No lyrics found for: %s", providerName, query)
-			setNegativeCache(cacheKey, "Lyrics not available")
+			setNegativeCache(cacheKey, "Lyrics not available", "", false)
 			Respond(w, r).SetProvider(providerName).SetCacheStatus("MISS").Error(http.StatusNotFound, map[string]interface{}{
 				"error":    "Lyrics not available for this track",
 				"provider": providerName,
@@ -1345,6 +1384,7 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		// Update cache with fresh content
 		setCachedLyrics(usedKey, ttmlString, trackDurationMs, score, "", false)
 		go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
+		go proxy.RevalidateAllForSong(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs/1000, getAllVideoIDsForSong)
 		log.Infof("%s Content changed, cache updated for: %s", logcolors.LogRevalidate, usedKey)
 	} else {
 		log.Infof("%s Content unchanged for: %s", logcolors.LogRevalidate, usedKey)
@@ -1355,5 +1395,53 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		"updated":          updated,
 		"cacheKey":         usedKey,
 		"wasNegativeCache": wasInNegativeCache,
+	})
+}
+
+// videoMapImportHandler handles bulk import of videoId-to-song mappings.
+// Protected by CACHE_ACCESS_TOKEN.
+func videoMapImportHandler(w http.ResponseWriter, r *http.Request) {
+	// Require auth
+	if conf.Configuration.CacheAccessToken != "" {
+		token := r.Header.Get("Authorization")
+		if token != conf.Configuration.CacheAccessToken {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	// Cap request body size (10MB max)
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
+	type videoMapEntry struct {
+		VideoID  string `json:"videoId"`
+		Song     string `json:"song"`
+		Artist   string `json:"artist"`
+		Album    string `json:"album,omitempty"`
+		Duration string `json:"duration,omitempty"`
+	}
+
+	var entries []videoMapEntry
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&entries); err != nil {
+		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+			"error": "Invalid JSON body: " + err.Error(),
+		})
+		return
+	}
+
+	processed := 0
+	for _, entry := range entries {
+		if entry.VideoID == "" || (entry.Song == "" && entry.Artist == "") {
+			continue
+		}
+		cacheKey := buildNormalizedCacheKey(entry.Song, entry.Artist, entry.Album, entry.Duration)
+		addVideoID(cacheKey, entry.VideoID)
+		processed++
+	}
+
+	Respond(w, r).JSON(map[string]interface{}{
+		"processed": processed,
+		"total":     len(entries),
 	})
 }
