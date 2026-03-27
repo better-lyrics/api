@@ -329,9 +329,59 @@ func (pc *PersistentCache) WriteTo(w io.Writer) (int64, error) {
 	return n, err
 }
 
-// DB returns the underlying BoltDB handle for direct bucket operations (e.g., metadata store).
-func (pc *PersistentCache) DB() *bolt.DB {
-	return pc.db
+// CreateBucket creates a named bucket if it doesn't already exist.
+func (pc *PersistentCache) CreateBucket(name string) error {
+	return pc.db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(name))
+		return err
+	})
+}
+
+// GetFromBucket retrieves a raw value from a named bucket.
+// Unlike Get, this does NOT unwrap CacheEntry JSON or decompress — caller handles format.
+func (pc *PersistentCache) GetFromBucket(bucket, key string) ([]byte, bool) {
+	var value []byte
+	err := pc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket not found")
+		}
+		data := b.Get([]byte(key))
+		if data == nil {
+			return fmt.Errorf("key not found")
+		}
+		// Copy data — BoltDB values are only valid within the transaction
+		value = make([]byte, len(data))
+		copy(value, data)
+		return nil
+	})
+	if err != nil {
+		return nil, false
+	}
+	return value, true
+}
+
+// SetInBucket stores a raw value in a named bucket.
+// Unlike Set, this does NOT wrap in CacheEntry JSON or compress — caller handles format.
+func (pc *PersistentCache) SetInBucket(bucket, key string, value []byte) error {
+	return pc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket %q not found", bucket)
+		}
+		return b.Put([]byte(key), value)
+	})
+}
+
+// DeleteFromBucket removes a key from a named bucket.
+func (pc *PersistentCache) DeleteFromBucket(bucket, key string) error {
+	return pc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket %q not found", bucket)
+		}
+		return b.Delete([]byte(key))
+	})
 }
 
 // Close closes the database connection

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
-	bolt "go.etcd.io/bbolt"
 )
 
 const (
@@ -19,80 +18,40 @@ const (
 // initMetadataBuckets creates the metadata and indexes buckets if they don't exist.
 // Called during server startup after persistentCache is initialized.
 func initMetadataBuckets() {
-	db := persistentCache.DB()
-	if db == nil {
-		log.Warnf("%s Cannot init metadata buckets: database not available", logcolors.LogCache)
+	if err := persistentCache.CreateBucket(metadataBucket); err != nil {
+		log.Errorf("%s Failed to create metadata bucket: %v", logcolors.LogCache, err)
 		return
 	}
-
-	err := db.Update(func(tx *bolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists([]byte(metadataBucket)); err != nil {
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists([]byte(indexesBucket)); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		log.Errorf("%s Failed to create metadata buckets: %v", logcolors.LogCache, err)
-	} else {
-		log.Infof("%s Metadata and indexes buckets initialized", logcolors.LogCache)
+	if err := persistentCache.CreateBucket(indexesBucket); err != nil {
+		log.Errorf("%s Failed to create indexes bucket: %v", logcolors.LogCache, err)
+		return
 	}
+	log.Infof("%s Metadata and indexes buckets initialized", logcolors.LogCache)
 }
 
 // metadataGet retrieves a value from a bucket, decompressing if needed.
 func metadataGet(bucket, key string) (string, bool) {
-	db := persistentCache.DB()
-	if db == nil {
-		return "", false
-	}
-
-	var value string
-	err := db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
-		if b == nil {
-			return nil
-		}
-		data := b.Get([]byte(key))
-		if data == nil {
-			return nil
-		}
-		value = string(data)
-		return nil
-	})
-	if err != nil || value == "" {
+	data, ok := persistentCache.GetFromBucket(bucket, key)
+	if !ok {
 		return "", false
 	}
 
 	// Decompress
-	decompressed, err := utils.DecompressString(value)
+	decompressed, err := utils.DecompressString(string(data))
 	if err != nil {
-		// Might be uncompressed (old data)
-		return value, true
+		// Might be uncompressed (old data or plain text)
+		return string(data), true
 	}
 	return decompressed, true
 }
 
 // metadataSet stores a value in a bucket, compressing it.
 func metadataSet(bucket, key, value string) error {
-	db := persistentCache.DB()
-	if db == nil {
-		return nil
-	}
-
 	compressed, err := utils.CompressString(value)
 	if err != nil {
 		return err
 	}
-
-	return db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
-		if b == nil {
-			return nil
-		}
-		return b.Put([]byte(key), []byte(compressed))
-	})
+	return persistentCache.SetInBucket(bucket, key, []byte(compressed))
 }
 
 // getSongMetadata retrieves metadata for a cache key.
