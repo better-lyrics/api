@@ -242,25 +242,29 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	setCachedLyrics(cacheKey, ttmlString, trackDurationMs, score, "", false)
 
 	go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
-	go proxy.RevalidateAllForSong(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs/1000, getAllVideoIDsForSong)
 
-	// Store song metadata for future querying and proxy revalidation
+	// Store metadata and videoId first, then trigger proxy revalidation (which queries metadata).
+	// All writes happen in the same goroutine before revalidation to avoid race conditions.
 	if trackMeta != nil {
-		go setSongMetadata(&SongMetadata{
-			CacheKey:      cacheKey,
-			AppleTrackID:  trackMeta.TrackID,
-			ISRC:          trackMeta.ISRC,
-			TrackName:     trackMeta.Name,
-			ArtistName:    trackMeta.ArtistName,
-			AlbumName:     trackMeta.AlbumName,
-			DurationMs:    trackDurationMs,
-			ReleaseDate:   trackMeta.ReleaseDate,
-			RawAttributes: trackMeta.RawAttributes,
-		})
-	}
-
-	// Associate videoId with this cache key if provided
-	if videoID != "" {
+		go func() {
+			meta := &SongMetadata{
+				CacheKey:      cacheKey,
+				AppleTrackID:  trackMeta.TrackID,
+				ISRC:          trackMeta.ISRC,
+				TrackName:     trackMeta.Name,
+				ArtistName:    trackMeta.ArtistName,
+				AlbumName:     trackMeta.AlbumName,
+				DurationMs:    trackDurationMs,
+				ReleaseDate:   trackMeta.ReleaseDate,
+				RawAttributes: trackMeta.RawAttributes,
+			}
+			if videoID != "" {
+				meta.VideoIDs = []string{videoID}
+			}
+			setSongMetadata(meta)
+			proxy.RevalidateAllForSong(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs/1000, getAllVideoIDsForSong)
+		}()
+	} else if videoID != "" {
 		go addVideoID(cacheKey, videoID)
 	}
 
@@ -1384,7 +1388,20 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		// Update cache with fresh content
 		setCachedLyrics(usedKey, ttmlString, trackDurationMs, score, "", false)
 		go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
-		go proxy.RevalidateAllForSong(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs/1000, getAllVideoIDsForSong)
+		go func() {
+			// Update metadata before proxy revalidation (which queries metadata for videoIds)
+			setSongMetadata(&SongMetadata{
+				CacheKey:     usedKey,
+				AppleTrackID: trackMeta.TrackID,
+				ISRC:         trackMeta.ISRC,
+				TrackName:    trackMeta.Name,
+				ArtistName:   trackMeta.ArtistName,
+				AlbumName:    trackMeta.AlbumName,
+				DurationMs:   trackDurationMs,
+				ReleaseDate:  trackMeta.ReleaseDate,
+			})
+			proxy.RevalidateAllForSong(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs/1000, getAllVideoIDsForSong)
+		}()
 		log.Infof("%s Content changed, cache updated for: %s", logcolors.LogRevalidate, usedKey)
 	} else {
 		log.Infof("%s Content unchanged for: %s", logcolors.LogRevalidate, usedKey)

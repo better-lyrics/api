@@ -5,10 +5,13 @@ import (
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/utils"
 	"strings"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 )
+
+var metadataMu sync.Mutex
 
 const (
 	metadataBucket = "metadata"
@@ -69,10 +72,14 @@ func getSongMetadata(cacheKey string) (*SongMetadata, bool) {
 }
 
 // setSongMetadata stores/updates metadata, maintaining all reverse indexes.
+// Protected by metadataMu to prevent lost updates from concurrent read-modify-write.
 func setSongMetadata(meta *SongMetadata) {
 	if meta.CacheKey == "" {
 		return
 	}
+
+	metadataMu.Lock()
+	defer metadataMu.Unlock()
 
 	now := time.Now().Unix()
 
@@ -115,10 +122,14 @@ func setSongMetadata(meta *SongMetadata) {
 }
 
 // addVideoID adds a videoId to the metadata for a cache key, creating metadata if needed.
+// Protected by metadataMu to prevent lost updates from concurrent read-modify-write.
 func addVideoID(cacheKey, videoID string) {
 	if cacheKey == "" || videoID == "" {
 		return
 	}
+
+	metadataMu.Lock()
+	defer metadataMu.Unlock()
 
 	meta, ok := getSongMetadata(cacheKey)
 	if !ok {

@@ -34,3 +34,4 @@ lyrics-api-go
 test.xml
 /backups
 /migration
+scripts/test-mut.sh
