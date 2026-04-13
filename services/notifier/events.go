@@ -16,6 +16,8 @@ const (
 	EventServerStartupFailed   EventType = "server_startup_failed"
 	EventMUTHealthCheckFailed  EventType = "mut_health_check_failed"
 
+	EventMemoryThresholdExceeded EventType = "memory_threshold_exceeded"
+
 	// Warning events
 	EventHighFailureRate        EventType = "high_failure_rate"
 	EventHalfAccountsQuarantine EventType = "half_accounts_quarantined"
@@ -221,6 +223,15 @@ func PublishServerStartupFailed(component string, err error) {
 		"Server failed to start").
 		WithData("component", component).
 		WithData("error", err.Error())
+	GetEventBus().Publish(event)
+}
+
+// PublishMemoryThresholdExceeded publishes when memory usage exceeds the configured threshold
+func PublishMemoryThresholdExceeded(rssMB uint64, details map[string]interface{}) {
+	event := NewEvent(EventMemoryThresholdExceeded, SeverityCritical,
+		"Memory usage exceeded threshold").
+		WithData("rss_mb", rssMB).
+		WithData("details", details)
 	GetEventBus().Publish(event)
 }
 

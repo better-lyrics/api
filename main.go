@@ -98,6 +98,9 @@ func main() {
 	// Start MUT health check scheduler (daily canary checks)
 	ttml.StartHealthCheckScheduler()
 
+	// Start memory monitor (logs RSS, alerts at threshold)
+	startMemoryMonitor(cachePath)
+
 	router := mux.NewRouter()
 	setupRoutes(router)
 

@@ -134,6 +134,17 @@ func (h *AlertHandler) formatAlert(event *Event) (subject, message string) {
 		}
 		message += "\nAction: Check and refresh the Media User Token for these accounts."
 
+	case EventMemoryThresholdExceeded:
+		rssMB := event.Data["rss_mb"].(uint64)
+		subject = "Memory Threshold Exceeded"
+		message = fmt.Sprintf("Process RSS has reached %d MB.\n\n", rssMB)
+		if details, ok := event.Data["details"].(map[string]interface{}); ok {
+			for k, v := range details {
+				message += fmt.Sprintf("  • %s: %v\n", k, v)
+			}
+		}
+		message += "\nThe process may be OOM-killed soon. Check Railway metrics."
+
 	case EventServerStartupFailed:
 		component := event.Data["component"].(string)
 		errMsg := event.Data["error"].(string)
