@@ -110,3 +110,9 @@ const (
 const (
 	LogBini = Cyan + "[Bini]" + Reset
 )
+
+// Memory monitor log prefixes
+const (
+	LogMemory      = Cyan + "[Memory]" + Reset
+	LogMemoryAlert = Red + "[Memory:ALERT]" + Reset
+)
