@@ -6,6 +6,7 @@ import (
 	"lyrics-api-go/logcolors"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -72,7 +73,17 @@ func RevalidateAllForSong(song, artist, album string, duration int, videoIDsFunc
 	}
 
 	log.Infof("%s Revalidating %d proxy cache entries for: %s - %s", logcolors.LogProxy, len(videoIDs), song, artist)
+
+	sem := make(chan struct{}, 5)
+	var wg sync.WaitGroup
 	for _, vid := range videoIDs {
-		RevalidateByVideoID(vid, song, artist, album, duration)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(v string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			RevalidateByVideoID(v, song, artist, album, duration)
+		}(vid)
 	}
+	wg.Wait()
 }

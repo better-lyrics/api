@@ -1448,6 +1448,14 @@ func videoMapImportHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const maxVideoMapEntries = 10_000
+	if len(entries) > maxVideoMapEntries {
+		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+			"error": fmt.Sprintf("too many entries: %d (max %d)", len(entries), maxVideoMapEntries),
+		})
+		return
+	}
+
 	processed := 0
 	for _, entry := range entries {
 		if entry.VideoID == "" || (entry.Song == "" && entry.Artist == "") {
@@ -1516,7 +1524,6 @@ func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
 	meta, ok := getSongMetadata(cacheKey)
 	if !ok {
 		// Try song index for all duration variants
-		allVids := getAllVideoIDsForSong(songName, artistName)
 		songKey := buildSongIndexKey(songName, artistName)
 		cacheKeys := getIndex("song:" + songKey)
 		if len(cacheKeys) == 0 {
@@ -1526,6 +1533,7 @@ func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		allVids := getAllVideoIDsForSong(songName, artistName)
 		var results []*SongMetadata
 		for _, ck := range cacheKeys {
 			if m, ok := getSongMetadata(ck); ok {

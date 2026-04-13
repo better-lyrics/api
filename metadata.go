@@ -208,6 +208,7 @@ func getCacheKeysByVideoID(videoID string) []string {
 }
 
 // addToIndex appends a value to a JSON array stored at the given index key (deduped).
+// REQUIRES: caller must hold metadataMu (read-modify-write on index).
 func addToIndex(indexKey, value string) {
 	existing := getIndex(indexKey)
 	for _, v := range existing {
