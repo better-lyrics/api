@@ -258,8 +258,8 @@ func mergeStringSlice(a, b []string) []string {
 	for _, v := range a {
 		seen[v] = true
 	}
-	merged := make([]string, len(a))
-	copy(merged, a)
+	merged := make([]string, 0, len(a)+len(b))
+	merged = append(merged, a...)
 	for _, v := range b {
 		if !seen[v] {
 			merged = append(merged, v)
