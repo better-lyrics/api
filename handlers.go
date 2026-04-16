@@ -239,7 +239,8 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	stats.Get().RecordCacheMiss()
 	log.Infof("%s Caching TTML for: %s (trackDuration: %dms)", logcolors.LogCacheLyrics, query, trackDurationMs)
-	setCachedLyrics(cacheKey, ttmlString, trackDurationMs, score, "", false)
+	language, isRTL := ttml.DetectLanguage(ttmlString)
+	setCachedLyrics(cacheKey, ttmlString, trackDurationMs, score, language, isRTL)
 
 	go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
 
@@ -1223,7 +1224,8 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 			durationMs = durationMs * 1000
 		}
 
-		setCachedLyrics(cacheKey, ttmlString, durationMs, 0, "", false)
+		language, isRTL := ttml.DetectLanguage(ttmlString)
+		setCachedLyrics(cacheKey, ttmlString, durationMs, 0, language, isRTL)
 		updatedKeys = append(updatedKeys, cacheKey)
 		created = true
 		log.Infof("%s Created new cache entry %s with lyrics from track ID %s", logcolors.LogOverride, cacheKey, trackID)
@@ -1387,7 +1389,8 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 			deleteNegativeCache(usedKey)
 		}
 		// Update cache with fresh content
-		setCachedLyrics(usedKey, ttmlString, trackDurationMs, score, "", false)
+		language, isRTL := ttml.DetectLanguage(ttmlString)
+		setCachedLyrics(usedKey, ttmlString, trackDurationMs, score, language, isRTL)
 		go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
 		go func() {
 			// Update metadata before proxy revalidation (which queries metadata for videoIds)

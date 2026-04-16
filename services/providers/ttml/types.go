@@ -58,19 +58,35 @@ type SearchResponse struct {
 	} `json:"results"`
 }
 
+// Artwork mirrors Apple Music's attributes.artwork object.
+type Artwork struct {
+	URL        string `json:"url,omitempty"`
+	Width      int    `json:"width,omitempty"`
+	Height     int    `json:"height,omitempty"`
+	BgColor    string `json:"bgColor,omitempty"`
+	TextColor1 string `json:"textColor1,omitempty"`
+	TextColor2 string `json:"textColor2,omitempty"`
+	TextColor3 string `json:"textColor3,omitempty"`
+	TextColor4 string `json:"textColor4,omitempty"`
+}
+
 type Track struct {
 	ID         string `json:"id"`
 	Attributes struct {
-		Name                string `json:"name"`
-		ArtistName          string `json:"artistName"`
-		AlbumName           string `json:"albumName"`
-		DurationInMillis    int    `json:"durationInMillis"`
-		URL                 string `json:"url"`
-		ISRC                string `json:"isrc"`
-		SongwriterNames     string `json:"songwriterName"`
-		ReleaseDate         string `json:"releaseDate"`         // ISO 8601 date, e.g. "2008-05-25"
-		HasLyrics           *bool  `json:"hasLyrics"`           // nil = field absent from API response
-		HasTimeSyncedLyrics *bool  `json:"hasTimeSyncedLyrics"` // nil = field absent from API response
+		Name                string   `json:"name"`
+		ArtistName          string   `json:"artistName"`
+		AlbumName           string   `json:"albumName"`
+		DurationInMillis    int      `json:"durationInMillis"`
+		URL                 string   `json:"url"`
+		ISRC                string   `json:"isrc"`
+		SongwriterNames     string   `json:"songwriterName"`
+		ReleaseDate         string   `json:"releaseDate"`           // ISO 8601 date, e.g. "2008-05-25"
+		HasLyrics           *bool    `json:"hasLyrics"`             // nil = field absent from API response
+		HasTimeSyncedLyrics *bool    `json:"hasTimeSyncedLyrics"`   // nil = field absent from API response
+		Artwork             *Artwork `json:"artwork,omitempty"`     // Apple Music artwork (URL template, dimensions, colors)
+		GenreNames          []string `json:"genreNames,omitempty"`  // e.g. ["Pop", "Alternative"]
+		ComposerName        string   `json:"composerName,omitempty"`
+		HasCredits          *bool    `json:"hasCredits,omitempty"`
 	} `json:"attributes"`
 }
 
