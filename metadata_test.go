@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"lyrics-api-go/cache"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -365,4 +368,240 @@ func TestGetAllVideoIDsForSong(t *testing.T) {
 	if len(allVids) != 2 {
 		t.Errorf("Expected 2 videoIds across variants, got %d: %v", len(allVids), allVids)
 	}
+}
+
+func TestEnrichMetadata_ParsesRawAttributes(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	meta := &SongMetadata{
+		CacheKey:      "ttml_lyrics:test song test artist",
+		TrackName:     "Test Song",
+		ArtistName:    "Test Artist",
+		RawAttributes: `{"name":"Test Song","artistName":"Test Artist","artwork":{"url":"https://example.com/img.jpg"}}`,
+	}
+
+	enriched := enrichMetadata(meta)
+	if enriched == nil {
+		t.Fatal("enrichMetadata returned nil")
+	}
+
+	// rawAttributes should be a parsed object, not an escaped string
+	attrs, ok := enriched["rawAttributes"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("rawAttributes should be a map, got %T: %v", enriched["rawAttributes"], enriched["rawAttributes"])
+	}
+	if attrs["name"] != "Test Song" {
+		t.Errorf("expected rawAttributes.name == 'Test Song', got %v", attrs["name"])
+	}
+	artwork, ok := attrs["artwork"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected nested artwork object, got %T", attrs["artwork"])
+	}
+	if artwork["url"] != "https://example.com/img.jpg" {
+		t.Errorf("expected artwork.url preserved, got %v", artwork["url"])
+	}
+}
+
+func TestEnrichMetadata_InvalidRawAttributesKeepsString(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	meta := &SongMetadata{
+		CacheKey:      "ttml_lyrics:broken",
+		TrackName:     "Broken",
+		ArtistName:    "Artist",
+		RawAttributes: `{invalid json`,
+	}
+
+	enriched := enrichMetadata(meta)
+	// On parse failure we leave the raw string in place (fail-open, never drop data)
+	if s, ok := enriched["rawAttributes"].(string); !ok || s != `{invalid json` {
+		t.Errorf("invalid RawAttributes should be preserved as string, got %T: %v", enriched["rawAttributes"], enriched["rawAttributes"])
+	}
+}
+
+func TestEnrichMetadata_LyricsCacheStatus(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	// Case 1: no lyrics cached
+	metaA := &SongMetadata{
+		CacheKey:   "ttml_lyrics:no cache test",
+		TrackName:  "Nope",
+		ArtistName: "Artist",
+	}
+	enrichedA := enrichMetadata(metaA)
+	lyricsA, ok := enrichedA["lyrics"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("lyrics field missing/wrong type: %T", enrichedA["lyrics"])
+	}
+	if lyricsA["cached"] != false {
+		t.Errorf("expected cached=false when no lyrics stored, got %v", lyricsA["cached"])
+	}
+
+	// Case 2: real lyrics cached
+	metaB := &SongMetadata{
+		CacheKey:   "ttml_lyrics:has lyrics",
+		TrackName:  "Has",
+		ArtistName: "Artist",
+	}
+	setCachedLyrics(metaB.CacheKey, "<tt>some ttml</tt>", 240000, 0.95, "en", false)
+	enrichedB := enrichMetadata(metaB)
+	lyricsB := enrichedB["lyrics"].(map[string]interface{})
+	if lyricsB["cached"] != true {
+		t.Errorf("expected cached=true, got %v", lyricsB["cached"])
+	}
+	if lyricsB["noLyrics"] != false {
+		t.Errorf("expected noLyrics=false, got %v", lyricsB["noLyrics"])
+	}
+	if lyricsB["ttmlBytes"] != float64(len("<tt>some ttml</tt>")) && lyricsB["ttmlBytes"] != len("<tt>some ttml</tt>") {
+		// map[string]interface{} may hold int or float64 depending on how it was added;
+		// enrichMetadata adds len() which is int
+		t.Errorf("unexpected ttmlBytes: %v (type %T)", lyricsB["ttmlBytes"], lyricsB["ttmlBytes"])
+	}
+	if lyricsB["language"] != "en" {
+		t.Errorf("expected language=en, got %v", lyricsB["language"])
+	}
+
+	// Case 3: no-lyrics sentinel
+	metaC := &SongMetadata{
+		CacheKey:   "ttml_lyrics:sentinel",
+		TrackName:  "Sentinel",
+		ArtistName: "Artist",
+	}
+	setCachedLyrics(metaC.CacheKey, NoLyricsSentinel, 0, 0, "", false)
+	enrichedC := enrichMetadata(metaC)
+	lyricsC := enrichedC["lyrics"].(map[string]interface{})
+	if lyricsC["cached"] != true {
+		t.Errorf("expected cached=true for sentinel, got %v", lyricsC["cached"])
+	}
+	if lyricsC["noLyrics"] != true {
+		t.Errorf("expected noLyrics=true for sentinel, got %v", lyricsC["noLyrics"])
+	}
+}
+
+func TestEnrichMetadata_NilInput(t *testing.T) {
+	if enrichMetadata(nil) != nil {
+		t.Error("enrichMetadata(nil) should return nil")
+	}
+}
+
+func TestMetadataLookupHandler_ISRC(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	// Populate two metadata entries with the same ISRC (different duration variants)
+	isrc := "USUM72401994"
+	meta1 := &SongMetadata{
+		CacheKey:      "ttml_lyrics:song artist [240s]",
+		TrackName:     "Song",
+		ArtistName:    "Artist",
+		ISRC:          isrc,
+		RawAttributes: `{"name":"Song","artistName":"Artist","genreNames":["Pop"]}`,
+	}
+	meta2 := &SongMetadata{
+		CacheKey:   "ttml_lyrics:song artist [241s]",
+		TrackName:  "Song",
+		ArtistName: "Artist",
+		ISRC:       isrc,
+	}
+	setSongMetadata(meta1)
+	setSongMetadata(meta2)
+	setCachedLyrics(meta1.CacheKey, "<tt>real lyrics</tt>", 240000, 0.9, "en", false)
+
+	// Call the handler directly
+	req := httptest.NewRequest(http.MethodGet, "/metadata?isrc="+isrc, nil)
+	rec := httptest.NewRecorder()
+	metadataLookupHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		ISRC    string                   `json:"isrc"`
+		Results []map[string]interface{} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v — body: %s", err, rec.Body.String())
+	}
+	if resp.ISRC != isrc {
+		t.Errorf("expected isrc %q, got %q", isrc, resp.ISRC)
+	}
+	if len(resp.Results) != 2 {
+		t.Fatalf("expected 2 results for ISRC, got %d", len(resp.Results))
+	}
+
+	// Find the entry with parsed RawAttributes and verify enrichment
+	var withAttrs map[string]interface{}
+	for _, r := range resp.Results {
+		if r["cacheKey"] == meta1.CacheKey {
+			withAttrs = r
+			break
+		}
+	}
+	if withAttrs == nil {
+		t.Fatal("did not find meta1 in results")
+	}
+	if attrs, ok := withAttrs["rawAttributes"].(map[string]interface{}); !ok {
+		t.Errorf("rawAttributes should be a parsed object, got %T", withAttrs["rawAttributes"])
+	} else if attrs["name"] != "Song" {
+		t.Errorf("rawAttributes.name = %v, want Song", attrs["name"])
+	}
+	lyrics, _ := withAttrs["lyrics"].(map[string]interface{})
+	if lyrics["cached"] != true {
+		t.Errorf("expected meta1 lyrics.cached=true, got %v", lyrics["cached"])
+	}
+}
+
+func TestMetadataLookupHandler_ISRCNotFound(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/metadata?isrc=DOES_NOT_EXIST", nil)
+	rec := httptest.NewRecorder()
+	metadataLookupHandler(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown ISRC, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMetadataLookupHandler_BadRequestMentionsISRC(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/metadata", nil)
+	rec := httptest.NewRecorder()
+	metadataLookupHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	// Error message should now reference isrc as an option
+	var body map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errMsg, _ := body["error"].(string)
+	if errMsg == "" || !containsAll(errMsg, []string{"isrc"}) {
+		t.Errorf("error message should mention isrc, got %q", errMsg)
+	}
+}
+
+func containsAll(s string, substrs []string) bool {
+	for _, sub := range substrs {
+		found := false
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

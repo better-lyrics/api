@@ -1472,8 +1472,58 @@ func videoMapImportHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// enrichMetadata expands a SongMetadata into a richer response object:
+//   - Parses RawAttributes JSON string into a structured "rawAttributes" object (falls back to raw string on parse failure)
+//   - Adds a "lyrics" sub-object describing whether lyrics are actually cached for this entry
+func enrichMetadata(meta *SongMetadata) map[string]interface{} {
+	if meta == nil {
+		return nil
+	}
+
+	// Marshal-then-unmarshal to get a flat map of all SongMetadata fields (preserves json tags)
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		// Fail open: construct a minimal map so callers still get something useful
+		return map[string]interface{}{"cacheKey": meta.CacheKey}
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return map[string]interface{}{"cacheKey": meta.CacheKey}
+	}
+
+	// Parse RawAttributes JSON string into a structured object when possible
+	if meta.RawAttributes != "" {
+		var attrs map[string]interface{}
+		if err := json.Unmarshal([]byte(meta.RawAttributes), &attrs); err == nil {
+			out["rawAttributes"] = attrs
+		}
+		// On parse failure, leave the raw string as-is (never drop data)
+	}
+
+	// Attach lyrics-cache status
+	lyricsInfo := map[string]interface{}{"cached": false}
+	if cached, ok := getCachedLyrics(meta.CacheKey); ok {
+		if cached.TTML == NoLyricsSentinel {
+			lyricsInfo["cached"] = true
+			lyricsInfo["noLyrics"] = true
+		} else {
+			lyricsInfo["cached"] = true
+			lyricsInfo["noLyrics"] = false
+			lyricsInfo["ttmlBytes"] = len(cached.TTML)
+			lyricsInfo["trackDurationMs"] = cached.TrackDurationMs
+			lyricsInfo["score"] = cached.Score
+			lyricsInfo["language"] = cached.Language
+			lyricsInfo["isRTL"] = cached.IsRTL
+		}
+	}
+	out["lyrics"] = lyricsInfo
+
+	return out
+}
+
 // metadataLookupHandler returns stored metadata for a song.
-// Supports lookup by song+artist (builds cache key) or by videoId (reverse index).
+// Supports lookup by videoId (reverse index), ISRC (reverse index), or song+artist (builds cache key).
+// Each result is enriched with parsed Apple Music attributes and lyrics-cache status.
 // Protected by CACHE_ACCESS_TOKEN.
 func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
 	if conf.Configuration.CacheAccessToken != "" {
@@ -1485,6 +1535,7 @@ func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	videoID := r.URL.Query().Get("videoId")
+	isrc := r.URL.Query().Get("isrc")
 	songName := r.URL.Query().Get("s") + r.URL.Query().Get("song")
 	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist")
 	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album")
@@ -1499,10 +1550,10 @@ func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		var results []*SongMetadata
+		results := make([]map[string]interface{}, 0, len(cacheKeys))
 		for _, ck := range cacheKeys {
 			if meta, ok := getSongMetadata(ck); ok {
-				results = append(results, meta)
+				results = append(results, enrichMetadata(meta))
 			}
 		}
 		Respond(w, r).JSON(map[string]interface{}{
@@ -1512,10 +1563,32 @@ func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Lookup by ISRC
+	if isrc != "" {
+		cacheKeys := getIndex("isrc:" + isrc)
+		if len(cacheKeys) == 0 {
+			Respond(w, r).Error(http.StatusNotFound, map[string]interface{}{
+				"error": "no metadata found for isrc: " + isrc,
+			})
+			return
+		}
+		results := make([]map[string]interface{}, 0, len(cacheKeys))
+		for _, ck := range cacheKeys {
+			if meta, ok := getSongMetadata(ck); ok {
+				results = append(results, enrichMetadata(meta))
+			}
+		}
+		Respond(w, r).JSON(map[string]interface{}{
+			"isrc":    isrc,
+			"results": results,
+		})
+		return
+	}
+
 	// Lookup by song+artist
 	if songName == "" && artistName == "" {
 		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
-			"error": "provide song+artist (s, a) or videoId",
+			"error": "provide song+artist (s, a), videoId, or isrc",
 		})
 		return
 	}
@@ -1534,10 +1607,10 @@ func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		allVids := getAllVideoIDsForSong(songName, artistName)
-		var results []*SongMetadata
+		results := make([]map[string]interface{}, 0, len(cacheKeys))
 		for _, ck := range cacheKeys {
 			if m, ok := getSongMetadata(ck); ok {
-				results = append(results, m)
+				results = append(results, enrichMetadata(m))
 			}
 		}
 		Respond(w, r).JSON(map[string]interface{}{
@@ -1551,6 +1624,6 @@ func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
 
 	Respond(w, r).JSON(map[string]interface{}{
 		"cacheKey": cacheKey,
-		"metadata": meta,
+		"metadata": enrichMetadata(meta),
 	})
 }
