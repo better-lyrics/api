@@ -485,40 +485,22 @@ func getStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(snapshot)
 }
 
+// getCacheDump returns HTTP 410 Gone. The endpoint previously returned the full
+// cache contents as a single JSON response, which caused OOM crashes on large
+// databases. Callers should use the alternatives listed in the response body.
 func getCacheDump(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	cacheDump := CacheDump{}
-	persistentCache.Range(func(key string, entry cache.CacheEntry) bool {
-		if key == "accessToken" {
-			return true
-		}
-		cacheDump[key] = entry
-		return true
-	})
-
-	numKeys, sizeInKB := persistentCache.Stats()
-	s := stats.Get()
-
-	cacheDumpResponse := CacheDumpResponse{
-		NumberOfKeys: numKeys,
-		SizeInKB:     sizeInKB,
-		SizeInMB:     float64(sizeInKB) / 1024,
-		Performance: CachePerformance{
-			Hits:         s.CacheHits.Load(),
-			Misses:       s.CacheMisses.Load(),
-			NegativeHits: s.NegativeCacheHits.Load(),
-			StaleHits:    s.StaleCacheHits.Load(),
-			HitRate:      s.CacheHitRate(),
+	Respond(w, r).Error(http.StatusGone, map[string]interface{}{
+		"error":   "Endpoint removed",
+		"message": "/cache has been removed. Use the alternatives below.",
+		"alternatives": map[string]string{
+			"/stats":                    "Request, cache, and performance statistics",
+			"/cache/keys":               "List cache keys (paginated)",
+			"/cache/debug?key=...":      "Inspect a specific cache entry",
+			"/cache/lookup?s=...&a=...": "Check if a song is cached",
+			"/cache/backup":             "Create a timestamped backup file",
+			"/cache/dump":               "Stream the raw BoltDB file as a download",
 		},
-		Cache: cacheDump,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(cacheDumpResponse)
+	})
 }
 
 func backupCache(w http.ResponseWriter, r *http.Request) {

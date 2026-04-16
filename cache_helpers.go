@@ -397,9 +397,9 @@ func cacheHelp(w http.ResponseWriter, r *http.Request) {
 			{
 				"path":        "/cache",
 				"method":      "GET",
-				"auth":        "Authorization header required",
-				"description": "Get full cache dump with statistics",
-				"response":    "Cache contents, key count, size in KB/MB, hit rate",
+				"auth":        "None",
+				"description": "REMOVED — returns HTTP 410 Gone. Use /stats for statistics or /cache/dump for the raw database file.",
+				"response":    "410 Gone with alternative endpoints",
 			},
 			{
 				"path":        "/cache/help",
