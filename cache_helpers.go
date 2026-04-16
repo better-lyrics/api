@@ -202,6 +202,47 @@ func setCachedLyrics(key, lyrics string, trackDurationMs int, score float64, lan
 
 // Negative cache operations
 
+// getNegativeCacheTTLSeconds returns the appropriate TTL in seconds for a negative cache entry.
+// Uses graduated shorter TTLs for recently released songs when hasTimeSyncedLyrics was known
+// (re-checks are cheap: search only, no lyrics fetch needed).
+// Falls back to the default TTL when hasTimeSyncedLyrics was absent from the API response.
+func getNegativeCacheTTLSeconds(entry NegativeCacheEntry) int64 {
+	defaultTTL := int64(conf.Configuration.NegativeCacheTTLInDays * 24 * 60 * 60)
+
+	// Only use graduated TTL when hasTimeSyncedLyrics was present in the API response
+	if !entry.HasTimeSyncedLyricsKnown {
+		return defaultTTL
+	}
+
+	if entry.ReleaseDate == "" {
+		return defaultTTL
+	}
+
+	rd, err := time.Parse("2006-01-02", entry.ReleaseDate)
+	if err != nil {
+		return defaultTTL
+	}
+
+	daysSinceRelease := int(time.Since(rd).Hours() / 24)
+	threshold := conf.Configuration.NewSongThresholdDays
+
+	if daysSinceRelease >= threshold {
+		return defaultTTL
+	}
+
+	// Graduated TTL for new songs (re-checks are cheap with hasTimeSyncedLyrics skip)
+	switch {
+	case daysSinceRelease <= 3:
+		return 6 * 60 * 60 // 6 hours
+	case daysSinceRelease <= 7:
+		return 12 * 60 * 60 // 12 hours
+	case daysSinceRelease <= 14:
+		return 24 * 60 * 60 // 1 day
+	default:
+		return 3 * 24 * 60 * 60 // 3 days
+	}
+}
+
 // getNegativeCache checks if a request is in the negative cache (no lyrics available)
 // Returns the reason and true if found and not expired, empty string and false otherwise
 func getNegativeCache(key string) (string, bool) {
@@ -216,9 +257,9 @@ func getNegativeCache(key string) (string, bool) {
 		return "", false
 	}
 
-	// Check if entry has expired
-	ttlDays := conf.Configuration.NegativeCacheTTLInDays
-	expirationTime := entry.Timestamp + int64(ttlDays*24*60*60)
+	// Check if entry has expired using graduated TTL
+	ttlSeconds := getNegativeCacheTTLSeconds(entry)
+	expirationTime := entry.Timestamp + ttlSeconds
 	if time.Now().Unix() > expirationTime {
 		// Expired - delete and return not found
 		ageDays := (time.Now().Unix() - entry.Timestamp) / (24 * 60 * 60)
@@ -231,11 +272,13 @@ func getNegativeCache(key string) (string, bool) {
 }
 
 // setNegativeCache stores a failed lookup in the negative cache
-func setNegativeCache(key, reason string) {
+func setNegativeCache(key, reason, releaseDate string, hasTimeSyncedLyricsKnown bool) {
 	negativeKey := "no_lyrics:" + key
 	entry := NegativeCacheEntry{
-		Reason:    reason,
-		Timestamp: time.Now().Unix(),
+		Reason:                   reason,
+		Timestamp:                time.Now().Unix(),
+		ReleaseDate:              releaseDate,
+		HasTimeSyncedLyricsKnown: hasTimeSyncedLyricsKnown,
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {

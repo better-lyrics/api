@@ -1,6 +1,7 @@
 package ttml
 
 import (
+	"encoding/json"
 	"fmt"
 	"lyrics-api-go/logcolors"
 
@@ -124,24 +125,44 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 			logcolors.LogMatch, track.Attributes.Name, track.Attributes.ArtistName, track.ID, trackDurationMs, score)
 	}
 
+	// Build TrackMeta early so it's available even on lyrics-fetch errors
+	rawAttrsJSON, _ := json.Marshal(track.Attributes)
+	trackMeta := &TrackMeta{
+		TrackID:             track.ID,
+		Name:                track.Attributes.Name,
+		ArtistName:          track.Attributes.ArtistName,
+		AlbumName:           track.Attributes.AlbumName,
+		ISRC:                track.Attributes.ISRC,
+		ReleaseDate:         track.Attributes.ReleaseDate,
+		HasTimeSyncedLyrics: track.Attributes.HasTimeSyncedLyrics,
+		RawAttributes:       string(rawAttrsJSON),
+	}
+
+	// Check hasTimeSyncedLyrics to potentially skip the lyrics fetch
+	if track.Attributes.HasTimeSyncedLyrics == nil {
+		// Field absent from API response — log warning and fall through to normal fetch
+		log.Warnf("%s hasTimeSyncedLyrics field missing from search response for %s - %s, falling back to lyrics fetch",
+			logcolors.LogWarning, track.Attributes.Name, track.Attributes.ArtistName)
+	} else if !*track.Attributes.HasTimeSyncedLyrics {
+		// Explicitly false — skip lyrics fetch entirely (saves an API call)
+		log.Infof("%s Skipping lyrics fetch: hasTimeSyncedLyrics=false for %s - %s",
+			logcolors.LogLyrics, track.Attributes.Name, track.Attributes.ArtistName)
+		return "", trackDurationMs, score, trackMeta, fmt.Errorf("no lyrics data found (hasTimeSyncedLyrics=false)")
+	}
+
 	// Use the same account that succeeded for search to fetch lyrics
 	// This ensures we don't hit a quarantined account
 	ttml, err := fetchLyricsTTML(track.ID, storefront, workingAccount)
 	if err != nil {
-		return "", 0, 0.0, nil, fmt.Errorf("failed to fetch TTML: %v", err)
+		return "", trackDurationMs, score, trackMeta, fmt.Errorf("failed to fetch TTML: %v", err)
 	}
 
 	if ttml == "" {
-		return "", 0, 0.0, nil, fmt.Errorf("TTML content is empty")
+		return "", trackDurationMs, score, trackMeta, fmt.Errorf("TTML content is empty")
 	}
 
 	log.Infof("%s Fetched TTML via %s for: %s - %s (%d bytes)",
 		logcolors.LogSuccess, logcolors.Account(workingAccount.NameID), track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
 
-	return ttml, trackDurationMs, score, &TrackMeta{
-		Name:       track.Attributes.Name,
-		ArtistName: track.Attributes.ArtistName,
-		AlbumName:  track.Attributes.AlbumName,
-		ISRC:       track.Attributes.ISRC,
-	}, nil
+	return ttml, trackDurationMs, score, trackMeta, nil
 }

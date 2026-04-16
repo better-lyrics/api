@@ -25,3 +25,10 @@ func detectLanguageFromTTML(ttml string) string {
 
 // IsRTLLanguage is an alias for the shared providers.IsRTLLanguage function
 var IsRTLLanguage = providers.IsRTLLanguage
+
+// DetectLanguage extracts the xml:lang attribute from a TTML document and reports
+// whether that language is right-to-left. Falls back to ("en", false) when absent.
+func DetectLanguage(ttml string) (language string, isRTL bool) {
+	lang := detectLanguageFromTTML(ttml)
+	return lang, providers.IsRTLLanguage(lang)
+}

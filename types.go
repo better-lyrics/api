@@ -39,8 +39,34 @@ type CachedLyrics struct {
 
 // NegativeCacheEntry stores info about failed lyrics lookups
 type NegativeCacheEntry struct {
-	Reason    string `json:"reason"`
-	Timestamp int64  `json:"timestamp"`
+	Reason                   string `json:"reason"`
+	Timestamp                int64  `json:"timestamp"`
+	ReleaseDate              string `json:"releaseDate,omitempty"`              // Track release date if known (ISO 8601)
+	HasTimeSyncedLyricsKnown bool   `json:"hasTimeSyncedLyricsKnown,omitempty"` // true if hasTimeSyncedLyrics was present in API response
+}
+
+// SongMetadata stores rich metadata about a song for future querying and proxy revalidation
+type SongMetadata struct {
+	CacheKey string `json:"cacheKey"`
+
+	// External identifiers
+	VideoIDs     []string `json:"videoIds,omitempty"`
+	AppleTrackID string   `json:"appleTrackId,omitempty"`
+	ISRC         string   `json:"isrc,omitempty"`
+
+	// Key parsed fields (indexed for lookups)
+	TrackName   string `json:"trackName"`
+	ArtistName  string `json:"artistName"`
+	AlbumName   string `json:"albumName,omitempty"`
+	DurationMs  int    `json:"durationMs,omitempty"`
+	ReleaseDate string `json:"releaseDate,omitempty"`
+
+	// Raw Apple Music attributes JSON for future querying
+	RawAttributes string `json:"rawAttributes,omitempty"`
+
+	// Timestamps
+	FirstSeen   int64 `json:"firstSeen"`
+	LastUpdated int64 `json:"lastUpdated"`
 }
 
 // MigrationJobStatus represents the status of an async migration job

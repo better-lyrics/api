@@ -10,6 +10,7 @@ import (
 	"lyrics-api-go/services/bini"
 	"lyrics-api-go/services/notifier"
 	"lyrics-api-go/services/providers"
+	"lyrics-api-go/services/proxy"
 	"lyrics-api-go/stats"
 	"net/http"
 	"strconv"
@@ -31,6 +32,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist") + r.URL.Query().Get("artistName")
 	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album") + r.URL.Query().Get("albumName")
 	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
+	videoID := r.URL.Query().Get("videoId") + r.URL.Query().Get("v")
 
 	if songName == "" && artistName == "" {
 		http.Error(w, "Song name or artist name not provided", http.StatusUnprocessableEntity)
@@ -67,6 +69,10 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 			log.Infof("%s Found cached TTML via fuzzy duration match: %s", logcolors.LogCacheLyrics, foundKey)
 		} else {
 			log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
+		}
+		// Associate videoId on cache hits too
+		if videoID != "" {
+			go addVideoID(foundKey, videoID)
 		}
 		Respond(w, r).SetCacheStatus("HIT").JSON(map[string]interface{}{
 			"ttml": cached.TTML,
@@ -190,7 +196,13 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		// Cache permanent "no lyrics" errors to avoid repeated API calls
 		isPermanentError := shouldNegativeCache(err)
 		if isPermanentError {
-			setNegativeCache(cacheKey, err.Error())
+			releaseDate := ""
+			hasTimeSyncedLyricsKnown := false
+			if trackMeta != nil {
+				releaseDate = trackMeta.ReleaseDate
+				hasTimeSyncedLyricsKnown = trackMeta.HasTimeSyncedLyrics != nil
+			}
+			setNegativeCache(cacheKey, err.Error(), releaseDate, hasTimeSyncedLyricsKnown)
 		}
 
 		// No fallback found (or skipped due to duration), return the error
@@ -212,7 +224,13 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		stats.Get().RecordCacheMiss()
 		log.Warnf("No TTML found for: %s", query)
 		// Cache this negative result to avoid repeated API calls
-		setNegativeCache(cacheKey, "Lyrics not available for this track")
+		releaseDate := ""
+		hasTimeSyncedLyricsKnown := false
+		if trackMeta != nil {
+			releaseDate = trackMeta.ReleaseDate
+			hasTimeSyncedLyricsKnown = trackMeta.HasTimeSyncedLyrics != nil
+		}
+		setNegativeCache(cacheKey, "Lyrics not available for this track", releaseDate, hasTimeSyncedLyricsKnown)
 		Respond(w, r).SetCacheStatus("MISS").Error(http.StatusNotFound, map[string]interface{}{
 			"error": "Lyrics not available for this track",
 		})
@@ -221,9 +239,35 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 
 	stats.Get().RecordCacheMiss()
 	log.Infof("%s Caching TTML for: %s (trackDuration: %dms)", logcolors.LogCacheLyrics, query, trackDurationMs)
-	setCachedLyrics(cacheKey, ttmlString, trackDurationMs, score, "", false)
+	language, isRTL := ttml.DetectLanguage(ttmlString)
+	setCachedLyrics(cacheKey, ttmlString, trackDurationMs, score, language, isRTL)
 
 	go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
+
+	// Store metadata and videoId first, then trigger proxy revalidation (which queries metadata).
+	// All writes happen in the same goroutine before revalidation to avoid race conditions.
+	if trackMeta != nil {
+		go func() {
+			meta := &SongMetadata{
+				CacheKey:      cacheKey,
+				AppleTrackID:  trackMeta.TrackID,
+				ISRC:          trackMeta.ISRC,
+				TrackName:     trackMeta.Name,
+				ArtistName:    trackMeta.ArtistName,
+				AlbumName:     trackMeta.AlbumName,
+				DurationMs:    trackDurationMs,
+				ReleaseDate:   trackMeta.ReleaseDate,
+				RawAttributes: trackMeta.RawAttributes,
+			}
+			if videoID != "" {
+				meta.VideoIDs = []string{videoID}
+			}
+			setSongMetadata(meta)
+			proxy.RevalidateAllForSong(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs/1000, getAllVideoIDsForSong)
+		}()
+	} else if videoID != "" {
+		go addVideoID(cacheKey, videoID)
+	}
 
 	Respond(w, r).SetCacheStatus("MISS").JSON(map[string]interface{}{
 		"ttml":  ttmlString,
@@ -397,7 +441,7 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 			// Cache negative result
 			isPermanentError := shouldNegativeCache(err)
 			if isPermanentError {
-				setNegativeCache(cacheKey, err.Error())
+				setNegativeCache(cacheKey, err.Error(), "", false)
 			}
 
 			stats.Get().RecordCacheMiss()
@@ -419,7 +463,7 @@ func getLyricsWithProvider(providerName string) http.HandlerFunc {
 		if result == nil || result.RawLyrics == "" {
 			stats.Get().RecordCacheMiss()
 			log.Warnf("[%s] No lyrics found for: %s", providerName, query)
-			setNegativeCache(cacheKey, "Lyrics not available")
+			setNegativeCache(cacheKey, "Lyrics not available", "", false)
 			Respond(w, r).SetProvider(providerName).SetCacheStatus("MISS").Error(http.StatusNotFound, map[string]interface{}{
 				"error":    "Lyrics not available for this track",
 				"provider": providerName,
@@ -1162,7 +1206,8 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 			durationMs = durationMs * 1000
 		}
 
-		setCachedLyrics(cacheKey, ttmlString, durationMs, 0, "", false)
+		language, isRTL := ttml.DetectLanguage(ttmlString)
+		setCachedLyrics(cacheKey, ttmlString, durationMs, 0, language, isRTL)
 		updatedKeys = append(updatedKeys, cacheKey)
 		created = true
 		log.Infof("%s Created new cache entry %s with lyrics from track ID %s", logcolors.LogOverride, cacheKey, trackID)
@@ -1208,6 +1253,7 @@ func helpHandler(w http.ResponseWriter, r *http.Request) {
 			"a, artist, artistName": "Artist name (required)",
 			"al, album, albumName":  "Album name (optional, improves matching)",
 			"d, duration":           "Duration in seconds (optional, improves matching)",
+			"videoId, v":            "YouTube video ID (optional, associates video with song for proxy revalidation)",
 		},
 		"example": "/getLyrics?s=Shape%20of%20You&a=Ed%20Sheeran",
 		"notes":   "The API uses provider-specific matching algorithms. Providing more parameters improves accuracy.",
@@ -1325,8 +1371,23 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 			deleteNegativeCache(usedKey)
 		}
 		// Update cache with fresh content
-		setCachedLyrics(usedKey, ttmlString, trackDurationMs, score, "", false)
+		language, isRTL := ttml.DetectLanguage(ttmlString)
+		setCachedLyrics(usedKey, ttmlString, trackDurationMs, score, language, isRTL)
 		go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
+		go func() {
+			// Update metadata before proxy revalidation (which queries metadata for videoIds)
+			setSongMetadata(&SongMetadata{
+				CacheKey:     usedKey,
+				AppleTrackID: trackMeta.TrackID,
+				ISRC:         trackMeta.ISRC,
+				TrackName:    trackMeta.Name,
+				ArtistName:   trackMeta.ArtistName,
+				AlbumName:    trackMeta.AlbumName,
+				DurationMs:   trackDurationMs,
+				ReleaseDate:  trackMeta.ReleaseDate,
+			})
+			proxy.RevalidateAllForSong(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs/1000, getAllVideoIDsForSong)
+		}()
 		log.Infof("%s Content changed, cache updated for: %s", logcolors.LogRevalidate, usedKey)
 	} else {
 		log.Infof("%s Content unchanged for: %s", logcolors.LogRevalidate, usedKey)
@@ -1337,5 +1398,217 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		"updated":          updated,
 		"cacheKey":         usedKey,
 		"wasNegativeCache": wasInNegativeCache,
+	})
+}
+
+// videoMapImportHandler handles bulk import of videoId-to-song mappings.
+// Protected by CACHE_ACCESS_TOKEN.
+func videoMapImportHandler(w http.ResponseWriter, r *http.Request) {
+	// Require auth
+	if conf.Configuration.CacheAccessToken != "" {
+		token := r.Header.Get("Authorization")
+		if token != conf.Configuration.CacheAccessToken {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	// Cap request body size (10MB max)
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
+	type videoMapEntry struct {
+		VideoID  string `json:"videoId"`
+		Song     string `json:"song"`
+		Artist   string `json:"artist"`
+		Album    string `json:"album,omitempty"`
+		Duration string `json:"duration,omitempty"`
+	}
+
+	var entries []videoMapEntry
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&entries); err != nil {
+		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+			"error": "Invalid JSON body: " + err.Error(),
+		})
+		return
+	}
+
+	const maxVideoMapEntries = 10_000
+	if len(entries) > maxVideoMapEntries {
+		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+			"error": fmt.Sprintf("too many entries: %d (max %d)", len(entries), maxVideoMapEntries),
+		})
+		return
+	}
+
+	processed := 0
+	for _, entry := range entries {
+		if entry.VideoID == "" || (entry.Song == "" && entry.Artist == "") {
+			continue
+		}
+		cacheKey := buildNormalizedCacheKey(entry.Song, entry.Artist, entry.Album, entry.Duration)
+		addVideoID(cacheKey, entry.VideoID)
+		processed++
+	}
+
+	Respond(w, r).JSON(map[string]interface{}{
+		"processed": processed,
+		"total":     len(entries),
+	})
+}
+
+// enrichMetadata expands a SongMetadata into a richer response object:
+//   - Parses RawAttributes JSON string into a structured "rawAttributes" object (falls back to raw string on parse failure)
+//   - Adds a "lyrics" sub-object describing whether lyrics are actually cached for this entry
+func enrichMetadata(meta *SongMetadata) map[string]interface{} {
+	if meta == nil {
+		return nil
+	}
+
+	// Marshal-then-unmarshal to get a flat map of all SongMetadata fields (preserves json tags)
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		// Fail open: construct a minimal map so callers still get something useful
+		return map[string]interface{}{"cacheKey": meta.CacheKey}
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return map[string]interface{}{"cacheKey": meta.CacheKey}
+	}
+
+	// Parse RawAttributes JSON string into a structured object when possible
+	if meta.RawAttributes != "" {
+		var attrs map[string]interface{}
+		if err := json.Unmarshal([]byte(meta.RawAttributes), &attrs); err == nil {
+			out["rawAttributes"] = attrs
+		}
+		// On parse failure, leave the raw string as-is (never drop data)
+	}
+
+	// Attach lyrics-cache status
+	lyricsInfo := map[string]interface{}{"cached": false}
+	if cached, ok := getCachedLyrics(meta.CacheKey); ok {
+		if cached.TTML == NoLyricsSentinel {
+			lyricsInfo["cached"] = true
+			lyricsInfo["noLyrics"] = true
+		} else {
+			lyricsInfo["cached"] = true
+			lyricsInfo["noLyrics"] = false
+			lyricsInfo["ttmlBytes"] = len(cached.TTML)
+			lyricsInfo["trackDurationMs"] = cached.TrackDurationMs
+			lyricsInfo["score"] = cached.Score
+			lyricsInfo["language"] = cached.Language
+			lyricsInfo["isRTL"] = cached.IsRTL
+		}
+	}
+	out["lyrics"] = lyricsInfo
+
+	return out
+}
+
+// metadataLookupHandler returns stored metadata for a song.
+// Supports lookup by videoId (reverse index), ISRC (reverse index), or song+artist (builds cache key).
+// Each result is enriched with parsed Apple Music attributes and lyrics-cache status.
+// Protected by CACHE_ACCESS_TOKEN.
+func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
+	if conf.Configuration.CacheAccessToken != "" {
+		token := r.Header.Get("Authorization")
+		if token != conf.Configuration.CacheAccessToken {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	videoID := r.URL.Query().Get("videoId")
+	isrc := r.URL.Query().Get("isrc")
+	songName := r.URL.Query().Get("s") + r.URL.Query().Get("song")
+	artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist")
+	albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album")
+	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
+
+	// Lookup by videoId
+	if videoID != "" {
+		cacheKeys := getCacheKeysByVideoID(videoID)
+		if len(cacheKeys) == 0 {
+			Respond(w, r).Error(http.StatusNotFound, map[string]interface{}{
+				"error": "no metadata found for videoId: " + videoID,
+			})
+			return
+		}
+		results := make([]map[string]interface{}, 0, len(cacheKeys))
+		for _, ck := range cacheKeys {
+			if meta, ok := getSongMetadata(ck); ok {
+				results = append(results, enrichMetadata(meta))
+			}
+		}
+		Respond(w, r).JSON(map[string]interface{}{
+			"videoId": videoID,
+			"results": results,
+		})
+		return
+	}
+
+	// Lookup by ISRC
+	if isrc != "" {
+		cacheKeys := getIndex("isrc:" + isrc)
+		if len(cacheKeys) == 0 {
+			Respond(w, r).Error(http.StatusNotFound, map[string]interface{}{
+				"error": "no metadata found for isrc: " + isrc,
+			})
+			return
+		}
+		results := make([]map[string]interface{}, 0, len(cacheKeys))
+		for _, ck := range cacheKeys {
+			if meta, ok := getSongMetadata(ck); ok {
+				results = append(results, enrichMetadata(meta))
+			}
+		}
+		Respond(w, r).JSON(map[string]interface{}{
+			"isrc":    isrc,
+			"results": results,
+		})
+		return
+	}
+
+	// Lookup by song+artist
+	if songName == "" && artistName == "" {
+		Respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+			"error": "provide song+artist (s, a), videoId, or isrc",
+		})
+		return
+	}
+
+	cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
+	meta, ok := getSongMetadata(cacheKey)
+	if !ok {
+		// Try song index for all duration variants
+		songKey := buildSongIndexKey(songName, artistName)
+		cacheKeys := getIndex("song:" + songKey)
+		if len(cacheKeys) == 0 {
+			Respond(w, r).Error(http.StatusNotFound, map[string]interface{}{
+				"error":    "no metadata found",
+				"cacheKey": cacheKey,
+			})
+			return
+		}
+		allVids := getAllVideoIDsForSong(songName, artistName)
+		results := make([]map[string]interface{}, 0, len(cacheKeys))
+		for _, ck := range cacheKeys {
+			if m, ok := getSongMetadata(ck); ok {
+				results = append(results, enrichMetadata(m))
+			}
+		}
+		Respond(w, r).JSON(map[string]interface{}{
+			"cacheKey":     cacheKey,
+			"allVideoIds":  allVids,
+			"allCacheKeys": cacheKeys,
+			"results":      results,
+		})
+		return
+	}
+
+	Respond(w, r).JSON(map[string]interface{}{
+		"cacheKey": cacheKey,
+		"metadata": enrichMetadata(meta),
 	})
 }

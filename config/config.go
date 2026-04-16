@@ -30,6 +30,8 @@ type Config struct {
 		BiniAPIKey                         string `envconfig:"BINI_API_KEY" default:""`
 		BiniAPIURL                         string `envconfig:"BINI_API_URL" default:"https://kansas.lyric-api.binimum.org/"`
 		BiniSecretKey                      string `envconfig:"BINI_SECRET_KEY" default:""`
+		ProxyRevalidateURL                 string `envconfig:"PROXY_REVALIDATE_URL" default:""`
+		ProxyAPIKey                        string `envconfig:"PROXY_API_KEY" default:""`
 
 		// TTML API Configuration
 		// Token source for auto-scraping bearer tokens (web frontend URL)
@@ -45,6 +47,7 @@ type Config struct {
 		MinSimilarityScore         float64 `envconfig:"MIN_SIMILARITY_SCORE" default:"0.6"`
 		DurationMatchDeltaMs       int     `envconfig:"DURATION_MATCH_DELTA_MS" default:"2000"`      // Strict duration filter: reject tracks outside this delta (in ms)
 		NegativeCacheTTLInDays     int     `envconfig:"NEGATIVE_CACHE_TTL_DAYS" default:"7"`         // TTL for caching "no lyrics found" responses
+		NewSongThresholdDays       int     `envconfig:"NEW_SONG_THRESHOLD_DAYS" default:"30"`        // Songs within this window get graduated shorter negative cache TTL
 		CircuitBreakerThreshold    int     `envconfig:"CIRCUIT_BREAKER_THRESHOLD" default:"5"`       // Consecutive failures before circuit opens
 		CircuitBreakerCooldownSecs int     `envconfig:"CIRCUIT_BREAKER_COOLDOWN_SECS" default:"300"` // Seconds to wait before retrying (default: 5 minutes)
 

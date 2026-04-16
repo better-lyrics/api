@@ -147,3 +147,67 @@ func TestIsRTLLanguage(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectLanguage(t *testing.T) {
+	tests := []struct {
+		name         string
+		ttml         string
+		expectedLang string
+		expectedRTL  bool
+	}{
+		{
+			name:         "English TTML is not RTL",
+			ttml:         `<?xml version="1.0" encoding="UTF-8"?><tt xml:lang="en">...</tt>`,
+			expectedLang: "en",
+			expectedRTL:  false,
+		},
+		{
+			name:         "Spanish TTML is not RTL",
+			ttml:         `<?xml version="1.0" encoding="UTF-8"?><tt xml:lang="es">...</tt>`,
+			expectedLang: "es",
+			expectedRTL:  false,
+		},
+		{
+			name:         "Arabic TTML is RTL",
+			ttml:         `<?xml version="1.0" encoding="UTF-8"?><tt xml:lang="ar">...</tt>`,
+			expectedLang: "ar",
+			expectedRTL:  true,
+		},
+		{
+			name:         "Hebrew TTML is RTL",
+			ttml:         `<?xml version="1.0" encoding="UTF-8"?><tt xml:lang="he">...</tt>`,
+			expectedLang: "he",
+			expectedRTL:  true,
+		},
+		{
+			name:         "Locale-qualified English (en-US) is not RTL",
+			ttml:         `<?xml version="1.0" encoding="UTF-8"?><tt xml:lang="en-US">...</tt>`,
+			expectedLang: "en-US",
+			expectedRTL:  false,
+		},
+		{
+			name:         "Missing xml:lang defaults to en, not RTL",
+			ttml:         `<?xml version="1.0" encoding="UTF-8"?><tt>...</tt>`,
+			expectedLang: "en",
+			expectedRTL:  false,
+		},
+		{
+			name:         "Empty input defaults to en, not RTL",
+			ttml:         "",
+			expectedLang: "en",
+			expectedRTL:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lang, isRTL := DetectLanguage(tt.ttml)
+			if lang != tt.expectedLang {
+				t.Errorf("language = %q, want %q", lang, tt.expectedLang)
+			}
+			if isRTL != tt.expectedRTL {
+				t.Errorf("isRTL = %v, want %v", isRTL, tt.expectedRTL)
+			}
+		})
+	}
+}
