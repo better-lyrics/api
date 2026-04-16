@@ -19,7 +19,14 @@ func setupTestMetadata(t *testing.T) func() {
 		t.Fatalf("Failed to create test cache: %v", err)
 	}
 	initMetadataBuckets()
+
+	// Neutralize auth config for tests. A non-empty CACHE_ACCESS_TOKEN loaded
+	// from the project's real .env would otherwise make every handler test 401.
+	origToken := conf.Configuration.CacheAccessToken
+	conf.Configuration.CacheAccessToken = ""
+
 	return func() {
+		conf.Configuration.CacheAccessToken = origToken
 		persistentCache.Close()
 		os.Remove(tmpFile)
 	}
@@ -36,7 +43,7 @@ func TestGetNegativeCacheTTLSeconds(t *testing.T) {
 			entry: NegativeCacheEntry{
 				Reason:                   "no lyrics data found",
 				Timestamp:                time.Now().Unix(),
-				ReleaseDate:              time.Now().Format("2006-01-02"),
+				ReleaseDate:              time.Now().UTC().Format("2006-01-02"),
 				HasTimeSyncedLyricsKnown: false,
 			},
 			expected: int64(conf.Configuration.NegativeCacheTTLInDays * 24 * 60 * 60),
@@ -56,7 +63,7 @@ func TestGetNegativeCacheTTLSeconds(t *testing.T) {
 			entry: NegativeCacheEntry{
 				Reason:                   "no lyrics data found",
 				Timestamp:                time.Now().Unix(),
-				ReleaseDate:              time.Now().Format("2006-01-02"),
+				ReleaseDate:              time.Now().UTC().Format("2006-01-02"),
 				HasTimeSyncedLyricsKnown: true,
 			},
 			expected: 6 * 60 * 60,
@@ -66,7 +73,7 @@ func TestGetNegativeCacheTTLSeconds(t *testing.T) {
 			entry: NegativeCacheEntry{
 				Reason:                   "no lyrics data found",
 				Timestamp:                time.Now().Unix(),
-				ReleaseDate:              time.Now().AddDate(0, 0, -2).Format("2006-01-02"),
+				ReleaseDate:              time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02"),
 				HasTimeSyncedLyricsKnown: true,
 			},
 			expected: 6 * 60 * 60,
@@ -76,7 +83,7 @@ func TestGetNegativeCacheTTLSeconds(t *testing.T) {
 			entry: NegativeCacheEntry{
 				Reason:                   "no lyrics data found",
 				Timestamp:                time.Now().Unix(),
-				ReleaseDate:              time.Now().AddDate(0, 0, -5).Format("2006-01-02"),
+				ReleaseDate:              time.Now().UTC().AddDate(0, 0, -5).Format("2006-01-02"),
 				HasTimeSyncedLyricsKnown: true,
 			},
 			expected: 12 * 60 * 60,
@@ -86,7 +93,7 @@ func TestGetNegativeCacheTTLSeconds(t *testing.T) {
 			entry: NegativeCacheEntry{
 				Reason:                   "no lyrics data found",
 				Timestamp:                time.Now().Unix(),
-				ReleaseDate:              time.Now().AddDate(0, 0, -10).Format("2006-01-02"),
+				ReleaseDate:              time.Now().UTC().AddDate(0, 0, -10).Format("2006-01-02"),
 				HasTimeSyncedLyricsKnown: true,
 			},
 			expected: 24 * 60 * 60,
@@ -96,7 +103,7 @@ func TestGetNegativeCacheTTLSeconds(t *testing.T) {
 			entry: NegativeCacheEntry{
 				Reason:                   "no lyrics data found",
 				Timestamp:                time.Now().Unix(),
-				ReleaseDate:              time.Now().AddDate(0, 0, -20).Format("2006-01-02"),
+				ReleaseDate:              time.Now().UTC().AddDate(0, 0, -20).Format("2006-01-02"),
 				HasTimeSyncedLyricsKnown: true,
 			},
 			expected: 3 * 24 * 60 * 60,
@@ -106,7 +113,7 @@ func TestGetNegativeCacheTTLSeconds(t *testing.T) {
 			entry: NegativeCacheEntry{
 				Reason:                   "no lyrics data found",
 				Timestamp:                time.Now().Unix(),
-				ReleaseDate:              time.Now().AddDate(0, 0, -60).Format("2006-01-02"),
+				ReleaseDate:              time.Now().UTC().AddDate(0, 0, -60).Format("2006-01-02"),
 				HasTimeSyncedLyricsKnown: true,
 			},
 			expected: int64(conf.Configuration.NegativeCacheTTLInDays * 24 * 60 * 60),
@@ -331,7 +338,7 @@ func TestGetNegativeCacheTTLBoundaryDays(t *testing.T) {
 			entry := NegativeCacheEntry{
 				Reason:                   "no lyrics data found",
 				Timestamp:                time.Now().Unix(),
-				ReleaseDate:              time.Now().AddDate(0, 0, -tt.daysAgo).Format("2006-01-02"),
+				ReleaseDate:              time.Now().UTC().AddDate(0, 0, -tt.daysAgo).Format("2006-01-02"),
 				HasTimeSyncedLyricsKnown: true,
 			}
 			got := getNegativeCacheTTLSeconds(entry)
@@ -587,6 +594,207 @@ func TestMetadataLookupHandler_BadRequestMentionsISRC(t *testing.T) {
 	errMsg, _ := body["error"].(string)
 	if errMsg == "" || !containsAll(errMsg, []string{"isrc"}) {
 		t.Errorf("error message should mention isrc, got %q", errMsg)
+	}
+}
+
+func TestMetadataStatsHandler_Empty(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	origToken := conf.Configuration.CacheAccessToken
+	conf.Configuration.CacheAccessToken = "test-token"
+	defer func() { conf.Configuration.CacheAccessToken = origToken }()
+
+	req := httptest.NewRequest(http.MethodGet, "/metadata/stats", nil)
+	req.Header.Set("Authorization", "test-token")
+	rec := httptest.NewRecorder()
+	metadataStatsHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Metadata map[string]interface{} `json:"metadata"`
+		Indexes  map[string]interface{} `json:"indexes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Metadata["totalEntries"].(float64) != 0 {
+		t.Errorf("expected 0 metadata entries, got %v", resp.Metadata["totalEntries"])
+	}
+	if resp.Indexes["totalEntries"].(float64) != 0 {
+		t.Errorf("expected 0 index entries, got %v", resp.Indexes["totalEntries"])
+	}
+}
+
+func TestMetadataStatsHandler_WithEntries(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	origToken := conf.Configuration.CacheAccessToken
+	conf.Configuration.CacheAccessToken = "test-token"
+	defer func() { conf.Configuration.CacheAccessToken = origToken }()
+
+	setSongMetadata(&SongMetadata{
+		CacheKey:      "ttml_lyrics:rich song artist",
+		TrackName:     "Rich",
+		ArtistName:    "Artist",
+		ISRC:          "US1234567890",
+		VideoIDs:      []string{"vidA"},
+		RawAttributes: `{"name":"Rich","artwork":{"url":"x"}}`,
+	})
+	setSongMetadata(&SongMetadata{
+		CacheKey:   "ttml_lyrics:thin song artist",
+		TrackName:  "Thin",
+		ArtistName: "Artist",
+		VideoIDs:   []string{"vidB"},
+	})
+	setSongMetadata(&SongMetadata{
+		CacheKey:   "ttml_lyrics:bare song artist",
+		TrackName:  "Bare",
+		ArtistName: "Artist",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/metadata/stats", nil)
+	req.Header.Set("Authorization", "test-token")
+	rec := httptest.NewRecorder()
+	metadataStatsHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Metadata map[string]interface{} `json:"metadata"`
+		Indexes  map[string]interface{} `json:"indexes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if int(resp.Metadata["totalEntries"].(float64)) != 3 {
+		t.Errorf("totalEntries = %v, want 3", resp.Metadata["totalEntries"])
+	}
+	if int(resp.Metadata["withVideoIds"].(float64)) != 2 {
+		t.Errorf("withVideoIds = %v, want 2", resp.Metadata["withVideoIds"])
+	}
+	if int(resp.Metadata["withISRC"].(float64)) != 1 {
+		t.Errorf("withISRC = %v, want 1", resp.Metadata["withISRC"])
+	}
+	if int(resp.Metadata["withRawAttributes"].(float64)) != 1 {
+		t.Errorf("withRawAttributes = %v, want 1", resp.Metadata["withRawAttributes"])
+	}
+	if int(resp.Metadata["withArtwork"].(float64)) != 1 {
+		t.Errorf("withArtwork = %v, want 1", resp.Metadata["withArtwork"])
+	}
+	if resp.Metadata["richStatsComplete"].(bool) != true {
+		t.Errorf("richStatsComplete should be true when parsedEntries < cap")
+	}
+
+	byPrefix := resp.Indexes["byPrefix"].(map[string]interface{})
+	if int(byPrefix["video:"].(float64)) != 2 {
+		t.Errorf("video: prefix count = %v, want 2", byPrefix["video:"])
+	}
+	if int(byPrefix["isrc:"].(float64)) != 1 {
+		t.Errorf("isrc: prefix count = %v, want 1", byPrefix["isrc:"])
+	}
+}
+
+func TestMetadataStatsHandler_Unauthorized(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	origToken := conf.Configuration.CacheAccessToken
+	conf.Configuration.CacheAccessToken = "test-token"
+	defer func() { conf.Configuration.CacheAccessToken = origToken }()
+
+	req := httptest.NewRequest(http.MethodGet, "/metadata/stats", nil)
+	req.Header.Set("Authorization", "bad-token")
+	rec := httptest.NewRecorder()
+	metadataStatsHandler(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with wrong token, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/metadata/stats", nil)
+	rec = httptest.NewRecorder()
+	metadataStatsHandler(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with no token, got %d", rec.Code)
+	}
+}
+
+func TestMetadataSampleHandler(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	origToken := conf.Configuration.CacheAccessToken
+	conf.Configuration.CacheAccessToken = "test-token"
+	defer func() { conf.Configuration.CacheAccessToken = origToken }()
+
+	for i := 0; i < 5; i++ {
+		setSongMetadata(&SongMetadata{
+			CacheKey:   "ttml_lyrics:song" + string(rune('0'+i)) + " artist",
+			TrackName:  "Song" + string(rune('0'+i)),
+			ArtistName: "Artist",
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/metadata/sample?n=3", nil)
+	req.Header.Set("Authorization", "test-token")
+	rec := httptest.NewRecorder()
+	metadataSampleHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Bucket    string                   `json:"bucket"`
+		Requested int                      `json:"requested"`
+		Returned  int                      `json:"returned"`
+		Entries   []map[string]interface{} `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Bucket != "metadata" {
+		t.Errorf("bucket = %q, want metadata", resp.Bucket)
+	}
+	if resp.Returned != 3 {
+		t.Errorf("returned = %d, want 3", resp.Returned)
+	}
+	if len(resp.Entries) != 3 {
+		t.Errorf("entries len = %d, want 3", len(resp.Entries))
+	}
+	for i, e := range resp.Entries {
+		if _, ok := e["lyrics"].(map[string]interface{}); !ok {
+			t.Errorf("entry %d missing lyrics sub-object", i)
+		}
+	}
+}
+
+func TestMetadataSampleHandler_CapsAtMax(t *testing.T) {
+	cleanup := setupTestMetadata(t)
+	defer cleanup()
+
+	origToken := conf.Configuration.CacheAccessToken
+	conf.Configuration.CacheAccessToken = "test-token"
+	defer func() { conf.Configuration.CacheAccessToken = origToken }()
+
+	req := httptest.NewRequest(http.MethodGet, "/metadata/sample?n=99999", nil)
+	req.Header.Set("Authorization", "test-token")
+	rec := httptest.NewRecorder()
+	metadataSampleHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp struct {
+		Requested int `json:"requested"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Requested != metadataSampleMaxN {
+		t.Errorf("requested = %d, want cap %d", resp.Requested, metadataSampleMaxN)
 	}
 }
 
