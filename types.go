@@ -1,7 +1,6 @@
 package main
 
 import (
-	"lyrics-api-go/cache"
 	"sync"
 )
 
@@ -18,27 +17,6 @@ const (
 // NoLyricsSentinel is stored as TTML content to permanently mark a track as having no lyrics.
 // Unlike negative cache entries (which expire), this is stored in the positive cache and persists indefinitely.
 const NoLyricsSentinel = "__NO_LYRICS__"
-
-// CacheDump represents the full cache contents
-type CacheDump map[string]cache.CacheEntry
-
-// CachePerformance contains cache hit/miss statistics
-type CachePerformance struct {
-	Hits         int64   `json:"hits"`
-	Misses       int64   `json:"misses"`
-	NegativeHits int64   `json:"negative_hits"`
-	StaleHits    int64   `json:"stale_hits"`
-	HitRate      float64 `json:"hit_rate_percent"`
-}
-
-// CacheDumpResponse is the response format for /cache endpoint
-type CacheDumpResponse struct {
-	NumberOfKeys int              `json:"number_of_keys"`
-	SizeInKB     int              `json:"size_kb"`
-	SizeInMB     float64          `json:"size_mb"`
-	Performance  CachePerformance `json:"performance"`
-	Cache        CacheDump        `json:"cache"`
-}
 
 // InFlightRequest tracks concurrent requests for the same query
 type InFlightRequest struct {
