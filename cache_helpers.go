@@ -223,7 +223,12 @@ func getNegativeCacheTTLSeconds(entry NegativeCacheEntry) int64 {
 		return defaultTTL
 	}
 
-	daysSinceRelease := int(time.Since(rd).Hours() / 24)
+	// Compare calendar days, not raw elapsed duration. Truncating elapsed-hours to
+	// int days is time-of-day sensitive: e.g. "released 4 days ago" at 2am UTC
+	// yields 3 when floored, which drops the entry into the wrong tier.
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	daysSinceRelease := int(today.Sub(rd).Hours() / 24)
 	threshold := conf.Configuration.NewSongThresholdDays
 
 	if daysSinceRelease >= threshold {
