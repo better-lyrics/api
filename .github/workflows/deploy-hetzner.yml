@@ -40,11 +40,17 @@ jobs:
           scp -i ~/.ssh/id_ed25519 lyrics-api-go \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/lyrics-api/lyrics-api-go.new
           ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} '
-            set -e
+            set -eo pipefail
             mv /opt/lyrics-api/lyrics-api-go.new /opt/lyrics-api/lyrics-api-go
             chmod +x /opt/lyrics-api/lyrics-api-go
             sudo systemctl restart lyrics-api
-            sleep 3
-            sudo systemctl status lyrics-api --no-pager | head -5
-            curl -sf http://localhost:8080/health || (echo "Health check failed" && exit 1)
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+                echo "Service healthy after ${i}s"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "Health check timed out after 30s — service likely failed to start"
+            exit 1
           '
