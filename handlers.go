@@ -12,6 +12,7 @@ import (
 	"lyrics-api-go/services/providers"
 	"lyrics-api-go/services/proxy"
 	"lyrics-api-go/stats"
+	"lyrics-api-go/utils"
 	"net/http"
 	"strconv"
 	"strings"
@@ -1611,4 +1612,223 @@ func metadataLookupHandler(w http.ResponseWriter, r *http.Request) {
 		"cacheKey": cacheKey,
 		"metadata": enrichMetadata(meta),
 	})
+}
+
+// Defaults for /metadata/stats and /metadata/sample.
+const (
+	// metadataStatsRichParseCap bounds how many metadata entries are gunzipped+parsed
+	// to compute coverage stats (artwork, ISRC, videoId presence). Pure counters run
+	// over the whole bucket; rich coverage is approximate beyond this cap.
+	metadataStatsRichParseCap = 20000
+
+	// metadataSampleMaxN is the hard upper bound on ?n= for /metadata/sample
+	// to keep response sizes predictable.
+	metadataSampleMaxN = 100
+)
+
+// metadataStatsHandler reports counts and coverage for the metadata and indexes buckets.
+// Streams via BoltDB ForEach (no full-DB map materialization) so it's safe on the 7GB+
+// production database. Rich coverage stats (decompress+parse) are bounded by
+// metadataStatsRichParseCap; counters are unbounded.
+// Protected by CACHE_ACCESS_TOKEN.
+func metadataStatsHandler(w http.ResponseWriter, r *http.Request) {
+	if conf.Configuration.CacheAccessToken == "" ||
+		r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	metaStats, err := collectMetadataBucketStats(metadataStatsRichParseCap)
+	if err != nil {
+		Respond(w, r).Error(http.StatusInternalServerError, map[string]interface{}{
+			"error": "metadata bucket stats failed: " + err.Error(),
+		})
+		return
+	}
+
+	idxStats, err := collectIndexBucketStats()
+	if err != nil {
+		Respond(w, r).Error(http.StatusInternalServerError, map[string]interface{}{
+			"error": "indexes bucket stats failed: " + err.Error(),
+		})
+		return
+	}
+
+	Respond(w, r).JSON(map[string]interface{}{
+		"metadata": metaStats,
+		"indexes":  idxStats,
+	})
+}
+
+// metadataSampleHandler returns up to N entries from the metadata bucket, enriched
+// with parsed rawAttributes + lyrics-cache status (same shape as /metadata results).
+// Bounded by metadataSampleMaxN. Protected by CACHE_ACCESS_TOKEN.
+func metadataSampleHandler(w http.ResponseWriter, r *http.Request) {
+	if conf.Configuration.CacheAccessToken == "" ||
+		r.Header.Get("Authorization") != conf.Configuration.CacheAccessToken {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	n := 10
+	if v := r.URL.Query().Get("n"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			n = parsed
+		}
+	}
+	if n > metadataSampleMaxN {
+		n = metadataSampleMaxN
+	}
+
+	results := make([]map[string]interface{}, 0, n)
+	err := persistentCache.RangeBucket(metadataBucket, func(k, v []byte) bool {
+		raw, decErr := utils.DecompressString(string(v))
+		if decErr != nil {
+			// Skip malformed entries in sample, don't abort
+			return true
+		}
+		var meta SongMetadata
+		if jsonErr := json.Unmarshal([]byte(raw), &meta); jsonErr != nil {
+			return true
+		}
+		// getSongMetadata would re-read; we already have the parsed meta, just enrich
+		results = append(results, enrichMetadata(&meta))
+		return len(results) < n
+	})
+	if err != nil {
+		Respond(w, r).Error(http.StatusInternalServerError, map[string]interface{}{
+			"error": "sample failed: " + err.Error(),
+		})
+		return
+	}
+
+	Respond(w, r).JSON(map[string]interface{}{
+		"bucket":    metadataBucket,
+		"requested": n,
+		"returned":  len(results),
+		"entries":   results,
+	})
+}
+
+// collectMetadataBucketStats streams the metadata bucket, counting all entries
+// and computing coverage stats for the first richParseCap entries.
+func collectMetadataBucketStats(richParseCap int) (map[string]interface{}, error) {
+	var (
+		totalEntries  int
+		totalKeyBytes int
+		totalValBytes int
+		parsedEntries int
+		withVideoIDs  int
+		withISRC      int
+		withRawAttrs  int
+		withArtwork   int
+	)
+
+	err := persistentCache.RangeBucket(metadataBucket, func(k, v []byte) bool {
+		totalEntries++
+		totalKeyBytes += len(k)
+		totalValBytes += len(v)
+
+		// Bounded rich parsing: skip once we've hit the cap, but keep counting totals
+		if parsedEntries >= richParseCap {
+			return true
+		}
+
+		raw, err := utils.DecompressString(string(v))
+		if err != nil {
+			return true
+		}
+		var meta SongMetadata
+		if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+			return true
+		}
+		parsedEntries++
+		if len(meta.VideoIDs) > 0 {
+			withVideoIDs++
+		}
+		if meta.ISRC != "" {
+			withISRC++
+		}
+		if meta.RawAttributes != "" {
+			withRawAttrs++
+			// Fast substring check — avoids second JSON unmarshal just for this
+			if strings.Contains(meta.RawAttributes, `"artwork"`) {
+				withArtwork++
+			}
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"totalEntries":      totalEntries,
+		"totalKeyBytes":     totalKeyBytes,
+		"totalValBytes":     totalValBytes,
+		"parsedEntries":     parsedEntries,
+		"withVideoIds":      withVideoIDs,
+		"withISRC":          withISRC,
+		"withRawAttributes": withRawAttrs,
+		"withArtwork":       withArtwork,
+		"richParseCap":      richParseCap,
+		"richStatsComplete": parsedEntries < richParseCap,
+	}, nil
+}
+
+// collectIndexBucketStats streams the indexes bucket and groups entries by prefix
+// (video:, isrc:, song:). Tracks the largest list for eyeballing fanout.
+func collectIndexBucketStats() (map[string]interface{}, error) {
+	var (
+		totalEntries int
+		maxListLen   int
+		maxListKey   string
+	)
+	byPrefix := map[string]int{
+		"video:": 0,
+		"isrc:":  0,
+		"song:":  0,
+		"other":  0,
+	}
+
+	err := persistentCache.RangeBucket(indexesBucket, func(k, v []byte) bool {
+		totalEntries++
+		key := string(k)
+		matched := false
+		for _, p := range []string{"video:", "isrc:", "song:"} {
+			if strings.HasPrefix(key, p) {
+				byPrefix[p]++
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			byPrefix["other"]++
+		}
+
+		// Peek at list length for the longest-list stat
+		raw, err := utils.DecompressString(string(v))
+		if err != nil {
+			return true
+		}
+		var list []string
+		if err := json.Unmarshal([]byte(raw), &list); err != nil {
+			return true
+		}
+		if len(list) > maxListLen {
+			maxListLen = len(list)
+			maxListKey = key
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"totalEntries": totalEntries,
+		"byPrefix":     byPrefix,
+		"maxListLen":   maxListLen,
+		"maxListKey":   maxListKey,
+	}, nil
 }

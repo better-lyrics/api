@@ -80,11 +80,11 @@ type Track struct {
 		URL                 string   `json:"url"`
 		ISRC                string   `json:"isrc"`
 		SongwriterNames     string   `json:"songwriterName"`
-		ReleaseDate         string   `json:"releaseDate"`           // ISO 8601 date, e.g. "2008-05-25"
-		HasLyrics           *bool    `json:"hasLyrics"`             // nil = field absent from API response
-		HasTimeSyncedLyrics *bool    `json:"hasTimeSyncedLyrics"`   // nil = field absent from API response
-		Artwork             *Artwork `json:"artwork,omitempty"`     // Apple Music artwork (URL template, dimensions, colors)
-		GenreNames          []string `json:"genreNames,omitempty"`  // e.g. ["Pop", "Alternative"]
+		ReleaseDate         string   `json:"releaseDate"`          // ISO 8601 date, e.g. "2008-05-25"
+		HasLyrics           *bool    `json:"hasLyrics"`            // nil = field absent from API response
+		HasTimeSyncedLyrics *bool    `json:"hasTimeSyncedLyrics"`  // nil = field absent from API response
+		Artwork             *Artwork `json:"artwork,omitempty"`    // Apple Music artwork (URL template, dimensions, colors)
+		GenreNames          []string `json:"genreNames,omitempty"` // e.g. ["Pop", "Alternative"]
 		ComposerName        string   `json:"composerName,omitempty"`
 		HasCredits          *bool    `json:"hasCredits,omitempty"`
 	} `json:"attributes"`

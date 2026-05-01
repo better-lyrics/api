@@ -24,6 +24,8 @@ func setupRoutes(router *mux.Router) {
 	// Metadata endpoints
 	router.HandleFunc("/video-map", videoMapImportHandler).Methods("POST")
 	router.HandleFunc("/metadata", metadataLookupHandler).Methods("GET")
+	router.HandleFunc("/metadata/stats", metadataStatsHandler).Methods("GET")
+	router.HandleFunc("/metadata/sample", metadataSampleHandler).Methods("GET")
 
 	// Cache management endpoints
 	router.HandleFunc("/cache", getCacheDump)

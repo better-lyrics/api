@@ -384,6 +384,46 @@ func (pc *PersistentCache) DeleteFromBucket(bucket, key string) error {
 	})
 }
 
+// RangeBucket streams over every key/value in the named bucket.
+// The callback returns false to stop iteration early (useful for bounded sampling).
+// Returned k/v slices are valid only within the callback — copy if you need to retain them.
+// Returns an error if the bucket does not exist.
+func (pc *PersistentCache) RangeBucket(bucket string, fn func(k, v []byte) bool) error {
+	return pc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket %q not found", bucket)
+		}
+		stop := false
+		return b.ForEach(func(k, v []byte) error {
+			if stop {
+				return nil
+			}
+			if !fn(k, v) {
+				stop = true
+			}
+			return nil
+		})
+	})
+}
+
+// BucketKeyCount returns the total number of keys in a bucket.
+// Uses ForEach so it's O(n) but streams without building any map.
+func (pc *PersistentCache) BucketKeyCount(bucket string) (int, error) {
+	count := 0
+	err := pc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket %q not found", bucket)
+		}
+		return b.ForEach(func(k, v []byte) error {
+			count++
+			return nil
+		})
+	})
+	return count, err
+}
+
 // Close closes the database connection
 func (pc *PersistentCache) Close() error {
 	if pc.db != nil {
