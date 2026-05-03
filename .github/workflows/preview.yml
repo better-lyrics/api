@@ -1,0 +1,117 @@
+name: preview
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    if: |
+      github.event.pull_request.author_association == 'OWNER' ||
+      github.event.pull_request.author_association == 'MEMBER' ||
+      github.event.pull_request.author_association == 'COLLABORATOR'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout PR head
+        if: github.event.action != 'closed'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-go@v5
+        if: github.event.action != 'closed'
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Build (ARM64)
+        if: github.event.action != 'closed'
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            go build -trimpath -ldflags="-s -w" -o lyrics-api-go .
+
+      - name: SSH setup
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Teardown
+        if: github.event.action == 'closed'
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "sudo /usr/local/bin/preview-teardown.sh $PR"
+
+      - name: Deploy
+        if: github.event.action != 'closed'
+        id: deploy
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          scp -i ~/.ssh/id_ed25519 lyrics-api-go \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/lyrics-api-pr-$PR
+          ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "sudo /usr/local/bin/preview-deploy.sh $PR"
+
+      - name: Comment on PR (deployed)
+        if: github.event.action != 'closed' && steps.deploy.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
+          script: |
+            const pr = context.payload.pull_request.number;
+            const url = `https://pr-${pr}.preview.lyrics-api.boidu.dev`;
+            const marker = '<!-- preview-deploy-comment -->';
+            const body = `${marker}\nPreview: ${url}\nLast deployed: ${new Date().toISOString()} from \`${context.payload.pull_request.head.sha.slice(0,7)}\``;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+            });
+            const existing = comments.find(c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr,
+                body,
+              });
+            }
+
+      - name: Comment on PR (cap reached or failure)
+        if: failure() && github.event.action != 'closed'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
+          script: |
+            const pr = context.payload.pull_request.number;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+              body: `Preview deploy failed. Either the 2-preview cap is reached (close another preview PR) or the build/deploy errored. Check the workflow logs.`,
+            });

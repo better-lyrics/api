@@ -1,0 +1,24 @@
+[Unit]
+Description=Better Lyrics API preview (PR %i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/lyrics-api-previews/pr-%i
+EnvironmentFile=/etc/lyrics-api.env
+EnvironmentFile=/etc/lyrics-api-previews/pr-%i.env
+ExecStart=/opt/lyrics-api-previews/pr-%i/lyrics-api-go
+Restart=on-failure
+RestartSec=5
+MemoryMax=512M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/lyrics-api-previews/pr-%i /tmp
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
