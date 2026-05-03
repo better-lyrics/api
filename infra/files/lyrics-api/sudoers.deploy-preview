@@ -1,0 +1,3 @@
+# Allow deploy user to run preview deploy/teardown scripts without password
+# Used by .github/workflows/preview.yml to manage per-PR preview environments
+deploy ALL=(root) NOPASSWD: /usr/local/bin/preview-deploy.sh, /usr/local/bin/preview-teardown.sh

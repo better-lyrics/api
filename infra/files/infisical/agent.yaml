@@ -1,0 +1,23 @@
+infisical:
+  address: "https://app.infisical.com"
+
+auth:
+  type: "universal-auth"
+  config:
+    client-id: "/etc/infisical-agent/client-id"
+    client-secret: "/etc/infisical-agent/client-secret"
+    remove_client_secret_on_read: false
+
+sinks:
+  - type: "file"
+    config:
+      path: "/etc/infisical-agent/access-token"
+
+templates:
+  - source-path: "/etc/infisical-agent/lyrics-api.env.tpl"
+    destination-path: "/etc/lyrics-api.env.staging"
+    config:
+      polling-interval: 60s
+      execute:
+        timeout: 30
+        command: "/usr/local/bin/lyrics-api-reload"

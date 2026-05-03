@@ -1,0 +1,18 @@
+[Unit]
+Description=Logdy log viewer for lyrics-api
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+Group=systemd-journal
+EnvironmentFile=/etc/logdy.env
+ExecStart=/bin/bash -c '/usr/bin/journalctl -f -u lyrics-api -o cat -n 1000 | /usr/local/bin/logdy --port 8888 --ui-ip 127.0.0.1 --disable-ansi-code-stripping --no-analytics --no-updates'
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

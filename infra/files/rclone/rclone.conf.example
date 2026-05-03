@@ -1,0 +1,6 @@
+# rclone config for B2 - populated by bootstrap from secrets.env into /home/deploy/.config/rclone/rclone.conf
+# Mode: 600, owner: deploy:deploy
+[b2]
+type = b2
+account = __B2_KEY_ID__
+key = __B2_APP_KEY__

@@ -1,0 +1,22 @@
+[Unit]
+Description=Better Lyrics API
+After=network.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/lyrics-api
+EnvironmentFile=/etc/lyrics-api.env
+ExecStart=/opt/lyrics-api/lyrics-api-go
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/lyrics-api
+
+[Install]
+WantedBy=multi-user.target

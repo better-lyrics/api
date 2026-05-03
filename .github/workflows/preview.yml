@@ -73,6 +73,8 @@ jobs:
 
       - name: Comment on PR
         if: always()
+        env:
+          PREVIEW_DOMAIN: ${{ vars.PREVIEW_DOMAIN }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ steps.app-token.outputs.token || github.token }}
@@ -83,7 +85,7 @@ jobs:
             const sha = context.payload.pull_request.head.sha;
             const shortSha = sha.slice(0, 7);
             const branch = context.payload.pull_request.head.ref;
-            const url = `https://pr-${pr}.preview.lyrics-api.boidu.dev`;
+            const url = `https://pr-${pr}.${process.env.PREVIEW_DOMAIN}`;
             const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
             const commitUrl = `${context.serverUrl}/${owner}/${repo}/commit/${sha}`;
             const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';

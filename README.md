@@ -3,7 +3,6 @@
 ![GitHub top language](https://img.shields.io/github/languages/top/better-lyrics/api)
 ![GitHub License](https://img.shields.io/github/license/better-lyrics/api)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/better-lyrics/api/go.yml)
-![Railway](https://img.shields.io/badge/deployment-railway-javascript?logo=railway&logoColor=fff&color=851AE6)
 
 This repository contains the source code for the official Better Lyrics API - primarily serving as the backend for [Better Lyrics](https://better-lyrics.boidu.dev).
 
@@ -12,69 +11,49 @@ This repository contains the source code for the official Better Lyrics API - pr
 
 ## Table of Contents
 
-- [Better Lyrics API](#better-lyrics-api)
-  - [Table of Contents](#table-of-contents)
-  - [Installation](#installation)
-  - [Usage](#usage)
-  - [API Endpoints](#api-endpoints)
-  - [Deployment](#deployment)
-    - [Railway](#railway)
-  - [Contributing](#contributing)
-  - [License](#license)
+- [Quickstart](#quickstart)
+- [API Endpoints](#api-endpoints)
+- [Deployment](#deployment)
+- [Contributing](#contributing)
+- [License](#license)
 
-## Installation
+## Quickstart
 
-To install and run the Lyrics API Go, follow these steps:
+If you just want to run it locally, you need a Go toolchain (1.22+) and a populated `.env`.
 
-1. Clone the repository: `git clone https://github.com/better-lyrics/api.git`
-2. Navigate to the project directory: `cd api`
-3. Install the dependencies: `go mod tidy`
-4. Copy the `.env.example` file to `.env` and update the environment variables as needed: `cp .env.example .env`
-5. Start the server: `go run main.go`
+```bash
+git clone https://github.com/better-lyrics/api.git && cd api
+go mod tidy
+cp .env.example .env       # fill in upstream API endpoints + credentials
+go run main.go             # serves on :8080
+```
 
-## Usage
-
-Once the server is running, you can access the API endpoints to retrieve lyrics for songs.
+The server logs request lines as it boots; once you see the listener line, hit `http://localhost:8080/health`. For hot reload during development, `./scripts/run.sh` watches the source via `nodemon`.
 
 ## API Endpoints
 
-- `GET /getLyrics?a={artist}&s={song}`: Retrieves the lyrics for the specified artist and song.
+Public:
+
+- `GET /getLyrics?a={artist}&s={song}` - Retrieves synchronized lyrics for the specified artist and song
+- `GET /artwork?s={song}&a={artist}` - Returns animated album artwork
+- `GET /health` - Health check
+- `GET /stats` - API statistics (requires `Authorization` header)
+
+A full list of admin/cache endpoints (`/cache/*`, `/revalidate`, `/override`, `/health/mut`, etc.) is documented in [`CLAUDE.md`](./CLAUDE.md).
 
 ## Deployment
 
-### Railway
+Production runs on a single Hetzner CAX21 (ARM64, Helsinki). The whole server stack (Caddy, the API, Infisical agent for secrets sync, Beszel agent for metrics, Logdy for log streaming, B2 backups, UFW, fail2ban) lives in [`infra/`](./infra/README.md) as code.
 
-This project uses Railway's persistent volumes to maintain the cache database across deployments.
+To rebuild from scratch on any Ubuntu 24.04 host:
 
-**Setup Steps:**
-
-1. Create a new project on [Railway](https://railway.app) and connect your GitHub repository
-
-2. **Create a Volume (CRITICAL):**
-   - Go to your service in Railway dashboard
-   - Click **Settings** → **Volumes** tab
-   - Click **+ New Volume**
-   - **Mount Path:** `/data`
-   - Click **Add**
-
-3. **Set Environment Variables:**
-   - Go to **Variables** tab
-   - Add: `CACHE_DB_PATH=/data/cache.db`
-   - Configure all other required variables from `.env.example`
-
-4. **Deploy!**
-
-**Verification:**
-After deployment, check your logs for:
+```bash
+cp infra/secrets.env.example infra/secrets.env
+$EDITOR infra/secrets.env                    # fill in every value from your password manager
+sudo ./infra/bootstrap.sh                    # about 10 minutes, idempotent
 ```
-[Cache] Loaded X entries from disk to memory
-```
-If you see `Loaded 0 entries` on subsequent deploys (after caching data), the volume isn't persisting.
 
-**Troubleshooting:**
-- Ensure the volume mount path is exactly `/data`
-- Verify `CACHE_DB_PATH=/data/cache.db` is set in Railway variables
-- The volume must be created BEFORE deploying with the updated env var
+See [`infra/README.md`](./infra/README.md) for the prerequisites and the manual steps that stay manual (DNS, provisioning, `cache.db` restore).
 
 ## Contributing
 

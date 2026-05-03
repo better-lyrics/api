@@ -4,6 +4,11 @@ set -euo pipefail
 PR="${1:-}"
 [[ "$PR" =~ ^[0-9]+$ ]] || { echo "Usage: $0 <pr-number>"; exit 2; }
 
+# PREVIEW_BASE is the wildcard zone, e.g. "preview.api.example.com" so PR 42 lands at "pr-42.preview.api.example.com".
+# Written by infra/phases/10-preview-deploy.sh from $PREVIEW_WILDCARD in secrets.env.
+[ -f /etc/preview-deploy.env ] && source /etc/preview-deploy.env
+: "${PREVIEW_BASE:?PREVIEW_BASE not set; expected /etc/preview-deploy.env to define it}"
+
 UNIT="lyrics-api@${PR}.service"
 PORT=$((9000 + PR))
 DIR="/opt/lyrics-api-previews/pr-${PR}"
@@ -39,7 +44,7 @@ chmod 640 "$ENV_FILE"
 chown root:deploy "$ENV_FILE"
 
 cat > "$CADDY_FILE" <<EOF
-@pr${PR} host pr-${PR}.preview.lyrics-api.boidu.dev
+@pr${PR} host pr-${PR}.${PREVIEW_BASE}
 handle @pr${PR} {
     reverse_proxy localhost:${PORT}
 }
