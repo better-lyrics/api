@@ -1,8 +1,8 @@
 # Better Lyrics API
 
-![GitHub top language](https://img.shields.io/github/languages/top/boidushya/better-lyrics-api)
-![GitHub License](https://img.shields.io/github/license/boidushya/better-lyrics-api)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/boidushya/better-lyrics-api/go.yml)
+![GitHub top language](https://img.shields.io/github/languages/top/better-lyrics/api)
+![GitHub License](https://img.shields.io/github/license/better-lyrics/api)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/better-lyrics/api/go.yml)
 ![Railway](https://img.shields.io/badge/deployment-railway-javascript?logo=railway&logoColor=fff&color=851AE6)
 
 This repository contains the source code for the official Better Lyrics API - primarily serving as the backend for [Better Lyrics](https://better-lyrics.boidu.dev).
@@ -26,7 +26,7 @@ This repository contains the source code for the official Better Lyrics API - pr
 
 To install and run the Lyrics API Go, follow these steps:
 
-1. Clone the repository: `git clone https://github.com/boidushya/better-lyrics-api.git`
+1. Clone the repository: `git clone https://github.com/better-lyrics/api.git`
 2. Navigate to the project directory: `cd better-lyrics-api`
 3. Install the dependencies: `go mod tidy`
 4. Copy the `.env.example` file to `.env` and update the environment variables as needed: `cp .env.example .env`
