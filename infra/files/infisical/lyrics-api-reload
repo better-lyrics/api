@@ -1,0 +1,29 @@
+#!/bin/bash
+set -euo pipefail
+
+STAGING="/etc/lyrics-api.env.staging"
+REAL="/etc/lyrics-api.env"
+
+if [ ! -s "$STAGING" ]; then
+    logger -t infisical-agent "ERROR: staged env is empty, aborting"
+    exit 1
+fi
+
+if ! grep -q '^TTML_MEDIA_USER_TOKENS=' "$STAGING"; then
+    logger -t infisical-agent "ERROR: TTML_MEDIA_USER_TOKENS missing in staged env, aborting"
+    exit 1
+fi
+
+if [ -f "$REAL" ] && cmp -s "$STAGING" "$REAL"; then
+    logger -t infisical-agent "no change in env, skipping restart"
+    rm -f "$STAGING"
+    exit 0
+fi
+
+[ -f "$REAL" ] && cp "$REAL" "${REAL}.bak"
+mv "$STAGING" "$REAL"
+chmod 640 "$REAL"
+chown root:deploy "$REAL"
+
+systemctl restart lyrics-api
+logger -t infisical-agent "lyrics-api restarted after secret change"
