@@ -33,6 +33,7 @@ cat > "$ENV_FILE" <<EOF
 PORT=${PORT}
 CACHE_DB_PATH=${DIR}/cache.db
 CACHE_BACKUP_PATH=/tmp/lyrics-api-pr-${PR}-backups
+STATS_DB_PATH=${DIR}/stats.db
 EOF
 chmod 640 "$ENV_FILE"
 chown root:deploy "$ENV_FILE"
