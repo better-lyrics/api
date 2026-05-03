@@ -27,7 +27,7 @@ This repository contains the source code for the official Better Lyrics API - pr
 To install and run the Lyrics API Go, follow these steps:
 
 1. Clone the repository: `git clone https://github.com/better-lyrics/api.git`
-2. Navigate to the project directory: `cd better-lyrics-api`
+2. Navigate to the project directory: `cd api`
 3. Install the dependencies: `go mod tidy`
 4. Copy the `.env.example` file to `.env` and update the environment variables as needed: `cp .env.example .env`
 5. Start the server: `go run main.go`
