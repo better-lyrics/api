@@ -8,6 +8,14 @@ install -m 755 -o root -g root \
 install -m 755 -o root -g root \
     "$INFRA_DIR/files/backups/upload-backup.sh" \
     /usr/local/bin/upload-backup.sh
+install -m 755 -o root -g root \
+    "$INFRA_DIR/files/backups/backup-keep.sh" \
+    /usr/local/bin/backup-keep.sh
+
+# System cron for keep.db backup (runs as root, drops to keep + deploy via runuser)
+install -m 644 -o root -g root \
+    "$INFRA_DIR/files/backups/keep-backup.cron" \
+    /etc/cron.d/keep-backup
 
 # rclone config for deploy user (mode 600)
 install -d -o deploy -g deploy -m 700 /home/deploy/.config
