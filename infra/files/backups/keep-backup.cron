@@ -1,0 +1,5 @@
+# /etc/cron.d/keep-backup
+# Daily keep.db backup at 03:45 UTC (after cache.db backup window). Runs as root because the script
+# needs to switch to keep (read DB) and deploy (push to B2) without password prompts.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+45 3 * * * root /usr/local/bin/backup-keep.sh
