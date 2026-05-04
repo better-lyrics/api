@@ -1,0 +1,25 @@
+[Unit]
+Description=keep secrets manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=keep
+Group=keep
+WorkingDirectory=/var/lib/keep
+ExecStart=/usr/local/bin/keep
+Environment=KEEP_DB_PATH=/var/lib/keep/keep.db
+Environment=KEEP_PUBLIC_URL=https://__KEEP_DOMAIN__
+Environment=KEEP_LISTEN=:4339
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/keep
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

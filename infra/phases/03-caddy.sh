@@ -22,6 +22,7 @@ sed -e "s|__ACME_EMAIL__|${ACME_EMAIL}|g" \
     -e "s|__STAGING_DOMAIN__|${STAGING_DOMAIN}|g" \
     -e "s|__LOGS_DOMAIN__|${LOGS_DOMAIN}|g" \
     -e "s|__METRICS_DOMAIN__|${METRICS_DOMAIN}|g" \
+    -e "s|__KEEP_DOMAIN__|${KEEP_DOMAIN}|g" \
     -e "s|__PREVIEW_WILDCARD__|${PREVIEW_WILDCARD}|g" \
     "$INFRA_DIR/files/caddy/Caddyfile" > /etc/caddy/Caddyfile
 chmod 644 /etc/caddy/Caddyfile
