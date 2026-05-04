@@ -48,6 +48,14 @@ __LOGS_DOMAIN__ {
 	reverse_proxy localhost:8888
 }
 
+__KEEP_DOMAIN__ {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+	import security_headers
+	reverse_proxy localhost:4339
+}
+
 __PREVIEW_WILDCARD__ {
 	tls {
 		dns cloudflare {env.CF_API_TOKEN}
