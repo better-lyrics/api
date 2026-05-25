@@ -39,7 +39,7 @@ Public:
 - `GET /health` - Health check
 - `GET /stats` - API statistics (requires `Authorization` header)
 
-A full list of admin/cache endpoints (`/cache/*`, `/revalidate`, `/override`, `/health/mut`, etc.) is documented in [`CLAUDE.md`](./CLAUDE.md).
+Admin/cache endpoints (`/cache/*`, `/revalidate`, `/override`, `/health/mut`, etc.) are documented live at `GET /cache/help`.
 
 ## Deployment
 
