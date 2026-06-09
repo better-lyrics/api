@@ -505,16 +505,23 @@ func getStats(w http.ResponseWriter, r *http.Request) {
 	s := stats.Get()
 	snapshot := s.Snapshot()
 
-	// Add cache storage info. Reads the cached snapshot computed in the background
-	// every 6h so this endpoint never blocks on a full bucket scan.
+	// Add cache storage info. Reads live counters maintained by PersistentCache,
+	// so this endpoint never blocks on a full bucket scan.
 	cs := cacheStats.Get()
+	counts := persistentCache.Counts()
+	var total int64
+	for _, n := range counts {
+		total += n
+	}
+	sizeKB := persistentCache.SizeKB()
 	snapshot["cache_storage"] = map[string]interface{}{
-		"keys":        cs.NumKeys,
-		"size_kb":     cs.SizeKB,
-		"size_mb":     float64(cs.SizeKB) / 1024,
-		"status":      cs.Status,
-		"computed_at": cs.ComputedAt,
-		"duration_ms": cs.DurationMs,
+		"keys_total":         total,
+		"keys_by_provider":   counts,
+		"size_kb":            sizeKB,
+		"size_mb":            float64(sizeKB) / 1024,
+		"status":             cs.Status,
+		"last_reconciled_at": cs.LastReconciledAt,
+		"last_duration_ms":   cs.LastDurationMs,
 	}
 
 	// Add circuit breaker status
@@ -714,15 +721,21 @@ func restoreCache(w http.ResponseWriter, r *http.Request) {
 
 	// Refresh the cached stats snapshot so /stats reflects the restored state.
 	cacheStats.Refresh()
-	cs := cacheStats.Get()
+	counts := persistentCache.Counts()
+	var total int64
+	for _, n := range counts {
+		total += n
+	}
+	sizeKB := persistentCache.SizeKB()
 
 	log.Infof("%s Cache restored from backup: %s", logcolors.LogCacheRestore, backupFileName)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":       "Cache restored successfully",
-		"restored_from": backupFileName,
-		"keys_restored": cs.NumKeys,
-		"size_kb":       cs.SizeKB,
+		"message":          "Cache restored successfully",
+		"restored_from":    backupFileName,
+		"keys_total":       total,
+		"keys_by_provider": counts,
+		"size_kb":          sizeKB,
 	})
 }
 

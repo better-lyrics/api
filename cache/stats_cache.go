@@ -24,13 +24,6 @@ type CachedStats struct {
 	LastReconciledAt time.Time `json:"last_reconciled_at"`
 	LastDurationMs   int64     `json:"last_duration_ms"`
 	LastError        string    `json:"last_error,omitempty"`
-
-	// Deprecated. Removed in Task 9 when handlers.go and main.go are updated to
-	// read live counts via PersistentCache.Counts() / SizeKB().
-	NumKeys    int       `json:"-"`
-	SizeKB     int       `json:"-"`
-	ComputedAt time.Time `json:"-"`
-	DurationMs int64     `json:"-"`
 }
 
 type StatsCache struct {
