@@ -96,10 +96,11 @@ func main() {
 	// Initialize metadata and indexes buckets (separate from cache bucket)
 	initMetadataBuckets()
 
-	// Start background stats refresh (24h interval). Reads /stats hit the cached
-	// snapshot instead of triggering a full scan.
+	// Counter reconciliation loop. Counters are live (updated transactionally with
+	// Set/Delete) so /stats is microseconds. The weekly reconcile only corrects
+	// drift from rare type-flips.
 	cacheStats = cache.NewStatsCache(persistentCache)
-	cacheStats.StartBackgroundRefresh(24*time.Hour, nil)
+	cacheStats.StartBackgroundRefresh(7*24*time.Hour, nil)
 
 	// Start bearer token auto-scraper (proactive refresh based on JWT expiry)
 	ttml.StartBearerTokenMonitor()
