@@ -221,14 +221,23 @@ func (pc *PersistentCache) Delete(key string) error {
 	})
 }
 
-// Clear removes all entries from cache
+// Clear removes all entries from cache and resets per-prefix counters in the
+// same transaction so counts stay consistent with the wiped cache bucket.
 func (pc *PersistentCache) Clear() error {
 	return pc.db.Update(func(tx *bolt.Tx) error {
 		if err := tx.DeleteBucket([]byte(bucketName)); err != nil {
 			return err
 		}
-		_, err := tx.CreateBucket([]byte(bucketName))
-		return err
+		if _, err := tx.CreateBucket([]byte(bucketName)); err != nil {
+			return err
+		}
+		if err := tx.DeleteBucket([]byte(countersBucket)); err != nil && err != bbolterrors.ErrBucketNotFound {
+			return err
+		}
+		if _, err := tx.CreateBucket([]byte(countersBucket)); err != nil {
+			return err
+		}
+		return nil
 	})
 }
 

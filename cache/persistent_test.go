@@ -742,6 +742,24 @@ func TestReconcileCounters_CorrectsDrift(t *testing.T) {
 	}
 }
 
+func TestClear_ResetsCounters(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	if err := pc.Set("ttml_lyrics:x", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 1 {
+		t.Fatalf("setup: ttml=%d, want 1", got)
+	}
+	if err := pc.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts(); len(got) != 0 {
+		t.Errorf("after Clear: counts should be empty, got %v", got)
+	}
+}
+
 func TestReconcileCounters_WipesStaleCounters(t *testing.T) {
 	pc, _, cleanup := setupTestCache(t, false)
 	defer cleanup()
