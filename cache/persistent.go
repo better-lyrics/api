@@ -204,7 +204,19 @@ func (pc *PersistentCache) Delete(key string) error {
 		if b == nil {
 			return fmt.Errorf("bucket not found")
 		}
-		return b.Delete([]byte(key))
+		counters := tx.Bucket([]byte(countersBucket))
+		if counters == nil {
+			return fmt.Errorf("counters bucket not found")
+		}
+
+		existed := b.Get([]byte(key)) != nil
+		if err := b.Delete([]byte(key)); err != nil {
+			return err
+		}
+		if existed {
+			return adjustCounter(counters, prefixOf(key), -1)
+		}
+		return nil
 	})
 }
 

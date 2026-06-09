@@ -672,3 +672,34 @@ func TestSet_DoesNotDoubleCountOnReSet(t *testing.T) {
 		t.Errorf("expected ttml=1 after re-Set, got %d", got)
 	}
 }
+
+func TestDelete_DecrementsCounter(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	key := "ttml_lyrics:song"
+	if err := pc.Set(key, "v"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 1 {
+		t.Fatalf("setup: expected ttml=1, got %d", got)
+	}
+	if err := pc.Delete(key); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 0 {
+		t.Errorf("after delete: expected ttml=0, got %d", got)
+	}
+}
+
+func TestDelete_OnMissingKeyIsNoop(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	if err := pc.Delete("ttml_lyrics:does not exist"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 0 {
+		t.Errorf("expected ttml=0, got %d", got)
+	}
+}
