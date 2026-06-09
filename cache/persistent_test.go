@@ -703,3 +703,40 @@ func TestDelete_OnMissingKeyIsNoop(t *testing.T) {
 		t.Errorf("expected ttml=0, got %d", got)
 	}
 }
+
+func TestReconcileCounters_CorrectsDrift(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	// Insert directly via the underlying bucket so counters are NOT bumped.
+	// This simulates pre-counter data or drift.
+	keys := []string{
+		"ttml_lyrics:a", "ttml_lyrics:b", "ttml_lyrics:c",
+		"kugou_lyrics:x",
+		"no_lyrics:y", "no_lyrics:z",
+	}
+	if err := pc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketName))
+		for _, k := range keys {
+			if err := b.Put([]byte(k), []byte(`{}`)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := pc.Counts()["ttml"]; got != 0 {
+		t.Fatalf("setup invariant: counters should still be empty, got ttml=%d", got)
+	}
+
+	if err := pc.ReconcileCounters(); err != nil {
+		t.Fatal(err)
+	}
+
+	counts := pc.Counts()
+	if counts["ttml"] != 3 || counts["kugou"] != 1 || counts["negative"] != 2 {
+		t.Errorf("after reconcile: got %v, want ttml=3 kugou=1 negative=2", counts)
+	}
+}

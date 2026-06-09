@@ -296,6 +296,44 @@ func (pc *PersistentCache) Counts() map[string]int64 {
 	return counts
 }
 
+// ReconcileCounters walks the entire cache bucket, recomputes the per-prefix
+// counts, and atomically replaces the counters bucket contents. Expensive: cost
+// scales with leaf-page count of the cache bucket (multi-minute on multi-GB
+// DBs). Safe to call concurrently with Set/Delete: the swap happens in one txn.
+func (pc *PersistentCache) ReconcileCounters() error {
+	fresh := make(map[string]int64)
+	if err := pc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketName))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, _ []byte) error {
+			fresh[prefixOf(string(k))]++
+			return nil
+		})
+	}); err != nil {
+		return fmt.Errorf("reconcile: scan failed: %w", err)
+	}
+
+	return pc.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.DeleteBucket([]byte(countersBucket)); err != nil && err != bolt.ErrBucketNotFound {
+			return err
+		}
+		b, err := tx.CreateBucket([]byte(countersBucket))
+		if err != nil {
+			return err
+		}
+		for name, count := range fresh {
+			var buf [8]byte
+			binary.BigEndian.PutUint64(buf[:], uint64(count))
+			if err := b.Put([]byte(name), buf[:]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // adjustCounter applies delta (typically +1 or -1) to the named counter inside
 // the given counters bucket. Initializes the counter at delta if absent.
 func adjustCounter(b *bolt.Bucket, name string, delta int64) error {
