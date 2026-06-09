@@ -13,6 +13,7 @@ import (
 const (
 	StatsStatusSeeding = "seeding"
 	StatsStatusReady   = "ready"
+	StatsStatusError   = "error"
 )
 
 // CachedStats reports the lifecycle state of the counter-reconciliation loop.
@@ -22,6 +23,7 @@ type CachedStats struct {
 	Status           string    `json:"status"`
 	LastReconciledAt time.Time `json:"last_reconciled_at"`
 	LastDurationMs   int64     `json:"last_duration_ms"`
+	LastError        string    `json:"last_error,omitempty"`
 
 	// Deprecated. Removed in Task 9 when handlers.go and main.go are updated to
 	// read live counts via PersistentCache.Counts() / SizeKB().
@@ -48,7 +50,9 @@ func (sc *StatsCache) Get() *CachedStats {
 }
 
 // Refresh runs ReconcileCounters and updates the lifecycle state.
-// No-op if another refresh is already in flight.
+// No-op if another refresh is already in flight. On failure the snapshot moves
+// to StatsStatusError, preserves LastReconciledAt from the previous good run,
+// and records the error message in LastError.
 func (sc *StatsCache) Refresh() {
 	if !sc.refreshMu.TryLock() {
 		return
@@ -58,6 +62,13 @@ func (sc *StatsCache) Refresh() {
 	start := time.Now()
 	if err := sc.cache.ReconcileCounters(); err != nil {
 		log.Errorf("%s Reconcile failed: %v", logcolors.LogCache, err)
+		prev := sc.value.Load()
+		sc.value.Store(&CachedStats{
+			Status:           StatsStatusError,
+			LastReconciledAt: prev.LastReconciledAt,
+			LastDurationMs:   time.Since(start).Milliseconds(),
+			LastError:        err.Error(),
+		})
 		return
 	}
 	sc.value.Store(&CachedStats{
@@ -73,7 +84,11 @@ func (sc *StatsCache) StartBackgroundRefresh(interval time.Duration, stop <-chan
 	go func() {
 		log.Infof("%s Seeding counters (reconcile cadence: %s)", logcolors.LogCache, interval)
 		sc.Refresh()
-		log.Infof("%s Counter seed complete (took %dms)", logcolors.LogCache, sc.Get().LastDurationMs)
+		if snap := sc.Get(); snap.Status == StatsStatusReady {
+			log.Infof("%s Counter seed complete (took %dms)", logcolors.LogCache, snap.LastDurationMs)
+		} else {
+			log.Errorf("%s Counter seed FAILED (status=%s): %s", logcolors.LogCache, snap.Status, snap.LastError)
+		}
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -81,7 +96,11 @@ func (sc *StatsCache) StartBackgroundRefresh(interval time.Duration, stop <-chan
 			select {
 			case <-ticker.C:
 				sc.Refresh()
-				log.Infof("%s Counters reconciled (took %dms)", logcolors.LogCache, sc.Get().LastDurationMs)
+				if snap := sc.Get(); snap.Status == StatsStatusReady {
+					log.Infof("%s Counters reconciled (took %dms)", logcolors.LogCache, snap.LastDurationMs)
+				} else {
+					log.Errorf("%s Counter reconcile FAILED (status=%s): %s", logcolors.LogCache, snap.Status, snap.LastError)
+				}
 			case <-stop:
 				return
 			}

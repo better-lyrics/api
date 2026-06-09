@@ -67,6 +67,61 @@ func TestStatsCache_ConcurrentRefreshIsSafe(t *testing.T) {
 	}
 }
 
+func TestStatsCache_RefreshOnClosedDBPublishesError(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	// Don't defer cleanup, we close the DB manually below.
+
+	sc := NewStatsCache(pc)
+	// Drive the cache into a state where reconcile must fail by closing the
+	// underlying DB.
+	if err := pc.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sc.Refresh()
+
+	snap := sc.Get()
+	if snap.Status != StatsStatusError {
+		t.Errorf("status = %q, want %q", snap.Status, StatsStatusError)
+	}
+	if snap.LastError == "" {
+		t.Error("expected non-empty LastError")
+	}
+	_ = cleanup // not used, db already closed
+}
+
+func TestStatsCache_RefreshErrorPreservesLastReconciledAt(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+
+	pc.Set("ttml_lyrics:a", "1")
+	sc := NewStatsCache(pc)
+	sc.Refresh()
+
+	goodSnap := sc.Get()
+	if goodSnap.Status != StatsStatusReady {
+		t.Fatalf("setup: status = %q, want %q", goodSnap.Status, StatsStatusReady)
+	}
+	if goodSnap.LastReconciledAt.IsZero() {
+		t.Fatal("setup: LastReconciledAt should be set after successful reconcile")
+	}
+
+	if err := pc.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sc.Refresh()
+
+	errSnap := sc.Get()
+	if errSnap.Status != StatsStatusError {
+		t.Errorf("status = %q, want %q", errSnap.Status, StatsStatusError)
+	}
+	if !errSnap.LastReconciledAt.Equal(goodSnap.LastReconciledAt) {
+		t.Errorf("LastReconciledAt = %v, want %v (preserved from last good reconcile)",
+			errSnap.LastReconciledAt, goodSnap.LastReconciledAt)
+	}
+	_ = cleanup
+}
+
 func TestStatsCache_StartBackgroundRefreshTriggersInitialReconcile(t *testing.T) {
 	pc, _, cleanup := setupTestCache(t, false)
 	defer cleanup()
