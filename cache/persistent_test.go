@@ -635,3 +635,40 @@ func TestCounts_EmptyCacheReturnsEmptyMap(t *testing.T) {
 		t.Errorf("expected empty counts on fresh cache, got %v", counts)
 	}
 }
+
+func TestSet_IncrementsCounterOnNewKey(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	if err := pc.Set("ttml_lyrics:viva la vida coldplay", "<tt/>"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.Set("kugou_lyrics:foo", "lrc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.Set("no_lyrics:bar", `{"reason":"x"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	counts := pc.Counts()
+	if counts["ttml"] != 1 || counts["kugou"] != 1 || counts["negative"] != 1 {
+		t.Errorf("got counts %v, want ttml=1 kugou=1 negative=1", counts)
+	}
+}
+
+func TestSet_DoesNotDoubleCountOnReSet(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	key := "ttml_lyrics:same key"
+	if err := pc.Set(key, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.Set(key, "v2"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := pc.Counts()["ttml"]; got != 1 {
+		t.Errorf("expected ttml=1 after re-Set, got %d", got)
+	}
+}

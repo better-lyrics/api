@@ -176,13 +176,24 @@ func (pc *PersistentCache) Set(key, value string) error {
 		if b == nil {
 			return fmt.Errorf("bucket not found")
 		}
+		counters := tx.Bucket([]byte(countersBucket))
+		if counters == nil {
+			return fmt.Errorf("counters bucket not found")
+		}
 
 		data, err := json.Marshal(entry)
 		if err != nil {
 			return err
 		}
 
-		return b.Put([]byte(key), data)
+		isNew := b.Get([]byte(key)) == nil
+		if err := b.Put([]byte(key), data); err != nil {
+			return err
+		}
+		if isNew {
+			return adjustCounter(counters, prefixOf(key), +1)
+		}
+		return nil
 	})
 }
 
@@ -271,6 +282,22 @@ func (pc *PersistentCache) Counts() map[string]int64 {
 		log.Errorf("%s Failed to read counters: %v", logcolors.LogCache, err)
 	}
 	return counts
+}
+
+// adjustCounter applies delta (typically +1 or -1) to the named counter inside
+// the given counters bucket. Initializes the counter at delta if absent.
+func adjustCounter(b *bolt.Bucket, name string, delta int64) error {
+	var current int64
+	if v := b.Get([]byte(name)); len(v) == 8 {
+		current = int64(binary.BigEndian.Uint64(v))
+	}
+	current += delta
+	if current < 0 {
+		current = 0
+	}
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(current))
+	return b.Put([]byte(name), buf[:])
 }
 
 // Backup creates a backup of the cache database file
