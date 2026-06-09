@@ -218,21 +218,21 @@ func (pc *PersistentCache) Range(fn func(key string, entry CacheEntry) bool) {
 	})
 }
 
-// Stats returns cache statistics
+// Stats returns cache statistics: the number of keys in the bucket and the
+// on-disk size of the database file in KB. Uses bbolt's BucketStats (page-tree
+// walk) for the count instead of ForEach so it stays fast on multi-GB DBs.
 func (pc *PersistentCache) Stats() (numKeys int, sizeInKB int) {
 	pc.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketName))
 		if b == nil {
 			return nil
 		}
-
-		return b.ForEach(func(k, v []byte) error {
-			numKeys++
-			sizeInKB += len(k) + len(v)
-			return nil
-		})
+		numKeys = b.Stats().KeyN
+		return nil
 	})
-	sizeInKB = sizeInKB / 1024
+	if info, err := os.Stat(pc.dbPath); err == nil {
+		sizeInKB = int(info.Size() / 1024)
+	}
 	return
 }
 
