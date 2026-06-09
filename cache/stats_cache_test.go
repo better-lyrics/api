@@ -6,34 +6,26 @@ import (
 	"time"
 )
 
-func TestStatsCache_InitialStateIsComputing(t *testing.T) {
+func TestStatsCache_InitialStateIsSeeding(t *testing.T) {
 	pc, _, cleanup := setupTestCache(t, false)
 	defer cleanup()
 
 	sc := NewStatsCache(pc)
 	snap := sc.Get()
-
-	if snap == nil {
-		t.Fatal("expected snapshot, got nil")
+	if snap.Status != StatsStatusSeeding {
+		t.Errorf("status = %q, want %q", snap.Status, StatsStatusSeeding)
 	}
-	if snap.Status != StatsStatusComputing {
-		t.Errorf("expected status %q, got %q", StatsStatusComputing, snap.Status)
-	}
-	if snap.NumKeys != 0 {
-		t.Errorf("expected 0 keys before first refresh, got %d", snap.NumKeys)
-	}
-	if !snap.ComputedAt.IsZero() {
-		t.Errorf("expected zero ComputedAt before first refresh, got %v", snap.ComputedAt)
+	if !snap.LastReconciledAt.IsZero() {
+		t.Errorf("LastReconciledAt should be zero before first reconcile, got %v", snap.LastReconciledAt)
 	}
 }
 
-func TestStatsCache_RefreshPopulatesFromUnderlyingCache(t *testing.T) {
+func TestStatsCache_RefreshMovesStatusToReady(t *testing.T) {
 	pc, _, cleanup := setupTestCache(t, false)
 	defer cleanup()
 
-	pc.Set("a", "1")
-	pc.Set("b", "2")
-	pc.Set("c", "3")
+	pc.Set("ttml_lyrics:a", "1")
+	pc.Set("kugou_lyrics:b", "2")
 
 	sc := NewStatsCache(pc)
 	before := time.Now()
@@ -41,62 +33,23 @@ func TestStatsCache_RefreshPopulatesFromUnderlyingCache(t *testing.T) {
 
 	snap := sc.Get()
 	if snap.Status != StatsStatusReady {
-		t.Errorf("expected status %q after refresh, got %q", StatsStatusReady, snap.Status)
+		t.Errorf("status = %q, want %q", snap.Status, StatsStatusReady)
 	}
-	if snap.NumKeys != 3 {
-		t.Errorf("expected 3 keys, got %d", snap.NumKeys)
-	}
-	if snap.ComputedAt.Before(before) {
-		t.Errorf("expected ComputedAt >= %v, got %v", before, snap.ComputedAt)
-	}
-}
-
-func TestStatsCache_RefreshReflectsCacheGrowth(t *testing.T) {
-	pc, _, cleanup := setupTestCache(t, false)
-	defer cleanup()
-
-	sc := NewStatsCache(pc)
-	sc.Refresh()
-	if got := sc.Get().NumKeys; got != 0 {
-		t.Fatalf("expected 0 keys initially, got %d", got)
+	if snap.LastReconciledAt.Before(before) {
+		t.Errorf("LastReconciledAt = %v, expected >= %v", snap.LastReconciledAt, before)
 	}
 
-	pc.Set("a", "1")
-	pc.Set("b", "2")
-	sc.Refresh()
-
-	if got := sc.Get().NumKeys; got != 2 {
-		t.Errorf("expected 2 keys after adding entries, got %d", got)
+	counts := pc.Counts()
+	if counts["ttml"] != 1 || counts["kugou"] != 1 {
+		t.Errorf("after reconcile: got %v, want ttml=1 kugou=1", counts)
 	}
-}
-
-func TestStatsCache_GetIsConcurrentSafe(t *testing.T) {
-	pc, _, cleanup := setupTestCache(t, false)
-	defer cleanup()
-
-	pc.Set("a", "1")
-	sc := NewStatsCache(pc)
-	sc.Refresh()
-
-	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			snap := sc.Get()
-			if snap.NumKeys != 1 {
-				t.Errorf("expected 1 key, got %d", snap.NumKeys)
-			}
-		}()
-	}
-	wg.Wait()
 }
 
 func TestStatsCache_ConcurrentRefreshIsSafe(t *testing.T) {
 	pc, _, cleanup := setupTestCache(t, false)
 	defer cleanup()
 
-	pc.Set("a", "1")
+	pc.Set("ttml_lyrics:a", "1")
 	sc := NewStatsCache(pc)
 
 	var wg sync.WaitGroup
@@ -109,21 +62,72 @@ func TestStatsCache_ConcurrentRefreshIsSafe(t *testing.T) {
 	}
 	wg.Wait()
 
-	snap := sc.Get()
-	if snap.Status != StatsStatusReady {
-		t.Errorf("expected status %q, got %q", StatsStatusReady, snap.Status)
-	}
-	if snap.NumKeys != 1 {
-		t.Errorf("expected 1 key, got %d", snap.NumKeys)
+	if sc.Get().Status != StatsStatusReady {
+		t.Errorf("status = %q, want ready", sc.Get().Status)
 	}
 }
 
-func TestStatsCache_StartBackgroundRefreshSeedsInitialScan(t *testing.T) {
+func TestStatsCache_RefreshOnClosedDBPublishesError(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	// Don't defer cleanup, we close the DB manually below.
+
+	sc := NewStatsCache(pc)
+	// Drive the cache into a state where reconcile must fail by closing the
+	// underlying DB.
+	if err := pc.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sc.Refresh()
+
+	snap := sc.Get()
+	if snap.Status != StatsStatusError {
+		t.Errorf("status = %q, want %q", snap.Status, StatsStatusError)
+	}
+	if snap.LastError == "" {
+		t.Error("expected non-empty LastError")
+	}
+	_ = cleanup // not used, db already closed
+}
+
+func TestStatsCache_RefreshErrorPreservesLastReconciledAt(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+
+	pc.Set("ttml_lyrics:a", "1")
+	sc := NewStatsCache(pc)
+	sc.Refresh()
+
+	goodSnap := sc.Get()
+	if goodSnap.Status != StatsStatusReady {
+		t.Fatalf("setup: status = %q, want %q", goodSnap.Status, StatsStatusReady)
+	}
+	if goodSnap.LastReconciledAt.IsZero() {
+		t.Fatal("setup: LastReconciledAt should be set after successful reconcile")
+	}
+
+	if err := pc.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sc.Refresh()
+
+	errSnap := sc.Get()
+	if errSnap.Status != StatsStatusError {
+		t.Errorf("status = %q, want %q", errSnap.Status, StatsStatusError)
+	}
+	if !errSnap.LastReconciledAt.Equal(goodSnap.LastReconciledAt) {
+		t.Errorf("LastReconciledAt = %v, want %v (preserved from last good reconcile)",
+			errSnap.LastReconciledAt, goodSnap.LastReconciledAt)
+	}
+	_ = cleanup
+}
+
+func TestStatsCache_StartBackgroundRefreshTriggersInitialReconcile(t *testing.T) {
 	pc, _, cleanup := setupTestCache(t, false)
 	defer cleanup()
 
-	pc.Set("a", "1")
-	pc.Set("b", "2")
+	pc.Set("ttml_lyrics:a", "1")
+	pc.Set("ttml_lyrics:b", "2")
 
 	sc := NewStatsCache(pc)
 	stop := make(chan struct{})
@@ -138,11 +142,7 @@ func TestStatsCache_StartBackgroundRefreshSeedsInitialScan(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	snap := sc.Get()
-	if snap.Status != StatsStatusReady {
-		t.Fatalf("expected background refresh to complete within deadline; status %q", snap.Status)
-	}
-	if snap.NumKeys != 2 {
-		t.Errorf("expected 2 keys, got %d", snap.NumKeys)
+	if sc.Get().Status != StatsStatusReady {
+		t.Fatalf("initial reconcile did not complete; status %q", sc.Get().Status)
 	}
 }

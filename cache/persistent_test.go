@@ -1,10 +1,14 @@
 package cache
 
 import (
+	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 // setupTestCache creates a temporary cache for testing
@@ -605,5 +609,187 @@ func TestDeleteBackup_InvalidFile(t *testing.T) {
 	err = cache.DeleteBackup("invalid_backup.txt")
 	if err == nil {
 		t.Error("Expected error when deleting non-.db file")
+	}
+}
+
+func TestCountersBucketExists(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	err := pc.db.View(func(tx *bolt.Tx) error {
+		if b := tx.Bucket([]byte("counters")); b == nil {
+			return fmt.Errorf("counters bucket missing")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCounts_EmptyCacheReturnsEmptyMap(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	counts := pc.Counts()
+	if len(counts) != 0 {
+		t.Errorf("expected empty counts on fresh cache, got %v", counts)
+	}
+}
+
+func TestSet_IncrementsCounterOnNewKey(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	if err := pc.Set("ttml_lyrics:viva la vida coldplay", "<tt/>"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.Set("kugou_lyrics:foo", "lrc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.Set("no_lyrics:bar", `{"reason":"x"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	counts := pc.Counts()
+	if counts["ttml"] != 1 || counts["kugou"] != 1 || counts["negative"] != 1 {
+		t.Errorf("got counts %v, want ttml=1 kugou=1 negative=1", counts)
+	}
+}
+
+func TestSet_DoesNotDoubleCountOnReSet(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	key := "ttml_lyrics:same key"
+	if err := pc.Set(key, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.Set(key, "v2"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := pc.Counts()["ttml"]; got != 1 {
+		t.Errorf("expected ttml=1 after re-Set, got %d", got)
+	}
+}
+
+func TestDelete_DecrementsCounter(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	key := "ttml_lyrics:song"
+	if err := pc.Set(key, "v"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 1 {
+		t.Fatalf("setup: expected ttml=1, got %d", got)
+	}
+	if err := pc.Delete(key); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 0 {
+		t.Errorf("after delete: expected ttml=0, got %d", got)
+	}
+}
+
+func TestDelete_OnMissingKeyIsNoop(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	if err := pc.Delete("ttml_lyrics:does not exist"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 0 {
+		t.Errorf("expected ttml=0, got %d", got)
+	}
+}
+
+func TestReconcileCounters_CorrectsDrift(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	// Insert directly via the underlying bucket so counters are NOT bumped.
+	// This simulates pre-counter data or drift.
+	keys := []string{
+		"ttml_lyrics:a", "ttml_lyrics:b", "ttml_lyrics:c",
+		"kugou_lyrics:x",
+		"no_lyrics:y", "no_lyrics:z",
+	}
+	if err := pc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketName))
+		for _, k := range keys {
+			if err := b.Put([]byte(k), []byte(`{}`)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := pc.Counts()["ttml"]; got != 0 {
+		t.Fatalf("setup invariant: counters should still be empty, got ttml=%d", got)
+	}
+
+	if err := pc.ReconcileCounters(); err != nil {
+		t.Fatal(err)
+	}
+
+	counts := pc.Counts()
+	if counts["ttml"] != 3 || counts["kugou"] != 1 || counts["negative"] != 2 {
+		t.Errorf("after reconcile: got %v, want ttml=3 kugou=1 negative=2", counts)
+	}
+}
+
+func TestClear_ResetsCounters(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	if err := pc.Set("ttml_lyrics:x", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 1 {
+		t.Fatalf("setup: ttml=%d, want 1", got)
+	}
+	if err := pc.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts(); len(got) != 0 {
+		t.Errorf("after Clear: counts should be empty, got %v", got)
+	}
+}
+
+func TestReconcileCounters_WipesStaleCounters(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	// Seed a deliberately-wrong counter value to ensure reconcile wipes it.
+	if err := pc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(countersBucket))
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], 999)
+		return b.Put([]byte("ttml"), buf[:])
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 999 {
+		t.Fatalf("setup: expected ttml=999, got %d", got)
+	}
+
+	// Insert one real key directly, bypassing Set, so reconcile must compute the
+	// truth from the cache bucket alone.
+	if err := pc.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(bucketName)).Put([]byte("ttml_lyrics:real"), []byte(`{}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pc.ReconcileCounters(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := pc.Counts()["ttml"]; got != 1 {
+		t.Errorf("after reconcile: expected ttml=1 (wiped from 999), got %d", got)
 	}
 }
