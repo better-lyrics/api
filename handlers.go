@@ -505,12 +505,16 @@ func getStats(w http.ResponseWriter, r *http.Request) {
 	s := stats.Get()
 	snapshot := s.Snapshot()
 
-	// Add cache storage info
-	numKeys, sizeInKB := persistentCache.Stats()
+	// Add cache storage info. Reads the cached snapshot computed in the background
+	// every 6h so this endpoint never blocks on a full bucket scan.
+	cs := cacheStats.Get()
 	snapshot["cache_storage"] = map[string]interface{}{
-		"keys":    numKeys,
-		"size_kb": sizeInKB,
-		"size_mb": float64(sizeInKB) / 1024,
+		"keys":        cs.NumKeys,
+		"size_kb":     cs.SizeKB,
+		"size_mb":     float64(cs.SizeKB) / 1024,
+		"status":      cs.Status,
+		"computed_at": cs.ComputedAt,
+		"duration_ms": cs.DurationMs,
 	}
 
 	// Add circuit breaker status
@@ -708,16 +712,17 @@ func restoreCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get new cache stats after restore
-	numKeys, sizeKB := persistentCache.Stats()
+	// Refresh the cached stats snapshot so /stats reflects the restored state.
+	cacheStats.Refresh()
+	cs := cacheStats.Get()
 
 	log.Infof("%s Cache restored from backup: %s", logcolors.LogCacheRestore, backupFileName)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":       "Cache restored successfully",
 		"restored_from": backupFileName,
-		"keys_restored": numKeys,
-		"size_kb":       sizeKB,
+		"keys_restored": cs.NumKeys,
+		"size_kb":       cs.SizeKB,
 	})
 }
 
