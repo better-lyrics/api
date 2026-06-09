@@ -284,6 +284,15 @@ func (pc *PersistentCache) Stats() (numKeys int, sizeInKB int) {
 	return
 }
 
+// SizeKB returns the on-disk size of the database file in KB.
+func (pc *PersistentCache) SizeKB() int {
+	info, err := os.Stat(pc.dbPath)
+	if err != nil {
+		return 0
+	}
+	return int(info.Size() / 1024)
+}
+
 // Counts returns the current per-prefix key counts read from the counters
 // bucket. Always non-nil. Microseconds to execute regardless of cache size.
 func (pc *PersistentCache) Counts() map[string]int64 {
