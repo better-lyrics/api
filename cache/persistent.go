@@ -16,6 +16,7 @@ import (
 )
 
 const bucketName = "cache"
+const countersBucket = "counters"
 
 // PersistentCache wraps BoltDB for persistent storage
 // Note: No in-memory cache layer - BoltDB uses mmap so OS handles caching
@@ -73,6 +74,15 @@ func NewPersistentCache(dbPath string, backupPath string, compressionEnabled boo
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to create cache bucket: %v", err)
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(countersBucket))
+		return err
+	})
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create counters bucket: %v", err)
 	}
 
 	pc := &PersistentCache{

@@ -1,10 +1,13 @@
 package cache
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 // setupTestCache creates a temporary cache for testing
@@ -605,5 +608,20 @@ func TestDeleteBackup_InvalidFile(t *testing.T) {
 	err = cache.DeleteBackup("invalid_backup.txt")
 	if err == nil {
 		t.Error("Expected error when deleting non-.db file")
+	}
+}
+
+func TestCountersBucketExists(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	err := pc.db.View(func(tx *bolt.Tx) error {
+		if b := tx.Bucket([]byte("counters")); b == nil {
+			return fmt.Errorf("counters bucket missing")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
