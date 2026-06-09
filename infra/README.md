@@ -51,6 +51,7 @@ Logs go to `/var/log/bli-bootstrap.log`. Phases are idempotent: re-running recon
 These happen outside the box and stay manual:
 
 - **Provision the Hetzner instance** with `hcloud server create --type cax21 --image ubuntu-24.04 --location hel1 ...`
+- **(Optional) Attach a data Volume.** The CAX21's 80GB root disk fills up once `cache.db` and its daily backups grow. Create a Hetzner Cloud Volume in the same location (50GB+ recommended), attach it to this server with auto-mount enabled (ext4), and set `LYRICS_API_VOLUME_ID` in `secrets.env`. Phase 11 picks it up, migrates any existing `/var/lib/lyrics-api` contents onto it, and adds a fstab bind mount so DB and backup writes land on the volume.
 - **DNS records in Cloudflare** for the five hostnames in `secrets.env` (primary, staging, logs, metrics, keep) plus the preview wildcard, all proxied (orange cloud)
 - **Beszel hub** running somewhere reachable, with an agent slot for this host. The hub UI hands you the KEY/TOKEN pair for `secrets.env`.
 - **keep first-run setup**. After phase 05 puts keep up at `https://$KEEP_DOMAIN`, browse to it and complete `/setup`: pick a master password (save it to a password manager), scan TOTP, save the 8 recovery codes offline. Then create project `lyrics-api`, env `prod`, bulk-import the env via the .env paste UI.
