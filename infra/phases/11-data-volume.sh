@@ -42,6 +42,12 @@ else
         if systemctl is-active --quiet lyrics-api; then
             WAS_RUNNING=1
             systemctl stop lyrics-api
+            # Arm a restart trap before any operation that could fail mid-migration
+            # (rsync, mv, mount, etc.). The trap fires on every script exit path,
+            # so the service always comes back up, even if a later step blows up.
+            # Idempotent: systemctl start is a no-op if the service is already
+            # running by the time the trap fires on a successful run.
+            trap 'systemctl start lyrics-api' EXIT
         fi
         rsync -aHAX --info=progress2 "${APP_DIR}/" "${VOL_SUBDIR}/"
         BACKUP_NAME="${APP_DIR}.pre-volume.$(date -u +%Y%m%d-%H%M%S)"
