@@ -14,6 +14,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	bolt "go.etcd.io/bbolt"
+	bbolterrors "go.etcd.io/bbolt/errors"
 )
 
 const bucketName = "cache"
@@ -300,6 +301,8 @@ func (pc *PersistentCache) Counts() map[string]int64 {
 // counts, and atomically replaces the counters bucket contents. Expensive: cost
 // scales with leaf-page count of the cache bucket (multi-minute on multi-GB
 // DBs). Safe to call concurrently with Set/Delete: the swap happens in one txn.
+// Note: any Set/Delete deltas applied between the scan and the swap will be
+// overwritten by the snapshot. The next reconcile run self-corrects.
 func (pc *PersistentCache) ReconcileCounters() error {
 	fresh := make(map[string]int64)
 	if err := pc.db.View(func(tx *bolt.Tx) error {
@@ -315,8 +318,8 @@ func (pc *PersistentCache) ReconcileCounters() error {
 		return fmt.Errorf("reconcile: scan failed: %w", err)
 	}
 
-	return pc.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket([]byte(countersBucket)); err != nil && err != bolt.ErrBucketNotFound {
+	if err := pc.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.DeleteBucket([]byte(countersBucket)); err != nil && err != bbolterrors.ErrBucketNotFound {
 			return err
 		}
 		b, err := tx.CreateBucket([]byte(countersBucket))
@@ -331,7 +334,10 @@ func (pc *PersistentCache) ReconcileCounters() error {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("reconcile: swap failed: %w", err)
+	}
+	return nil
 }
 
 // adjustCounter applies delta (typically +1 or -1) to the named counter inside

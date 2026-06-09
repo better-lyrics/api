@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -738,5 +739,39 @@ func TestReconcileCounters_CorrectsDrift(t *testing.T) {
 	counts := pc.Counts()
 	if counts["ttml"] != 3 || counts["kugou"] != 1 || counts["negative"] != 2 {
 		t.Errorf("after reconcile: got %v, want ttml=3 kugou=1 negative=2", counts)
+	}
+}
+
+func TestReconcileCounters_WipesStaleCounters(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	// Seed a deliberately-wrong counter value to ensure reconcile wipes it.
+	if err := pc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(countersBucket))
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], 999)
+		return b.Put([]byte("ttml"), buf[:])
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := pc.Counts()["ttml"]; got != 999 {
+		t.Fatalf("setup: expected ttml=999, got %d", got)
+	}
+
+	// Insert one real key directly, bypassing Set, so reconcile must compute the
+	// truth from the cache bucket alone.
+	if err := pc.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(bucketName)).Put([]byte("ttml_lyrics:real"), []byte(`{}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pc.ReconcileCounters(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := pc.Counts()["ttml"]; got != 1 {
+		t.Errorf("after reconcile: expected ttml=1 (wiped from 999), got %d", got)
 	}
 }
