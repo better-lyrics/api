@@ -625,3 +625,13 @@ func TestCountersBucketExists(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCounts_EmptyCacheReturnsEmptyMap(t *testing.T) {
+	pc, _, cleanup := setupTestCache(t, false)
+	defer cleanup()
+
+	counts := pc.Counts()
+	if len(counts) != 0 {
+		t.Errorf("expected empty counts on fresh cache, got %v", counts)
+	}
+}

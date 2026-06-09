@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -248,6 +249,28 @@ func (pc *PersistentCache) Stats() (numKeys int, sizeInKB int) {
 		sizeInKB = int(info.Size() / 1024)
 	}
 	return
+}
+
+// Counts returns the current per-prefix key counts read from the counters
+// bucket. Always non-nil. Microseconds to execute regardless of cache size.
+func (pc *PersistentCache) Counts() map[string]int64 {
+	counts := make(map[string]int64)
+	if err := pc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(countersBucket))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			if len(v) != 8 {
+				return nil
+			}
+			counts[string(k)] = int64(binary.BigEndian.Uint64(v))
+			return nil
+		})
+	}); err != nil {
+		log.Errorf("%s Failed to read counters: %v", logcolors.LogCache, err)
+	}
+	return counts
 }
 
 // Backup creates a backup of the cache database file
