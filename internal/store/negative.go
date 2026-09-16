@@ -19,6 +19,10 @@ type NegativeTTL struct {
 	NewSongThresholdDays int
 }
 
+func NegativeTTLSeconds(e NegativeEntry, cfg NegativeTTL, now time.Time) int64 {
+	return negativeTTLSeconds(e, cfg, now)
+}
+
 func negativeTTLSeconds(e NegativeEntry, cfg NegativeTTL, now time.Time) int64 {
 	defaultTTL := int64(cfg.DefaultDays) * 24 * 60 * 60
 
@@ -57,16 +61,16 @@ func (s *Store) SetNegative(ctx context.Context, cacheKey string, k Key, e Negat
 	expiresAt := time.Now().Add(time.Duration(ttl) * time.Second)
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO negative_cache (cache_key, provider, song, artist, album, duration_sec,
+		INSERT INTO negative_cache (cache_key, provider, base_key, duration_sec,
 		                            reason, release_date, has_time_synced_known, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8)
 		ON CONFLICT (cache_key) DO UPDATE SET
 			reason                = EXCLUDED.reason,
 			release_date          = EXCLUDED.release_date,
 			has_time_synced_known = EXCLUDED.has_time_synced_known,
 			created_at            = now(),
 			expires_at            = EXCLUDED.expires_at`,
-		cacheKey, k.Provider, k.Song, k.Artist, k.Album, k.DurationSec,
+		cacheKey, k.Provider, k.BaseKey, k.DurationSec,
 		e.Reason, e.ReleaseDate, e.HasTimeSyncedKnown, expiresAt)
 	return err
 }
@@ -97,13 +101,13 @@ func (s *Store) GetNegativeTolerant(ctx context.Context, k Key, deltaSec int) (s
 	var reason, cacheKey string
 	err := s.pool.QueryRow(ctx, `
 		SELECT cache_key, reason FROM negative_cache
-		WHERE provider = $1 AND song = $2 AND artist = $3 AND album = $4
+		WHERE base_key = $1
 		  AND duration_sec IS NOT NULL
-		  AND duration_sec BETWEEN $5 AND $6
+		  AND duration_sec BETWEEN $2 AND $3
 		  AND expires_at > now()
-		ORDER BY abs(duration_sec - $7), duration_sec ASC
+		ORDER BY abs(duration_sec - $4), duration_sec ASC
 		LIMIT 1`,
-		k.Provider, k.Song, k.Artist, k.Album, target-deltaSec, target+deltaSec, target).
+		k.BaseKey, target-deltaSec, target+deltaSec, target).
 		Scan(&cacheKey, &reason)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", false, nil

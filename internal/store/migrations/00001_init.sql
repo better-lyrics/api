@@ -2,9 +2,7 @@
 CREATE TABLE lyrics (
     cache_key         TEXT PRIMARY KEY,
     provider          TEXT NOT NULL,
-    song              TEXT NOT NULL,
-    artist            TEXT NOT NULL,
-    album             TEXT NOT NULL DEFAULT '',
+    base_key          TEXT NOT NULL,
     duration_sec      INTEGER,
     raw_lyrics        BYTEA NOT NULL,
     track_duration_ms INTEGER NOT NULL DEFAULT 0,
@@ -15,22 +13,20 @@ CREATE TABLE lyrics (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX lyrics_tolerance_idx ON lyrics (provider, song, artist, album, duration_sec);
+CREATE INDEX lyrics_tolerance_idx ON lyrics (base_key, duration_sec);
 
 CREATE TABLE negative_cache (
-    cache_key              TEXT PRIMARY KEY,
-    provider               TEXT NOT NULL,
-    song                   TEXT NOT NULL,
-    artist                 TEXT NOT NULL,
-    album                  TEXT NOT NULL DEFAULT '',
-    duration_sec           INTEGER,
-    reason                 TEXT NOT NULL,
-    release_date           TEXT NOT NULL DEFAULT '',
-    has_time_synced_known  BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at             TIMESTAMPTZ NOT NULL
+    cache_key             TEXT PRIMARY KEY,
+    provider              TEXT NOT NULL,
+    base_key              TEXT NOT NULL,
+    duration_sec          INTEGER,
+    reason                TEXT NOT NULL,
+    release_date          TEXT NOT NULL DEFAULT '',
+    has_time_synced_known BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at            TIMESTAMPTZ NOT NULL
 );
-CREATE INDEX negative_cache_tolerance_idx ON negative_cache (provider, song, artist, album, duration_sec);
+CREATE INDEX negative_cache_tolerance_idx ON negative_cache (base_key, duration_sec);
 CREATE INDEX negative_cache_expires_idx ON negative_cache (expires_at);
 
 CREATE TABLE song_metadata (

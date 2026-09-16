@@ -9,10 +9,10 @@ import (
 func TestCounts_ReflectLyricsInserts(t *testing.T) {
 	resetTables(t)
 	ctx := context.Background()
-	if err := testStore.SetLyrics(ctx, "ttml_lyrics:a b", Key{Provider: "ttml", Song: "a", Artist: "b"}, CachedLyrics{TTML: "<tt>1</tt>"}); err != nil {
+	if err := testStore.SetLyrics(ctx, "ttml_lyrics:a b", Key{Provider: "ttml", BaseKey: "ttml_lyrics:a b"}, CachedLyrics{TTML: "<tt>1</tt>"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := testStore.SetLyrics(ctx, "kugou_lyrics:c d", Key{Provider: "kugou", Song: "c", Artist: "d"}, CachedLyrics{TTML: "[00:01]x"}); err != nil {
+	if err := testStore.SetLyrics(ctx, "kugou_lyrics:c d", Key{Provider: "kugou", BaseKey: "kugou_lyrics:c d"}, CachedLyrics{TTML: "[00:01]x"}); err != nil {
 		t.Fatal(err)
 	}
 	counts, err := testStore.Counts(ctx)

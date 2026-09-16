@@ -8,9 +8,10 @@ import (
 
 func setDurationVariant(t *testing.T, song, artist string, sec int, ttml string) string {
 	t.Helper()
-	key := fmt.Sprintf("ttml_lyrics:%s %s %ds", song, artist, sec)
+	base := fmt.Sprintf("ttml_lyrics:%s %s", song, artist)
+	key := fmt.Sprintf("%s %ds", base, sec)
 	err := testStore.SetLyrics(context.Background(), key,
-		Key{Provider: "ttml", Song: song, Artist: artist, DurationSec: ptr(sec)},
+		Key{Provider: "ttml", BaseKey: base, DurationSec: ptr(sec)},
 		CachedLyrics{TTML: ttml, TrackDurationMs: sec * 1000, Format: "ttml"})
 	if err != nil {
 		t.Fatalf("seed duration %d: %v", sec, err)
@@ -23,7 +24,7 @@ func TestLyrics_SetGetExact(t *testing.T) {
 	ctx := context.Background()
 	key := "ttml_lyrics:shape of you ed sheeran"
 	in := CachedLyrics{TTML: "<tt>hello</tt>", TrackDurationMs: 180000, Score: 0.95, Language: "en", Format: "ttml"}
-	if err := testStore.SetLyrics(ctx, key, Key{Provider: "ttml", Song: "shape of you", Artist: "ed sheeran"}, in); err != nil {
+	if err := testStore.SetLyrics(ctx, key, Key{Provider: "ttml", BaseKey: key}, in); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	got, ok, err := testStore.GetLyricsExact(ctx, key)
@@ -52,17 +53,16 @@ func TestLyrics_EdgeCases(t *testing.T) {
 	cases := []struct {
 		name string
 		key  string
-		k    Key
 		l    CachedLyrics
 	}{
-		{"empty_album", "ttml_lyrics:a b", Key{Provider: "ttml", Song: "a", Artist: "b"}, CachedLyrics{TTML: "<tt>x</tt>", Format: "ttml"}},
-		{"zero_duration_field", "ttml_lyrics:c d", Key{Provider: "ttml", Song: "c", Artist: "d"}, CachedLyrics{TTML: "<tt>y</tt>"}},
-		{"unicode", "ttml_lyrics:粉红色的回忆 韩宝仪", Key{Provider: "ttml", Song: "粉红色的回忆", Artist: "韩宝仪"}, CachedLyrics{TTML: "<tt>回忆</tt>", Language: "zh"}},
-		{"empty_ttml", "ttml_lyrics:e f", Key{Provider: "ttml", Song: "e", Artist: "f"}, CachedLyrics{TTML: ""}},
+		{"empty_album", "ttml_lyrics:a b", CachedLyrics{TTML: "<tt>x</tt>", Format: "ttml"}},
+		{"zero_duration_field", "ttml_lyrics:c d", CachedLyrics{TTML: "<tt>y</tt>"}},
+		{"unicode", "ttml_lyrics:粉红色的回忆 韩宝仪", CachedLyrics{TTML: "<tt>回忆</tt>", Language: "zh"}},
+		{"empty_ttml", "ttml_lyrics:e f", CachedLyrics{TTML: ""}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if err := testStore.SetLyrics(ctx, c.key, c.k, c.l); err != nil {
+			if err := testStore.SetLyrics(ctx, c.key, Key{Provider: "ttml", BaseKey: c.key}, c.l); err != nil {
 				t.Fatalf("set: %v", err)
 			}
 			got, ok, err := testStore.GetLyricsExact(ctx, c.key)
@@ -80,7 +80,7 @@ func TestLyrics_SentinelRoundTrips(t *testing.T) {
 	resetTables(t)
 	ctx := context.Background()
 	key := "ttml_lyrics:sentinel song x"
-	if err := testStore.SetLyrics(ctx, key, Key{Provider: "ttml", Song: "sentinel song", Artist: "x"},
+	if err := testStore.SetLyrics(ctx, key, Key{Provider: "ttml", BaseKey: key},
 		CachedLyrics{TTML: "__NO_LYRICS__"}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestLyrics_SentinelRoundTrips(t *testing.T) {
 func TestLyrics_DurationTolerance(t *testing.T) {
 	resetTables(t)
 	ctx := context.Background()
-	k := Key{Provider: "ttml", Song: "song", Artist: "artist", DurationSec: ptr(181)}
+	k := Key{Provider: "ttml", BaseKey: "ttml_lyrics:song artist", DurationSec: ptr(181)}
 
 	t.Run("within_delta_returns_match", func(t *testing.T) {
 		resetTables(t)
@@ -118,7 +118,7 @@ func TestLyrics_DurationTolerance(t *testing.T) {
 			t.Fatal(err)
 		}
 		if ok {
-			t.Error("expected miss (179-2=... 178 is 3s away), got hit")
+			t.Error("expected miss (178 is 3s from 181), got hit")
 		}
 	})
 
@@ -151,7 +151,7 @@ func TestLyrics_DurationTolerance(t *testing.T) {
 	t.Run("nil_duration_no_tolerance", func(t *testing.T) {
 		resetTables(t)
 		setDurationVariant(t, "song", "artist", 180, "<tt>180</tt>")
-		_, _, ok, err := testStore.GetLyricsTolerant(ctx, Key{Provider: "ttml", Song: "song", Artist: "artist"}, 2)
+		_, _, ok, err := testStore.GetLyricsTolerant(ctx, Key{Provider: "ttml", BaseKey: "ttml_lyrics:song artist"}, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,11 +164,11 @@ func TestLyrics_DurationTolerance(t *testing.T) {
 func TestLyrics_CounterIncrementsOnNewNotOverwrite(t *testing.T) {
 	resetTables(t)
 	ctx := context.Background()
-	k := Key{Provider: "ttml", Song: "s", Artist: "a"}
+	k := Key{Provider: "ttml", BaseKey: "ttml_lyrics:s a"}
 	if err := testStore.SetLyrics(ctx, "ttml_lyrics:s a", k, CachedLyrics{TTML: "<tt>1</tt>"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := testStore.SetLyrics(ctx, "ttml_lyrics:s2 a", Key{Provider: "ttml", Song: "s2", Artist: "a"}, CachedLyrics{TTML: "<tt>2</tt>"}); err != nil {
+	if err := testStore.SetLyrics(ctx, "ttml_lyrics:s2 a", Key{Provider: "ttml", BaseKey: "ttml_lyrics:s2 a"}, CachedLyrics{TTML: "<tt>2</tt>"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := counterValue(t, "ttml"); got != 2 {

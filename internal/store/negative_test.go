@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -49,7 +50,7 @@ func TestNegative_SetGet(t *testing.T) {
 	ctx := context.Background()
 	cfg := NegativeTTL{DefaultDays: 7, NewSongThresholdDays: 30}
 	key := "ttml_lyrics:neg song neg artist"
-	k := Key{Provider: "ttml", Song: "neg song", Artist: "neg artist"}
+	k := Key{Provider: "ttml", BaseKey: key}
 
 	if err := testStore.SetNegative(ctx, key, k, NegativeEntry{Reason: "Lyrics not available for this track"}, cfg); err != nil {
 		t.Fatalf("set: %v", err)
@@ -68,7 +69,7 @@ func TestNegative_ExpiredIsFiltered(t *testing.T) {
 	ctx := context.Background()
 	cfg := NegativeTTL{DefaultDays: 7, NewSongThresholdDays: 30}
 	key := "ttml_lyrics:expired song x"
-	if err := testStore.SetNegative(ctx, key, Key{Provider: "ttml", Song: "expired song", Artist: "x"},
+	if err := testStore.SetNegative(ctx, key, Key{Provider: "ttml", BaseKey: key},
 		NegativeEntry{Reason: "gone"}, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -89,17 +90,18 @@ func TestNegative_DurationTolerance(t *testing.T) {
 	resetTables(t)
 	ctx := context.Background()
 	cfg := NegativeTTL{DefaultDays: 7, NewSongThresholdDays: 30}
+	base := "ttml_lyrics:s a"
 	set := func(sec int) {
-		key := "ttml_lyrics:s a " + time.Duration(sec).String()
+		key := fmt.Sprintf("%s %ds", base, sec)
 		if err := testStore.SetNegative(ctx, key,
-			Key{Provider: "ttml", Song: "s", Artist: "a", DurationSec: ptr(sec)},
+			Key{Provider: "ttml", BaseKey: base, DurationSec: ptr(sec)},
 			NegativeEntry{Reason: "none"}, cfg); err != nil {
 			t.Fatal(err)
 		}
 	}
 	set(179)
 	set(182)
-	k := Key{Provider: "ttml", Song: "s", Artist: "a", DurationSec: ptr(181)}
+	k := Key{Provider: "ttml", BaseKey: base, DurationSec: ptr(181)}
 	reason, key, ok, err := testStore.GetNegativeTolerant(ctx, k, 3)
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
@@ -111,7 +113,7 @@ func TestNegative_DurationTolerance(t *testing.T) {
 		t.Error("expected a matched cache key")
 	}
 
-	_, _, ok, err = testStore.GetNegativeTolerant(ctx, Key{Provider: "ttml", Song: "s", Artist: "a", DurationSec: ptr(200)}, 2)
+	_, _, ok, err = testStore.GetNegativeTolerant(ctx, Key{Provider: "ttml", BaseKey: base, DurationSec: ptr(200)}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +127,7 @@ func TestNegative_Delete(t *testing.T) {
 	ctx := context.Background()
 	cfg := NegativeTTL{DefaultDays: 7, NewSongThresholdDays: 30}
 	key := "ttml_lyrics:del song x"
-	if err := testStore.SetNegative(ctx, key, Key{Provider: "ttml", Song: "del song", Artist: "x"},
+	if err := testStore.SetNegative(ctx, key, Key{Provider: "ttml", BaseKey: key},
 		NegativeEntry{Reason: "temp"}, cfg); err != nil {
 		t.Fatal(err)
 	}

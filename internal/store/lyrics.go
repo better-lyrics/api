@@ -9,9 +9,7 @@ import (
 
 type Key struct {
 	Provider    string
-	Song        string
-	Artist      string
-	Album       string
+	BaseKey     string
 	DurationSec *int
 }
 
@@ -38,9 +36,9 @@ func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedL
 
 	var inserted bool
 	err = tx.QueryRow(ctx, `
-		INSERT INTO lyrics (cache_key, provider, song, artist, album, duration_sec,
+		INSERT INTO lyrics (cache_key, provider, base_key, duration_sec,
 		                    raw_lyrics, track_duration_ms, score, language, is_rtl, format)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (cache_key) DO UPDATE SET
 			raw_lyrics        = EXCLUDED.raw_lyrics,
 			track_duration_ms = EXCLUDED.track_duration_ms,
@@ -50,7 +48,7 @@ func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedL
 			format            = EXCLUDED.format,
 			updated_at        = now()
 		RETURNING (xmax = 0)`,
-		cacheKey, k.Provider, k.Song, k.Artist, k.Album, k.DurationSec,
+		cacheKey, k.Provider, k.BaseKey, k.DurationSec,
 		blob, l.TrackDurationMs, l.Score, l.Language, l.IsRTL, l.Format,
 	).Scan(&inserted)
 	if err != nil {
@@ -104,12 +102,12 @@ func (s *Store) GetLyricsTolerant(ctx context.Context, k Key, deltaSec int) (Cac
 	err := s.pool.QueryRow(ctx, `
 		SELECT cache_key, raw_lyrics, track_duration_ms, score, language, is_rtl, format
 		FROM lyrics
-		WHERE provider = $1 AND song = $2 AND artist = $3 AND album = $4
+		WHERE base_key = $1
 		  AND duration_sec IS NOT NULL
-		  AND duration_sec BETWEEN $5 AND $6
-		ORDER BY abs(duration_sec - $7), duration_sec ASC
+		  AND duration_sec BETWEEN $2 AND $3
+		ORDER BY abs(duration_sec - $4), duration_sec ASC
 		LIMIT 1`,
-		k.Provider, k.Song, k.Artist, k.Album, target-deltaSec, target+deltaSec, target).
+		k.BaseKey, target-deltaSec, target+deltaSec, target).
 		Scan(&cacheKey, &blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CachedLyrics{}, "", false, nil
