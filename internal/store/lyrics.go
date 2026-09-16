@@ -1,0 +1,125 @@
+package store
+
+import (
+	"context"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type Key struct {
+	Provider    string
+	Song        string
+	Artist      string
+	Album       string
+	DurationSec *int
+}
+
+type CachedLyrics struct {
+	TTML            string
+	TrackDurationMs int
+	Score           float64
+	Language        string
+	IsRTL           bool
+	Format          string
+}
+
+func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedLyrics) error {
+	blob, err := gzipBytes(l.TTML)
+	if err != nil {
+		return err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var inserted bool
+	err = tx.QueryRow(ctx, `
+		INSERT INTO lyrics (cache_key, provider, song, artist, album, duration_sec,
+		                    raw_lyrics, track_duration_ms, score, language, is_rtl, format)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		ON CONFLICT (cache_key) DO UPDATE SET
+			raw_lyrics        = EXCLUDED.raw_lyrics,
+			track_duration_ms = EXCLUDED.track_duration_ms,
+			score             = EXCLUDED.score,
+			language          = EXCLUDED.language,
+			is_rtl            = EXCLUDED.is_rtl,
+			format            = EXCLUDED.format,
+			updated_at        = now()
+		RETURNING (xmax = 0)`,
+		cacheKey, k.Provider, k.Song, k.Artist, k.Album, k.DurationSec,
+		blob, l.TrackDurationMs, l.Score, l.Language, l.IsRTL, l.Format,
+	).Scan(&inserted)
+	if err != nil {
+		return err
+	}
+
+	if inserted {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO counters (prefix, count) VALUES ($1, 1)
+			ON CONFLICT (prefix) DO UPDATE SET count = counters.count + 1`,
+			k.Provider); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (s *Store) GetLyricsExact(ctx context.Context, cacheKey string) (CachedLyrics, bool, error) {
+	var blob []byte
+	var l CachedLyrics
+	err := s.pool.QueryRow(ctx, `
+		SELECT raw_lyrics, track_duration_ms, score, language, is_rtl, format
+		FROM lyrics WHERE cache_key = $1`, cacheKey).
+		Scan(&blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CachedLyrics{}, false, nil
+	}
+	if err != nil {
+		return CachedLyrics{}, false, err
+	}
+	l.TTML, err = gunzipBytes(blob)
+	if err != nil {
+		return CachedLyrics{}, false, err
+	}
+	return l, true, nil
+}
+
+func (s *Store) GetLyricsTolerant(ctx context.Context, k Key, deltaSec int) (CachedLyrics, string, bool, error) {
+	if k.DurationSec == nil {
+		return CachedLyrics{}, "", false, nil
+	}
+	if deltaSec < 1 {
+		deltaSec = 1
+	}
+	target := *k.DurationSec
+
+	var cacheKey string
+	var blob []byte
+	var l CachedLyrics
+	err := s.pool.QueryRow(ctx, `
+		SELECT cache_key, raw_lyrics, track_duration_ms, score, language, is_rtl, format
+		FROM lyrics
+		WHERE provider = $1 AND song = $2 AND artist = $3 AND album = $4
+		  AND duration_sec IS NOT NULL
+		  AND duration_sec BETWEEN $5 AND $6
+		ORDER BY abs(duration_sec - $7), duration_sec ASC
+		LIMIT 1`,
+		k.Provider, k.Song, k.Artist, k.Album, target-deltaSec, target+deltaSec, target).
+		Scan(&cacheKey, &blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CachedLyrics{}, "", false, nil
+	}
+	if err != nil {
+		return CachedLyrics{}, "", false, err
+	}
+	l.TTML, err = gunzipBytes(blob)
+	if err != nil {
+		return CachedLyrics{}, "", false, err
+	}
+	return l, cacheKey, true, nil
+}
