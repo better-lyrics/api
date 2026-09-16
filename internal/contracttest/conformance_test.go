@@ -36,6 +36,12 @@ func TestConformanceCurrentCORS(t *testing.T) {
 	Run(t, base, corsScenarios())
 }
 
+func TestConformanceCurrentAdmin(t *testing.T) {
+	bin := buildServer(t, ".")
+	base := startServer(t, bin, generalProfileEnv())
+	Run(t, base, adminScenarios())
+}
+
 func TestConformanceCurrentAuth(t *testing.T) {
 	bin := buildServer(t, ".")
 	env := authProfileEnv()

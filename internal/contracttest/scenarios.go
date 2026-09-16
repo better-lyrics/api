@@ -181,6 +181,90 @@ func rateLimitScenarios() []Scenario {
 	}
 }
 
+type adminGate struct {
+	method string
+	path   string
+}
+
+func adminScenarios() []Scenario {
+	gates := []adminGate{
+		{http.MethodGet, "/stats"},
+		{http.MethodGet, "/circuit-breaker"},
+		{http.MethodGet, "/circuit-breaker/reset"},
+		{http.MethodGet, "/circuit-breaker/simulate-failure"},
+		{http.MethodGet, "/health/mut"},
+		{http.MethodGet, "/metadata"},
+		{http.MethodGet, "/metadata/stats"},
+		{http.MethodGet, "/metadata/sample"},
+		{http.MethodPost, "/video-map"},
+		{http.MethodGet, "/cache/lookup"},
+		{http.MethodGet, "/cache/keys"},
+		{http.MethodGet, "/cache/debug"},
+		{http.MethodGet, "/cache/backup"},
+		{http.MethodGet, "/cache/backups"},
+		{http.MethodGet, "/cache/restore"},
+		{http.MethodGet, "/cache/clear"},
+		{http.MethodGet, "/cache/migrate"},
+		{http.MethodGet, "/cache/migrate/status"},
+		{http.MethodGet, "/cache/dump"},
+		{http.MethodGet, "/test-notifications"},
+	}
+	s := make([]Scenario, 0, len(gates)+4)
+	for _, g := range gates {
+		s = append(s, Scenario{
+			Name:       "admin_gate_401_" + g.method + "_" + g.path,
+			Method:     g.method,
+			Path:       g.path,
+			WantStatus: http.StatusUnauthorized,
+			WantHeaders: map[string]string{
+				"Content-Type":           plainUTF8,
+				"X-Content-Type-Options": "nosniff",
+			},
+			WantBody: "Unauthorized\n",
+		})
+	}
+	s = append(s,
+		Scenario{
+			Name:        "admin_cache_help_public_200",
+			Path:        "/cache/help",
+			WantStatus:  http.StatusOK,
+			WantHeaders: map[string]string{"Content-Type": "application/json"},
+		},
+		Scenario{
+			Name:       "admin_cache_dump_endpoint_gone_410",
+			Path:       "/cache",
+			WantStatus: http.StatusGone,
+			WantBody: jbody(map[string]interface{}{
+				"error":   "Endpoint removed",
+				"message": "/cache has been removed. Use the alternatives below.",
+				"alternatives": map[string]string{
+					"/stats":                    "Request, cache, and performance statistics",
+					"/cache/keys":               "List cache keys (paginated)",
+					"/cache/debug?key=...":      "Inspect a specific cache entry",
+					"/cache/lookup?s=...&a=...": "Check if a song is cached",
+					"/cache/backup":             "Create a timestamped backup file",
+					"/cache/dump":               "Stream the raw BoltDB file as a download",
+				},
+			}),
+		},
+		Scenario{
+			Name:        "admin_stats_authorized_200",
+			Path:        "/stats",
+			Headers:     map[string]string{"Authorization": "test-admin-token"},
+			WantStatus:  http.StatusOK,
+			WantHeaders: map[string]string{"Content-Type": "application/json"},
+		},
+		Scenario{
+			Name:        "admin_circuit_breaker_authorized_200",
+			Path:        "/circuit-breaker",
+			Headers:     map[string]string{"Authorization": "test-admin-token"},
+			WantStatus:  http.StatusOK,
+			WantHeaders: map[string]string{"Content-Type": "application/json"},
+		},
+	)
+	return s
+}
+
 func seededGetLyricsScenarios() []Scenario {
 	return []Scenario{
 		{
