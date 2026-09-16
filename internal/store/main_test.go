@@ -12,7 +12,10 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-var testDSN string
+var (
+	testDSN   string
+	testStore *Store
+)
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -39,7 +42,21 @@ func TestMain(m *testing.M) {
 	}
 	testDSN = dsn
 
+	testStore, err = New(ctx, dsn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open store: %v\n", err)
+		_ = testcontainers.TerminateContainer(ctr)
+		os.Exit(1)
+	}
+	if err := testStore.Migrate(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "migrate: %v\n", err)
+		_ = testcontainers.TerminateContainer(ctr)
+		os.Exit(1)
+	}
+
 	code := m.Run()
+
+	testStore.Close()
 	_ = testcontainers.TerminateContainer(ctr)
 	os.Exit(code)
 }
