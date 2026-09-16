@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"encoding/json"
 	"net/http"
 	"regexp"
 )
@@ -8,6 +9,52 @@ import (
 const plainUTF8 = "text/plain; charset=utf-8"
 
 var emptyBody = regexp.MustCompile(`^$`)
+
+func jbody(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return string(b) + "\n"
+}
+
+var seedLyricsData = []SeedLyrics{
+	{Song: "Conformance Hit", Artist: "Tester", TTML: "<tt>HIT</tt>"},
+	{Song: "Sentinel Song", Artist: "Tester", TTML: "__NO_LYRICS__"},
+}
+
+var seedNegativeData = []SeedNegative{
+	{Song: "Neg Song", Artist: "Tester", Reason: "Lyrics not available for this track"},
+}
+
+func seededGetLyricsScenarios() []Scenario {
+	return []Scenario{
+		{
+			Name:       "getlyrics_hit_returns_ttml_only",
+			Path:       "/getLyrics?s=Conformance%20Hit&a=Tester",
+			WantStatus: http.StatusOK,
+			WantHeaders: map[string]string{
+				"Content-Type":   "application/json",
+				"X-Cache-Status": "HIT",
+			},
+			WantBody: jbody(map[string]interface{}{"ttml": "<tt>HIT</tt>"}),
+		},
+		{
+			Name:        "getlyrics_sentinel_returns_404",
+			Path:        "/getLyrics?s=Sentinel%20Song&a=Tester",
+			WantStatus:  http.StatusNotFound,
+			WantHeaders: map[string]string{"X-Cache-Status": "HIT"},
+			WantBody:    jbody(map[string]interface{}{"error": "No lyrics available for this track"}),
+		},
+		{
+			Name:        "getlyrics_negative_hit_returns_404",
+			Path:        "/getLyrics?s=Neg%20Song&a=Tester",
+			WantStatus:  http.StatusNotFound,
+			WantHeaders: map[string]string{"X-Cache-Status": "NEGATIVE_HIT"},
+			WantBody:    jbody(map[string]interface{}{"error": "Lyrics not available for this track"}),
+		},
+	}
+}
 
 func smokeScenarios() []Scenario {
 	return []Scenario{
