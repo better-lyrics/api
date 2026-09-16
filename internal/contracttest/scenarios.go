@@ -27,6 +27,160 @@ var seedNegativeData = []SeedNegative{
 	{Song: "Neg Song", Artist: "Tester", Reason: "Lyrics not available for this track"},
 }
 
+var corsAllowedOrigins = []string{
+	"https://music.youtube.com",
+	"http://localhost:3000",
+	"https://lyrics-api-docs.boidu.dev",
+	"https://braccato.boidu.dev",
+	"https://composer.boidu.dev",
+	"https://composer.betterlyrics.org",
+}
+
+func corsScenarios() []Scenario {
+	var s []Scenario
+	for _, origin := range corsAllowedOrigins {
+		s = append(s, Scenario{
+			Name:       "cors_actual_get_allowed_" + origin,
+			Path:       "/health",
+			Headers:    map[string]string{"Origin": origin},
+			WantStatus: http.StatusOK,
+			WantHeaders: map[string]string{
+				"Access-Control-Allow-Origin":      origin,
+				"Access-Control-Allow-Credentials": "true",
+			},
+			AbsentHeaders: []string{"Access-Control-Expose-Headers"},
+		})
+	}
+	s = append(s,
+		Scenario{
+			Name:          "cors_actual_get_disallowed_origin",
+			Path:          "/health",
+			Headers:       map[string]string{"Origin": "https://evil.example"},
+			WantStatus:    http.StatusOK,
+			AbsentHeaders: []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Credentials"},
+		},
+		Scenario{
+			Name:   "cors_preflight_allowed_origin",
+			Method: http.MethodOptions,
+			Path:   "/getLyrics",
+			Headers: map[string]string{
+				"Origin":                        "https://music.youtube.com",
+				"Access-Control-Request-Method": "GET",
+			},
+			WantStatus: http.StatusNoContent,
+			WantHeaders: map[string]string{
+				"Access-Control-Allow-Origin":      "https://music.youtube.com",
+				"Access-Control-Allow-Credentials": "true",
+				"Access-Control-Allow-Methods":     "GET",
+			},
+		},
+		Scenario{
+			Name:   "cors_preflight_disallowed_request_header_aborts",
+			Method: http.MethodOptions,
+			Path:   "/getLyrics",
+			Headers: map[string]string{
+				"Origin":                         "https://music.youtube.com",
+				"Access-Control-Request-Method":  "GET",
+				"Access-Control-Request-Headers": "X-API-Key",
+			},
+			WantStatus:    http.StatusNoContent,
+			AbsentHeaders: []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Methods"},
+		},
+	)
+	return s
+}
+
+func authScenarios() []Scenario {
+	return []Scenario{
+		{
+			Name:       "auth_cache_hit_without_key_is_public",
+			Path:       "/getLyrics?s=Conformance%20Hit&a=Tester",
+			WantStatus: http.StatusOK,
+			WantHeaders: map[string]string{
+				"X-Cache-Status": "HIT",
+				"X-Auth-Mode":    "cache",
+			},
+			WantBody: jbody(map[string]interface{}{"ttml": "<tt>HIT</tt>"}),
+		},
+		{
+			Name:       "auth_cache_hit_with_valid_key_authenticated",
+			Path:       "/getLyrics?s=Conformance%20Hit&a=Tester",
+			Headers:    map[string]string{"X-API-Key": "test-api-key"},
+			WantStatus: http.StatusOK,
+			WantHeaders: map[string]string{
+				"X-Cache-Status": "HIT",
+				"X-Auth-Mode":    "authenticated",
+			},
+			WantBody: jbody(map[string]interface{}{"ttml": "<tt>HIT</tt>"}),
+		},
+		{
+			Name:       "auth_uncached_no_key_401",
+			Path:       "/getLyrics?s=Auth%20Miss&a=Nobody",
+			WantStatus: http.StatusUnauthorized,
+			WantHeaders: map[string]string{
+				"X-Cache-Status": "MISS",
+				"X-Auth-Mode":    "cache",
+			},
+			WantBody: jbody(map[string]interface{}{
+				"error":   "API key required",
+				"message": "Uncached queries require a valid API key via X-API-Key header",
+			}),
+		},
+		{
+			Name:       "auth_uncached_wrong_key_401",
+			Path:       "/getLyrics?s=Auth%20Miss&a=Nobody",
+			Headers:    map[string]string{"X-API-Key": "wrong-key"},
+			WantStatus: http.StatusUnauthorized,
+			WantHeaders: map[string]string{
+				"X-Cache-Status": "MISS",
+				"X-Auth-Mode":    "invalid",
+			},
+			WantBody: jbody(map[string]interface{}{
+				"error":   "Invalid API key",
+				"message": "The provided API key is not valid",
+			}),
+		},
+	}
+}
+
+func rateLimitScenarios() []Scenario {
+	return []Scenario{
+		{
+			Name:        "rl_1_normal_tier_serves_hit",
+			Path:        "/getLyrics?s=Conformance%20Hit&a=Tester",
+			WantStatus:  http.StatusOK,
+			WantHeaders: map[string]string{"X-RateLimit-Type": "normal", "X-Cache-Status": "HIT"},
+		},
+		{
+			Name:       "rl_2_cached_tier_uncached_returns_429_retry60",
+			Path:       "/getLyrics?s=RL%20Miss&a=Nobody",
+			WantStatus: http.StatusTooManyRequests,
+			WantHeaders: map[string]string{
+				"X-RateLimit-Type": "cached",
+				"X-Cache-Status":   "MISS",
+				"Retry-After":      "60",
+			},
+			WantBody: jbody(map[string]interface{}{
+				"error":   "Rate limit exceeded. This request requires cached data, but no cache is available for this query.",
+				"message": "Please try again later or reduce your request rate.",
+			}),
+		},
+		{
+			Name:       "rl_3_both_tiers_exhausted_returns_429_retry1",
+			Path:       "/getLyrics?s=RL%20Miss2&a=Nobody",
+			WantStatus: http.StatusTooManyRequests,
+			WantHeaders: map[string]string{
+				"X-RateLimit-Type":       "exceeded",
+				"X-RateLimit-Remaining":  "0",
+				"Retry-After":            "1",
+				"Content-Type":           plainUTF8,
+				"X-Content-Type-Options": "nosniff",
+			},
+			WantBody: "Too Many Requests\n",
+		},
+	}
+}
+
 func seededGetLyricsScenarios() []Scenario {
 	return []Scenario{
 		{

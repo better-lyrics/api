@@ -133,3 +133,18 @@ func generalProfileEnv() map[string]string {
 		"CACHED_RATE_LIMIT_BURST_LIMIT": "100000",
 	}
 }
+
+func authProfileEnv() map[string]string {
+	env := generalProfileEnv()
+	env["API_KEY_REQUIRED"] = "true"
+	return env
+}
+
+func rateLimitProfileEnv() map[string]string {
+	env := generalProfileEnv()
+	env["RATE_LIMIT_PER_SECOND"] = "1"
+	env["RATE_LIMIT_BURST_LIMIT"] = "1"
+	env["CACHED_RATE_LIMIT_PER_SECOND"] = "1"
+	env["CACHED_RATE_LIMIT_BURST_LIMIT"] = "1"
+	return env
+}

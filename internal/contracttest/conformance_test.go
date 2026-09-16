@@ -13,14 +13,41 @@ func TestConformanceCurrent(t *testing.T) {
 	Run(t, base, smokeScenarios())
 }
 
-func TestConformanceCurrentSeeded(t *testing.T) {
-	bin := buildServer(t, ".")
+func seededDBPath(t *testing.T) string {
+	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "seeded.db")
 	if err := seedCacheDB(dbPath, seedLyricsData, seedNegativeData); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	return dbPath
+}
+
+func TestConformanceCurrentSeeded(t *testing.T) {
+	bin := buildServer(t, ".")
 	env := generalProfileEnv()
-	env["CACHE_DB_PATH"] = dbPath
+	env["CACHE_DB_PATH"] = seededDBPath(t)
 	base := startServer(t, bin, env)
 	Run(t, base, seededGetLyricsScenarios())
+}
+
+func TestConformanceCurrentCORS(t *testing.T) {
+	bin := buildServer(t, ".")
+	base := startServer(t, bin, generalProfileEnv())
+	Run(t, base, corsScenarios())
+}
+
+func TestConformanceCurrentAuth(t *testing.T) {
+	bin := buildServer(t, ".")
+	env := authProfileEnv()
+	env["CACHE_DB_PATH"] = seededDBPath(t)
+	base := startServer(t, bin, env)
+	Run(t, base, authScenarios())
+}
+
+func TestConformanceCurrentRateLimit(t *testing.T) {
+	bin := buildServer(t, ".")
+	env := rateLimitProfileEnv()
+	env["CACHE_DB_PATH"] = seededDBPath(t)
+	base := startServer(t, bin, env)
+	Run(t, base, rateLimitScenarios())
 }
