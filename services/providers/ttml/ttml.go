@@ -140,11 +140,11 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 
 	// Check hasTimeSyncedLyrics to potentially skip the lyrics fetch
 	if track.Attributes.HasTimeSyncedLyrics == nil {
-		// Field absent from API response — log warning and fall through to normal fetch
+		// Field absent from API response: log warning and fall through to normal fetch
 		log.Warnf("%s hasTimeSyncedLyrics field missing from search response for %s - %s, falling back to lyrics fetch",
 			logcolors.LogWarning, track.Attributes.Name, track.Attributes.ArtistName)
 	} else if !*track.Attributes.HasTimeSyncedLyrics {
-		// Explicitly false — skip lyrics fetch entirely (saves an API call)
+		// Explicitly false: skip lyrics fetch entirely (saves an API call)
 		log.Infof("%s Skipping lyrics fetch: hasTimeSyncedLyrics=false for %s - %s",
 			logcolors.LogLyrics, track.Attributes.Name, track.Attributes.ArtistName)
 		return "", trackDurationMs, score, trackMeta, fmt.Errorf("no lyrics data found (hasTimeSyncedLyrics=false)")
