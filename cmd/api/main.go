@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"time"
@@ -41,8 +42,9 @@ func main() {
 		dsn = os.Getenv("POSTGRES_DSN")
 	}
 	if dsn == "" {
-		notifier.PublishServerStartupFailed("store", nil)
-		log.Fatal("DATABASE_URL is not set")
+		err := errors.New("DATABASE_URL is not set")
+		notifier.PublishServerStartupFailed("store", err)
+		log.Fatal(err)
 	}
 
 	ctx := context.Background()
