@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"lyrics-api-go/internal/store"
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/services/notifier"
+	"lyrics-api-go/stats"
 
 	// Register providers via their init().
 	_ "lyrics-api-go/services/providers/kugou"
@@ -55,6 +57,9 @@ func main() {
 		notifier.PublishServerStartupFailed("migrate", err)
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
+
+	loadStats(ctx, st)
+	startStatsAutosave(ctx, st, 5*time.Minute)
 
 	srv := httpapi.New(st, cfg)
 
@@ -112,6 +117,42 @@ func main() {
 	log.Infof("%s Listening on port %s", logcolors.LogServer, port)
 	notifier.PublishServerStarted(port, len(activeAccounts), outOfServiceNames)
 	log.Fatal(httpServer.ListenAndServe())
+}
+
+func loadStats(ctx context.Context, st *store.Store) {
+	raw, err := st.LoadStats(ctx)
+	if err != nil {
+		log.Warnf("%s Failed to load persisted stats: %v", logcolors.LogStats, err)
+		return
+	}
+	if raw == nil {
+		return
+	}
+	var p stats.PersistedStats
+	if err := json.Unmarshal(raw, &p); err != nil {
+		log.Warnf("%s Failed to parse persisted stats: %v", logcolors.LogStats, err)
+		return
+	}
+	stats.Get().Restore(p)
+	log.Infof("%s Loaded persisted stats (total requests: %d)", logcolors.LogStats, p.TotalRequests)
+}
+
+func startStatsAutosave(ctx context.Context, st *store.Store, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			data, err := json.Marshal(stats.Get().Serialize())
+			if err != nil {
+				log.Warnf("%s Failed to marshal stats: %v", logcolors.LogStats, err)
+				continue
+			}
+			if err := st.SaveStats(ctx, data); err != nil {
+				log.Warnf("%s Failed to save stats: %v", logcolors.LogStats, err)
+			}
+		}
+	}()
+	log.Infof("%s Started stats auto-save with interval %v", logcolors.LogStats, interval)
 }
 
 func setupAlertNotifiers() []notifier.Notifier {

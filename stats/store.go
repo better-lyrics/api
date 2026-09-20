@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"lyrics-api-go/config"
@@ -126,59 +125,7 @@ func (s *Store) Load() error {
 		return fmt.Errorf("failed to load stats: %v", err)
 	}
 
-	// Apply persisted values to global stats
-	stats := Get()
-
-	stats.TotalRequests.Store(persisted.TotalRequests)
-	stats.LyricsRequests.Store(persisted.LyricsRequests)
-	stats.CacheRequests.Store(persisted.CacheRequests)
-	stats.StatsRequests.Store(persisted.StatsRequests)
-	stats.HealthRequests.Store(persisted.HealthRequests)
-	stats.OtherRequests.Store(persisted.OtherRequests)
-	stats.CacheHits.Store(persisted.CacheHits)
-	stats.CacheMisses.Store(persisted.CacheMisses)
-	stats.NegativeCacheHits.Store(persisted.NegativeCacheHits)
-	stats.StaleCacheHits.Store(persisted.StaleCacheHits)
-	stats.RateLimitNormal.Store(persisted.RateLimitNormal)
-	stats.RateLimitCached.Store(persisted.RateLimitCached)
-	stats.RateLimitExceeded.Store(persisted.RateLimitExceeded)
-	stats.Status2xx.Store(persisted.Status2xx)
-	stats.Status4xx.Store(persisted.Status4xx)
-	stats.Status5xx.Store(persisted.Status5xx)
-	stats.totalResponseTime.Store(persisted.TotalResponseTime)
-	stats.responseCount.Store(persisted.ResponseCount)
-	stats.lyricsResponseTime.Store(persisted.LyricsResponseTime)
-	stats.lyricsResponseCount.Store(persisted.LyricsResponseCount)
-
-	// Only update min/max if we have valid persisted values
-	if persisted.MinResponseTime > 0 && persisted.MinResponseTime < int64(^uint64(0)>>1) {
-		stats.minResponseTime.Store(persisted.MinResponseTime)
-	}
-	if persisted.MaxResponseTime > 0 {
-		stats.maxResponseTime.Store(persisted.MaxResponseTime)
-	}
-
-	// Apply account name migrations before restoring
-	persisted.AccountUsage = applyAccountMigrations(persisted.AccountUsage)
-
-	// Restore account usage
-	for name, count := range persisted.AccountUsage {
-		counter := &atomic.Int64{}
-		counter.Store(count)
-		stats.accountUsage.Store(name, counter)
-	}
-
-	// Restore user agent usage
-	for ua, count := range persisted.UserAgentUsage {
-		counter := &atomic.Int64{}
-		counter.Store(count)
-		stats.userAgentUsage.Store(ua, counter)
-	}
-
-	// Preserve the original first start time if available
-	if !persisted.FirstStarted.IsZero() {
-		stats.StartTime = persisted.FirstStarted
-	}
+	Get().Restore(persisted)
 
 	log.Infof("%s Loaded persisted stats (total requests: %d, first started: %s)",
 		logcolors.LogStats, persisted.TotalRequests, persisted.FirstStarted.Format(time.RFC3339))
@@ -191,36 +138,7 @@ func (s *Store) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	stats := Get()
-
-	persisted := PersistedStats{
-		TotalRequests:       stats.TotalRequests.Load(),
-		LyricsRequests:      stats.LyricsRequests.Load(),
-		CacheRequests:       stats.CacheRequests.Load(),
-		StatsRequests:       stats.StatsRequests.Load(),
-		HealthRequests:      stats.HealthRequests.Load(),
-		OtherRequests:       stats.OtherRequests.Load(),
-		CacheHits:           stats.CacheHits.Load(),
-		CacheMisses:         stats.CacheMisses.Load(),
-		NegativeCacheHits:   stats.NegativeCacheHits.Load(),
-		StaleCacheHits:      stats.StaleCacheHits.Load(),
-		RateLimitNormal:     stats.RateLimitNormal.Load(),
-		RateLimitCached:     stats.RateLimitCached.Load(),
-		RateLimitExceeded:   stats.RateLimitExceeded.Load(),
-		Status2xx:           stats.Status2xx.Load(),
-		Status4xx:           stats.Status4xx.Load(),
-		Status5xx:           stats.Status5xx.Load(),
-		TotalResponseTime:   stats.totalResponseTime.Load(),
-		ResponseCount:       stats.responseCount.Load(),
-		MinResponseTime:     stats.minResponseTime.Load(),
-		MaxResponseTime:     stats.maxResponseTime.Load(),
-		LyricsResponseTime:  stats.lyricsResponseTime.Load(),
-		LyricsResponseCount: stats.lyricsResponseCount.Load(),
-		AccountUsage:        stats.AccountUsageSnapshot(),
-		UserAgentUsage:      stats.UserAgentSnapshot(),
-		LastSaved:           time.Now(),
-		FirstStarted:        stats.StartTime,
-	}
+	persisted := Get().Serialize()
 
 	data, err := json.Marshal(persisted)
 	if err != nil {
