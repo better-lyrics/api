@@ -150,9 +150,14 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		return "", trackDurationMs, score, trackMeta, fmt.Errorf("no lyrics data found (hasTimeSyncedLyrics=false)")
 	}
 
-	// Use the same account that succeeded for search to fetch lyrics
-	// This ensures we don't hit a quarantined account
-	ttml, err := fetchLyricsTTML(track.ID, storefront, workingAccount)
+	// Fetch lyrics from the account that actually succeeded for search, using ITS
+	// storefront: on failover workingAccount can differ from the initial account and
+	// live in a different storefront, so the initial storefront would be wrong.
+	lyricsStorefront := workingAccount.Storefront
+	if lyricsStorefront == "" {
+		lyricsStorefront = "us"
+	}
+	ttml, err := fetchLyricsTTML(track.ID, lyricsStorefront, workingAccount)
 	if err != nil {
 		return "", trackDurationMs, score, trackMeta, fmt.Errorf("failed to fetch TTML: %v", err)
 	}
