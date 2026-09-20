@@ -38,7 +38,19 @@ var (
 	storefrontCache     = make(map[string]string)
 	storefrontCachePath string
 	storefrontMutex     sync.RWMutex
+
+	// Optional external storefront backend (keyed by MUT hash). When set, it replaces
+	// the on-disk JSON cache so storefronts survive an ephemeral filesystem.
+	storefrontLookup func(hash string) string
+	storefrontStore  func(hash, storefront string)
 )
+
+// SetStorefrontBackend installs an external storefront cache (e.g. Postgres),
+// keyed by MUT hash. When set, the on-disk JSON cache is bypassed entirely.
+func SetStorefrontBackend(lookup func(hash string) string, store func(hash, storefront string)) {
+	storefrontLookup = lookup
+	storefrontStore = store
+}
 
 func initAccountManager() {
 	conf := config.Get()
@@ -351,6 +363,9 @@ func hashMUT(mut string) string {
 
 // loadStorefrontCache loads the storefront cache from disk
 func loadStorefrontCache() {
+	if storefrontLookup != nil {
+		return
+	}
 	storefrontMutex.Lock()
 	defer storefrontMutex.Unlock()
 
@@ -381,6 +396,9 @@ func loadStorefrontCache() {
 
 // saveStorefrontCache persists the storefront cache to disk
 func saveStorefrontCache() {
+	if storefrontStore != nil {
+		return
+	}
 	storefrontMutex.RLock()
 	data, err := json.MarshalIndent(storefrontCache, "", "  ")
 	storefrontMutex.RUnlock()
@@ -407,6 +425,9 @@ func saveStorefrontCache() {
 
 // getCachedStorefront returns the cached storefront for a MUT, or empty string if not cached
 func getCachedStorefront(mut string) string {
+	if storefrontLookup != nil {
+		return storefrontLookup(hashMUT(mut))
+	}
 	storefrontMutex.RLock()
 	defer storefrontMutex.RUnlock()
 	return storefrontCache[hashMUT(mut)]
@@ -414,6 +435,10 @@ func getCachedStorefront(mut string) string {
 
 // setCachedStorefront stores a storefront for a MUT in the cache
 func setCachedStorefront(mut, storefront string) {
+	if storefrontStore != nil {
+		storefrontStore(hashMUT(mut), storefront)
+		return
+	}
 	storefrontMutex.Lock()
 	defer storefrontMutex.Unlock()
 	storefrontCache[hashMUT(mut)] = storefront

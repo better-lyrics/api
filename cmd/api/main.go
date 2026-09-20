@@ -68,6 +68,21 @@ func main() {
 		log.Infof("%s Alert handler initialized with %d notifier(s)", logcolors.LogNotifier, len(alertNotifiers))
 	}
 
+	ttml.SetStorefrontBackend(
+		func(hash string) string {
+			sf, _, err := st.GetStorefront(ctx, hash)
+			if err != nil {
+				log.Warnf("%s storefront lookup failed: %v", logcolors.LogAccountInit, err)
+			}
+			return sf
+		},
+		func(hash, storefront string) {
+			if err := st.SetStorefront(ctx, hash, storefront); err != nil {
+				log.Warnf("%s storefront store failed: %v", logcolors.LogAccountInit, err)
+			}
+		},
+	)
+
 	ttml.StartBearerTokenMonitor()
 	ttml.StartHealthCheckScheduler()
 
