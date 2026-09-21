@@ -1,7 +1,5 @@
 package providers
 
-// Lyrics provenance values, recorded per cache entry and used to gate the
-// contribution loop: only Apple-sourced lyrics are contributed back to lrc.red.
 const (
 	SourceApple  = "apple"
 	SourceLRCRed = "lrc.red"
