@@ -27,9 +27,10 @@ type Config struct {
 		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
 		APIKey                             string `envconfig:"API_KEY" default:""`
 		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
-		BiniAPIKey                         string `envconfig:"BINI_API_KEY" default:""`
-		BiniAPIURL                         string `envconfig:"BINI_API_URL" default:"https://kansas.lyric-api.binimum.org/"`
-		BiniSecretKey                      string `envconfig:"BINI_SECRET_KEY" default:""`
+		LRCRedIngressKey                   string `envconfig:"LRC_RED_INGRESS_KEY" default:""`
+		LRCRedUserAgent                    string `envconfig:"LRC_RED_USER_AGENT" default:"better-lyrics-api (+https://betterlyrics.org)"`
+		LRCRedBaseURL                      string `envconfig:"LRC_RED_BASE_URL" default:"https://lrc.red"`
+		TTMLMintURL                        string `envconfig:"TTML_MINT_URL" default:"https://am-mint.binimum.org/token"`
 		ProxyRevalidateURL                 string `envconfig:"PROXY_REVALIDATE_URL" default:""`
 		ProxyAPIKey                        string `envconfig:"PROXY_API_KEY" default:""`
 

@@ -45,13 +45,30 @@ func upstreamStub(t *testing.T) *httptest.Server {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"meta":{"subscription":{"active":true,"storefront":"us"}}}`)
 
+		case path == "/token":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"storefront_id":"143478-2,31","token":"%s","token_type":"Bearer","cache_ttl_seconds":120}`, jwt)
+
 		case strings.HasPrefix(path, "/search/"):
 			w.Header().Set("Content-Type", "application/json")
 			term := r.URL.Query().Get("term")
-			if strings.Contains(term, "Fresh Hit") {
+			switch {
+			case strings.Contains(term, "Fresh Hit"):
+				// ISRC that lrc.red does NOT have -> falls through to the Apple lyrics stub.
 				fmt.Fprint(w, `{"results":{"songs":{"data":[{"id":"1000001","attributes":{"name":"Fresh Hit","artistName":"Fresh Artist","albumName":"Fresh Album","durationInMillis":200000,"isrc":"USFRESH00001","releaseDate":"2020-01-01","hasTimeSyncedLyrics":true}}]}}}`)
-			} else {
+			case strings.Contains(term, "Cached Song"):
+				// ISRC that lrc.red DOES have -> resolved from lrc.red, Apple untouched.
+				fmt.Fprint(w, `{"results":{"songs":{"data":[{"id":"1000002","attributes":{"name":"Cached Song","artistName":"Cached Artist","albumName":"Cached Album","durationInMillis":210000,"isrc":"USLRCRED0001","releaseDate":"2019-01-01","hasTimeSyncedLyrics":true}}]}}}`)
+			default:
 				fmt.Fprint(w, `{"results":{"songs":{"data":[]}}}`)
+			}
+
+		case strings.HasPrefix(path, "/s/") && strings.HasSuffix(path, ".ttml"):
+			if path == "/s/USLRCRED0001.ttml" {
+				w.Header().Set("Content-Type", "application/ttml+xml")
+				fmt.Fprint(w, `<tt>LRCRED</tt>`)
+			} else {
+				http.NotFound(w, r)
 			}
 
 		case strings.HasPrefix(path, "/lyrics/"):
@@ -75,6 +92,8 @@ func stubEnv(stubURL string) map[string]string {
 	env["TTML_LYRICS_PATH"] = "/lyrics/%s/%s"
 	env["TTML_STOREFRONT"] = "us"
 	env["TTML_MEDIA_USER_TOKEN"] = "stub-mut"
+	env["LRC_RED_BASE_URL"] = stubURL
+	env["TTML_MINT_URL"] = stubURL + "/token"
 	return env
 }
 
@@ -100,6 +119,19 @@ func missScenarios() []Scenario {
 			WantHeaders: map[string]string{"X-Cache-Status": "MISS"},
 			WantBody: jbody(map[string]interface{}{
 				"error": "search failed: no tracks found for query: Fresh Miss Nobody",
+			}),
+		},
+		{
+			Name:       "getlyrics_miss_resolved_from_lrcred",
+			Path:       "/getLyrics?s=Cached%20Song&a=Cached%20Artist",
+			WantStatus: http.StatusOK,
+			WantHeaders: map[string]string{
+				"Content-Type":   "application/json",
+				"X-Cache-Status": "MISS",
+			},
+			WantBody: jbody(map[string]interface{}{
+				"score": 0.875,
+				"ttml":  "<tt>LRCRED</tt>",
 			}),
 		},
 	}

@@ -20,6 +20,7 @@ type CachedLyrics struct {
 	Language        string
 	IsRTL           bool
 	Format          string
+	Source          string // upstream provenance: "apple", "lrc.red", or "" when unknown
 }
 
 func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedLyrics) error {
@@ -37,8 +38,8 @@ func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedL
 	var inserted bool
 	err = tx.QueryRow(ctx, `
 		INSERT INTO lyrics (cache_key, provider, base_key, duration_sec,
-		                    raw_lyrics, track_duration_ms, score, language, is_rtl, format)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		                    raw_lyrics, track_duration_ms, score, language, is_rtl, format, source)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (cache_key) DO UPDATE SET
 			raw_lyrics        = EXCLUDED.raw_lyrics,
 			track_duration_ms = EXCLUDED.track_duration_ms,
@@ -46,10 +47,11 @@ func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedL
 			language          = EXCLUDED.language,
 			is_rtl            = EXCLUDED.is_rtl,
 			format            = EXCLUDED.format,
+			source            = EXCLUDED.source,
 			updated_at        = now()
 		RETURNING (xmax = 0)`,
 		cacheKey, k.Provider, k.BaseKey, k.DurationSec,
-		blob, l.TrackDurationMs, l.Score, l.Language, l.IsRTL, l.Format,
+		blob, l.TrackDurationMs, l.Score, l.Language, l.IsRTL, l.Format, l.Source,
 	).Scan(&inserted)
 	if err != nil {
 		return err
@@ -71,9 +73,9 @@ func (s *Store) GetLyricsExact(ctx context.Context, cacheKey string) (CachedLyri
 	var blob []byte
 	var l CachedLyrics
 	err := s.pool.QueryRow(ctx, `
-		SELECT raw_lyrics, track_duration_ms, score, language, is_rtl, format
+		SELECT raw_lyrics, track_duration_ms, score, language, is_rtl, format, source
 		FROM lyrics WHERE cache_key = $1`, cacheKey).
-		Scan(&blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format)
+		Scan(&blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format, &l.Source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CachedLyrics{}, false, nil
 	}
@@ -100,7 +102,7 @@ func (s *Store) GetLyricsTolerant(ctx context.Context, k Key, deltaSec int) (Cac
 	var blob []byte
 	var l CachedLyrics
 	err := s.pool.QueryRow(ctx, `
-		SELECT cache_key, raw_lyrics, track_duration_ms, score, language, is_rtl, format
+		SELECT cache_key, raw_lyrics, track_duration_ms, score, language, is_rtl, format, source
 		FROM lyrics
 		WHERE base_key = $1
 		  AND duration_sec IS NOT NULL
@@ -108,7 +110,7 @@ func (s *Store) GetLyricsTolerant(ctx context.Context, k Key, deltaSec int) (Cac
 		ORDER BY abs(duration_sec - $4), duration_sec ASC
 		LIMIT 1`,
 		k.BaseKey, target-deltaSec, target+deltaSec, target).
-		Scan(&cacheKey, &blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format)
+		Scan(&cacheKey, &blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format, &l.Source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CachedLyrics{}, "", false, nil
 	}

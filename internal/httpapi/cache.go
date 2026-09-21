@@ -121,7 +121,7 @@ func (s *Server) getCachedLyricsWithDurationTolerance(ctx context.Context, songN
 	return store.CachedLyrics{}, exactKey, false
 }
 
-func (s *Server) setCachedLyrics(ctx context.Context, cacheKey, lyrics string, trackDurationMs int, score float64, language string, isRTL bool) {
+func (s *Server) setCachedLyrics(ctx context.Context, cacheKey, lyrics string, trackDurationMs int, score float64, language string, isRTL bool, source string) {
 	k := store.DeriveKey(cacheKey)
 	l := store.CachedLyrics{
 		TTML:            lyrics,
@@ -130,6 +130,7 @@ func (s *Server) setCachedLyrics(ctx context.Context, cacheKey, lyrics string, t
 		Language:        language,
 		IsRTL:           isRTL,
 		Format:          k.Provider,
+		Source:          source,
 	}
 	if err := s.store.SetLyrics(ctx, cacheKey, k, l); err != nil {
 		log.Errorf("%s Error setting cache value: %v", logcolors.LogCacheLyrics, err)

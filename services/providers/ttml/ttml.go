@@ -100,8 +100,8 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		log.Infof("%s Starting with account %s | Query: %s", logcolors.LogRequest, logcolors.Account(account.NameID), query)
 	}
 
-	// Search returns the account that succeeded (may differ if retry occurred)
-	track, score, workingAccount, err := searchTrack(query, storefront, songName, artistName, albumName, durationMs, account)
+	// Minted lane first (no account spent); account lane only on mint/request failure.
+	track, score, workingAccount, err := searchTwoLane(query, storefront, songName, artistName, albumName, durationMs, account)
 	if err != nil {
 		return "", 0, 0.0, nil, fmt.Errorf("search failed: %v", err)
 	}
@@ -125,8 +125,14 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 			logcolors.LogMatch, track.Attributes.Name, track.Attributes.ArtistName, track.ID, trackDurationMs, score)
 	}
 
-	// Build TrackMeta early so it's available even on lyrics-fetch errors
-	rawAttrsJSON, _ := json.Marshal(track.Attributes)
+	// Build TrackMeta early so it's available even on lyrics-fetch errors.
+	// Prefer the untouched Apple attributes blob; fall back to re-marshaling the
+	// typed view if the raw form is somehow absent.
+	rawAttrs := string(track.RawAttributes)
+	if rawAttrs == "" {
+		b, _ := json.Marshal(track.Attributes)
+		rawAttrs = string(b)
+	}
 	trackMeta := &TrackMeta{
 		TrackID:             track.ID,
 		Name:                track.Attributes.Name,
@@ -135,39 +141,60 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		ISRC:                track.Attributes.ISRC,
 		ReleaseDate:         track.Attributes.ReleaseDate,
 		HasTimeSyncedLyrics: track.Attributes.HasTimeSyncedLyrics,
-		RawAttributes:       string(rawAttrsJSON),
+		RawAttributes:       rawAttrs,
+		Source:              SourceApple,
 	}
 
-	// Check hasTimeSyncedLyrics to potentially skip the lyrics fetch
+	appleFetch := func() (string, error) {
+		// Fetch from the account that actually succeeded for search, using ITS
+		// storefront: on failover workingAccount can differ from the initial account
+		// and live in a different storefront, so the initial one would be wrong.
+		lyricsStorefront := workingAccount.Storefront
+		if lyricsStorefront == "" {
+			lyricsStorefront = "us"
+		}
+		ttml, err := fetchLyricsTTML(track.ID, lyricsStorefront, workingAccount)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch TTML: %v", err)
+		}
+		if ttml == "" {
+			return "", fmt.Errorf("TTML content is empty")
+		}
+		log.Infof("%s Fetched TTML via %s for: %s - %s (%d bytes)",
+			logcolors.LogSuccess, logcolors.Account(workingAccount.NameID), track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
+		return ttml, nil
+	}
+
+	lyricsTTML, source, err := resolveLyrics(track, fetchLRCRedByISRC, appleFetch)
+	trackMeta.Source = source
+	if err != nil {
+		return "", trackDurationMs, score, trackMeta, err
+	}
+	return lyricsTTML, trackDurationMs, score, trackMeta, nil
+}
+
+// resolveLyrics applies the post-search resolution order: lrc.red by ISRC first
+// (free, no subscriber account spent), then Apple's MUT-gated lyrics endpoint
+// only on a lrc.red miss. lrcRedFetch and appleFetch are injected so the order
+// and provenance are unit-testable without network or accounts.
+func resolveLyrics(track *Track, lrcRedFetch func(string) (string, bool, error), appleFetch func() (string, error)) (string, string, error) {
+	if lrcTTML, ok, lrcErr := lrcRedFetch(track.Attributes.ISRC); lrcErr != nil {
+		log.Warnf("%s lrc.red lookup failed for ISRC %q: %v", logcolors.LogLyrics, track.Attributes.ISRC, lrcErr)
+	} else if ok {
+		log.Infof("%s Fetched lyrics from lrc.red for: %s - %s (%d bytes)",
+			logcolors.LogSuccess, track.Attributes.Name, track.Attributes.ArtistName, len(lrcTTML))
+		return lrcTTML, SourceLRCRed, nil
+	}
+
 	if track.Attributes.HasTimeSyncedLyrics == nil {
-		// Field absent from API response: log warning and fall through to normal fetch
 		log.Warnf("%s hasTimeSyncedLyrics field missing from search response for %s - %s, falling back to lyrics fetch",
 			logcolors.LogWarning, track.Attributes.Name, track.Attributes.ArtistName)
 	} else if !*track.Attributes.HasTimeSyncedLyrics {
-		// Explicitly false: skip lyrics fetch entirely (saves an API call)
 		log.Infof("%s Skipping lyrics fetch: hasTimeSyncedLyrics=false for %s - %s",
 			logcolors.LogLyrics, track.Attributes.Name, track.Attributes.ArtistName)
-		return "", trackDurationMs, score, trackMeta, fmt.Errorf("no lyrics data found (hasTimeSyncedLyrics=false)")
+		return "", SourceApple, fmt.Errorf("no lyrics data found (hasTimeSyncedLyrics=false)")
 	}
 
-	// Fetch lyrics from the account that actually succeeded for search, using ITS
-	// storefront: on failover workingAccount can differ from the initial account and
-	// live in a different storefront, so the initial storefront would be wrong.
-	lyricsStorefront := workingAccount.Storefront
-	if lyricsStorefront == "" {
-		lyricsStorefront = "us"
-	}
-	ttml, err := fetchLyricsTTML(track.ID, lyricsStorefront, workingAccount)
-	if err != nil {
-		return "", trackDurationMs, score, trackMeta, fmt.Errorf("failed to fetch TTML: %v", err)
-	}
-
-	if ttml == "" {
-		return "", trackDurationMs, score, trackMeta, fmt.Errorf("TTML content is empty")
-	}
-
-	log.Infof("%s Fetched TTML via %s for: %s - %s (%d bytes)",
-		logcolors.LogSuccess, logcolors.Account(workingAccount.NameID), track.Attributes.Name, track.Attributes.ArtistName, len(ttml))
-
-	return ttml, trackDurationMs, score, trackMeta, nil
+	ttml, err := appleFetch()
+	return ttml, SourceApple, err
 }

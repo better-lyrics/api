@@ -214,9 +214,16 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 	stats.Get().RecordCacheMiss()
 	log.Infof("%s Caching TTML for: %s (trackDuration: %dms)", logcolors.LogCacheLyrics, query, trackDurationMs)
 	language, isRTL := ttml.DetectLanguage(ttmlString)
-	s.setCachedLyrics(ctx, cacheKey, ttmlString, trackDurationMs, score, language, isRTL)
+	source := ""
+	if trackMeta != nil {
+		source = trackMeta.Source
+	}
+	s.setCachedLyrics(ctx, cacheKey, ttmlString, trackDurationMs, score, language, isRTL, source)
 
-	go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
+	// Contribute only Apple-sourced lyrics; never re-submit a lrc.red fetch.
+	if trackMeta != nil && trackMeta.Source == ttml.SourceApple {
+		go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.RawAttributes, ttmlString)
+	}
 
 	if trackMeta != nil {
 		go func() {
@@ -429,7 +436,7 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 
 		stats.Get().RecordCacheMiss()
 		log.Infof("%s [%s] Caching lyrics for: %s", logcolors.LogCacheLyrics, providerName, query)
-		s.setCachedLyrics(ctx, cacheKey, result.RawLyrics, result.TrackDurationMs, result.Score, result.Language, result.IsRTL)
+		s.setCachedLyrics(ctx, cacheKey, result.RawLyrics, result.TrackDurationMs, result.Score, result.Language, result.IsRTL, result.Source)
 
 		respond(w, r).SetProvider(providerName).SetCacheStatus("MISS").JSON(map[string]interface{}{
 			"lyrics":   result.RawLyrics,

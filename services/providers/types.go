@@ -35,6 +35,10 @@ type LyricsResult struct {
 	// Provider is the name of the provider that returned these lyrics
 	Provider string `json:"provider"`
 
+	// Source is the upstream provenance of the lyrics (e.g. "apple", "lrc.red").
+	// Empty for providers that do not track it.
+	Source string `json:"source,omitempty"`
+
 	// Language is the detected or reported language code (e.g., "en", "zh")
 	Language string `json:"language,omitempty"`
 

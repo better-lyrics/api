@@ -376,7 +376,18 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 		return nil, 0.0, successAccount, fmt.Errorf("no tracks found for query: %s", query)
 	}
 
-	tracks := searchResp.Results.Songs.Data
+	track, score, err := selectBestTrack(searchResp.Results.Songs.Data, songName, artistName, albumName, durationMs)
+	return track, score, successAccount, err
+}
+
+// selectBestTrack applies the strict duration filter and weighted scoring to a
+// set of search results, returning the best match. Shared by both search lanes
+// (minted-bearer primary and media-user-token fallback) so scoring stays
+// identical regardless of which token fetched the results.
+func selectBestTrack(tracks []Track, songName, artistName, albumName string, durationMs int) (*Track, float64, error) {
+	if len(tracks) == 0 {
+		return nil, 0.0, fmt.Errorf("no tracks found")
+	}
 
 	// If duration is provided, apply strict duration filter first
 	if durationMs > 0 {
@@ -415,14 +426,14 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 
 		if len(filteredTracks) == 0 {
 			if closestTrack != nil {
-				return nil, 0.0, successAccount, fmt.Errorf("no tracks within %dms of duration %dms (closest: %s - %s at %dms, diff: %dms)",
+				return nil, 0.0, fmt.Errorf("no tracks within %dms of duration %dms (closest: %s - %s at %dms, diff: %dms)",
 					deltaMs, durationMs,
 					closestTrack.Attributes.Name,
 					closestTrack.Attributes.ArtistName,
 					closestTrack.Attributes.DurationInMillis,
 					closestDiff)
 			}
-			return nil, 0.0, successAccount, fmt.Errorf("no tracks found within %dms of requested duration %dms", deltaMs, durationMs)
+			return nil, 0.0, fmt.Errorf("no tracks found within %dms of requested duration %dms", deltaMs, durationMs)
 		}
 
 		log.Infof("%s %d/%d tracks passed duration filter (delta: %dms)", logcolors.LogDurationFilter, len(filteredTracks), len(tracks), deltaMs)
@@ -466,7 +477,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 					minScore,
 					bestScore.Track.Attributes.Name,
 					bestScore.Track.Attributes.ArtistName)
-				return nil, 0.0, successAccount, fmt.Errorf("no matching tracks found (best match score %.3f below threshold %.3f)", bestScore.TotalScore, minScore)
+				return nil, 0.0, fmt.Errorf("no matching tracks found (best match score %.3f below threshold %.3f)", bestScore.TotalScore, minScore)
 			}
 
 			log.Infof("%s %s - %s (Score: %.3f)",
@@ -474,13 +485,96 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 				bestScore.Track.Attributes.Name,
 				bestScore.Track.Attributes.ArtistName,
 				bestScore.TotalScore)
-			return bestScore.Track, bestScore.TotalScore, successAccount, nil
+			return bestScore.Track, bestScore.TotalScore, nil
 		}
 	}
 
 	// Fallback: return the first (best) match from API (no score calculated)
 	log.Debugf("%s Using first search result", logcolors.LogFallback)
-	return &tracks[0], 1.0, successAccount, nil
+	return &tracks[0], 1.0, nil
+}
+
+// searchTrackMinted runs the primary search lane: a minted bearer with NO
+// media-user-token, so it never spends a subscriber account. The bool reports
+// whether the HTTP round-trip completed; when true the caller trusts the result
+// (match or not) and does not fall back to the account lane.
+func searchTrackMinted(query, storefront, songName, artistName, albumName string, durationMs int) (*Track, float64, bool, error) {
+	if query == "" {
+		return nil, 0.0, false, fmt.Errorf("empty search query")
+	}
+	if storefront == "" {
+		storefront = "us"
+	}
+
+	bearer, err := getMintedBearer()
+	if err != nil {
+		return nil, 0.0, false, err
+	}
+
+	conf := config.Get()
+	searchURL := conf.Configuration.TTMLBaseURL + fmt.Sprintf(
+		conf.Configuration.TTMLSearchPath,
+		storefront,
+		url.QueryEscape(query),
+	)
+
+	req, err := http.NewRequest("GET", searchURL, nil)
+	if err != nil {
+		return nil, 0.0, false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Origin", "https://music.apple.com")
+	req.Header.Set("Referer", "https://music.apple.com")
+
+	log.Infof("%s Querying TTML API via minted bearer: %s", logcolors.LogSearch, query)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0.0, false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, 0.0, false, fmt.Errorf("minted search returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0.0, false, err
+	}
+
+	var searchResp SearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		return nil, 0.0, false, fmt.Errorf("failed to parse minted search response: %w", err)
+	}
+
+	if len(searchResp.Results.Songs.Data) == 0 {
+		return nil, 0.0, true, fmt.Errorf("no tracks found for query: %s", query)
+	}
+
+	track, score, matchErr := selectBestTrack(searchResp.Results.Songs.Data, songName, artistName, albumName, durationMs)
+	return track, score, true, matchErr
+}
+
+// searchTwoLane tries the minted-bearer lane first and falls back to the account
+// (media-user-token) lane only when minting or the minted request fails. A
+// successful minted round-trip that finds no match is returned as-is (no
+// fallback), so a scarce account is never spent re-running the same query. The
+// returned account is the one to use for any subsequent Apple lyrics fetch; the
+// minted lane spends none, so the caller's round-robin pick is returned unchanged.
+func searchTwoLane(query, storefront, songName, artistName, albumName string, durationMs int, account MusicAccount) (*Track, float64, MusicAccount, error) {
+	track, score, ok, err := searchTrackMinted(query, storefront, songName, artistName, albumName, durationMs)
+	if ok {
+		if err != nil {
+			return nil, 0.0, account, err
+		}
+		log.Infof("%s Matched via minted bearer, no subscriber account spent", logcolors.LogSearch)
+		return track, score, account, nil
+	}
+
+	log.Warnf("%s Minted search unavailable (%v), falling back to account lane", logcolors.LogSearch, err)
+	return searchTrack(query, storefront, songName, artistName, albumName, durationMs, account)
 }
 
 func fetchLyricsTTML(trackID string, storefront string, account MusicAccount) (string, error) {

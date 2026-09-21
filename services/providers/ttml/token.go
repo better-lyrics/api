@@ -219,6 +219,106 @@ func scrapeToken() (string, error) {
 	return "", fmt.Errorf("could not extract JWT from JS bundle")
 }
 
+// =============================================================================
+// MINTED BEARER LANE (search only, no media-user-token)
+// =============================================================================
+
+// mintTokenURL is the binimum minter that returns a short-lived Apple developer
+// bearer, from TTML_MINT_URL. A package var so tests can point it at a stub.
+var mintTokenURL = config.Get().Configuration.TTMLMintURL
+
+// mintUserAgent is the am-mint UA; that endpoint is not UA-whitelisted, so a plain
+// identifier is fine (the unguessable UA is reserved for lrc.red, LRC_RED_USER_AGENT).
+const mintUserAgent = "better-lyrics-api (+https://betterlyrics.org)"
+
+const (
+	mintMinTTL        = 60 * time.Second
+	mintMaxTTL        = 3600 * time.Second
+	mintRefreshBuffer = 15 * time.Second // re-mint this long before expiry
+)
+
+var (
+	mintedToken  string
+	mintedExpiry time.Time
+	mintedMu     sync.RWMutex
+)
+
+type mintResponse struct {
+	StorefrontID    string `json:"storefront_id"`
+	Token           string `json:"token"`
+	TokenType       string `json:"token_type"`
+	CacheTTLSeconds int    `json:"cache_ttl_seconds"`
+}
+
+// clampMintTTL bounds the minter's advertised TTL. The minter returns ~120s,
+// far below the scraped token's hour-plus lifetime, so the scraped refresh
+// threshold (5 min) does not apply to this lane.
+func clampMintTTL(seconds int) time.Duration {
+	d := time.Duration(seconds) * time.Second
+	if d < mintMinTTL {
+		return mintMinTTL
+	}
+	if d > mintMaxTTL {
+		return mintMaxTTL
+	}
+	return d
+}
+
+// getMintedBearer returns a cached minted bearer, minting a fresh one when the
+// cache is empty or within mintRefreshBuffer of expiry.
+func getMintedBearer() (string, error) {
+	mintedMu.RLock()
+	if mintedToken != "" && time.Now().Add(mintRefreshBuffer).Before(mintedExpiry) {
+		token := mintedToken
+		mintedMu.RUnlock()
+		return token, nil
+	}
+	mintedMu.RUnlock()
+
+	mintedMu.Lock()
+	defer mintedMu.Unlock()
+
+	if mintedToken != "" && time.Now().Add(mintRefreshBuffer).Before(mintedExpiry) {
+		return mintedToken, nil
+	}
+
+	req, err := http.NewRequest("GET", mintTokenURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", mintUserAgent)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("mint request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("mint returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read mint response: %w", err)
+	}
+
+	var mr mintResponse
+	if err := json.Unmarshal(body, &mr); err != nil {
+		return "", fmt.Errorf("failed to parse mint response: %w", err)
+	}
+	if mr.Token == "" {
+		return "", fmt.Errorf("mint response missing token")
+	}
+
+	mintedToken = mr.Token
+	mintedExpiry = time.Now().Add(clampMintTTL(mr.CacheTTLSeconds))
+	log.Infof("%s Minted search bearer (ttl %v)", logcolors.LogBearerToken, clampMintTTL(mr.CacheTTLSeconds))
+	return mintedToken, nil
+}
+
 // StartBearerTokenMonitor fetches the initial bearer token and storefronts synchronously,
 // then starts a background goroutine that proactively refreshes the token before it expires.
 func StartBearerTokenMonitor() {

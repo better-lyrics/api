@@ -13,6 +13,7 @@ This repository contains the source code for the official Better Lyrics API - pr
 
 - [Quickstart](#quickstart)
 - [API Endpoints](#api-endpoints)
+- [Data sources](#data-sources)
 - [Deployment](#deployment)
 - [Contributing](#contributing)
 - [License](#license)
@@ -40,6 +41,18 @@ Public:
 - `GET /stats` - API statistics (requires `Authorization` header)
 
 Admin/cache endpoints (`/cache/*`, `/revalidate`, `/override`, `/health/mut`, etc.) are documented live at `GET /cache/help`.
+
+## Data sources
+
+Lyrics for `/getLyrics` (and `/ttml/getLyrics`) resolve in this order, stopping at the first hit:
+
+1. **Local cache** (Postgres). Entries persist until cleared, so any track is fetched from upstream at most once.
+2. **[lrc.red](https://lrc.red) by ISRC**, the primary source: a free, open, Cloudflare-cached lookup table with broad coverage. An upstream catalog lookup first identifies the track and its ISRC, then lrc.red is queried by that ISRC.
+3. **Upstream lyrics provider**, used only as a fallback when lrc.red has no entry for that ISRC. This path is rate-limited and account-gated, which is the dependency lrc.red lets the common path avoid.
+
+Anything fetched from the upstream provider in the fallback is contributed back to [lrc.red](https://lrc.red)'s ingress, keyed by ISRC, so their catalog improves and more tracks resolve at step 2 over time. Contributions are idempotent: lrc.red de-duplicates server-side and treats a better-synced submission as a replacement. Lyrics pulled from lrc.red are never re-submitted.
+
+Upstream lyrics source: [lrc.red](https://lrc.red) by w4v.
 
 ## Deployment
 

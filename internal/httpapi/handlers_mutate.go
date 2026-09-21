@@ -166,8 +166,15 @@ func (s *Server) revalidateHandler(w http.ResponseWriter, r *http.Request) {
 			s.deleteNegativeCache(ctx, usedKey)
 		}
 		language, isRTL := ttml.DetectLanguage(ttmlString)
-		s.setCachedLyrics(ctx, usedKey, ttmlString, trackDurationMs, score, language, isRTL)
-		go bini.PostLyrics(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs, ttmlString, trackMeta.ISRC)
+		source := ""
+		if trackMeta != nil {
+			source = trackMeta.Source
+		}
+		s.setCachedLyrics(ctx, usedKey, ttmlString, trackDurationMs, score, language, isRTL, source)
+		// Contribute only Apple-sourced content back to lrc.red, never a lrc.red re-fetch.
+		if trackMeta != nil && trackMeta.Source == ttml.SourceApple {
+			go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.RawAttributes, ttmlString)
+		}
 		go func() {
 			bg := context.Background()
 			s.setSongMetadata(bg, &store.SongMetadata{
@@ -256,7 +263,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 
 		if len(matchingKeys) == 0 {
 			cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
-			s.setCachedLyrics(ctx, cacheKey, NoLyricsSentinel, 0, 0, "", false)
+			s.setCachedLyrics(ctx, cacheKey, NoLyricsSentinel, 0, 0, "", false, "")
 			updatedKeys = append(updatedKeys, cacheKey)
 			created = true
 			log.Infof("%s Created no_lyrics marker for %s", logcolors.LogOverride, cacheKey)
@@ -266,7 +273,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					continue
 				}
-				s.setCachedLyrics(ctx, key, NoLyricsSentinel, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL)
+				s.setCachedLyrics(ctx, key, NoLyricsSentinel, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL, "")
 				updatedKeys = append(updatedKeys, key)
 			}
 			log.Infof("%s Set no_lyrics marker on %d cache entries", logcolors.LogOverride, len(updatedKeys))
@@ -307,7 +314,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		language, isRTL := ttml.DetectLanguage(ttmlString)
-		s.setCachedLyrics(ctx, cacheKey, ttmlString, durationMs, 0, language, isRTL)
+		s.setCachedLyrics(ctx, cacheKey, ttmlString, durationMs, 0, language, isRTL, ttml.SourceApple)
 		updatedKeys = append(updatedKeys, cacheKey)
 		created = true
 		log.Infof("%s Created new cache entry %s with lyrics from track ID %s", logcolors.LogOverride, cacheKey, trackID)
@@ -317,7 +324,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue
 			}
-			s.setCachedLyrics(ctx, key, ttmlString, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL)
+			s.setCachedLyrics(ctx, key, ttmlString, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL, ttml.SourceApple)
 			updatedKeys = append(updatedKeys, key)
 		}
 		log.Infof("%s Updated %d cache entries with lyrics from track ID %s", logcolors.LogOverride, len(updatedKeys), trackID)
