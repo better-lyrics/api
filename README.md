@@ -56,17 +56,9 @@ Upstream lyrics source: [lrc.red](https://lrc.red) by w4v.
 
 ## Deployment
 
-Production runs on a single Hetzner CAX21 (ARM64, Helsinki). The whole server stack (Caddy, the API, Infisical agent for secrets sync, Beszel agent for metrics, Logdy for log streaming, B2 backups, UFW, fail2ban) lives in [`infra/`](./infra/README.md) as code.
+Deploys to [Railway](https://railway.com) from the `Dockerfile` (a distroless build of `./cmd/api`), configured in `railway.json`. Railway builds the image, runs the container, and health-checks `/health`; on failure it restarts (up to 10 times). Lyrics and metadata live in a managed Railway Postgres, and schema migrations run on startup.
 
-To rebuild from scratch on any Ubuntu 24.04 host:
-
-```bash
-cp infra/secrets.env.example infra/secrets.env
-$EDITOR infra/secrets.env                    # fill in every value from your password manager
-sudo ./infra/bootstrap.sh                    # about 10 minutes, idempotent
-```
-
-See [`infra/README.md`](./infra/README.md) for the prerequisites and the manual steps that stay manual (DNS, provisioning, `cache.db` restore).
+Configuration is all environment variables. Copy `.env.example` and fill it in; `DATABASE_URL` and the upstream API settings are required, and `LRC_RED_INGRESS_KEY` turns on contributing lyrics back to lrc.red (the contribution path stays off when it is unset).
 
 ## Contributing
 

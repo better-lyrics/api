@@ -1,5 +1,0 @@
-# deploy user crontab - managed by infra/phases/08-backups.sh
-# Backup local cache.db at 03:00 UTC, upload to B2 at 03:30 UTC, prune local at 04:00 UTC
-0 3 * * * /usr/local/bin/backup-cache.sh
-30 3 * * * /usr/local/bin/upload-backup.sh
-0 4 * * * find /var/lib/lyrics-api/backups -name 'cache_backup_*.db' -mtime +1 -delete
