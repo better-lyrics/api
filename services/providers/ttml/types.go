@@ -17,11 +17,10 @@ type Line = providers.Line
 // Syllable is an alias for the shared Syllable type
 type Syllable = providers.Syllable
 
-// Lyrics provenance values recorded per cache entry and used to gate the
-// contribution loop (only Apple-sourced lyrics are contributed back to lrc.red).
+// Provenance values, aliased from the providers package (the shared owner).
 const (
-	SourceApple  = "apple"
-	SourceLRCRed = "lrc.red"
+	SourceApple  = providers.SourceApple
+	SourceLRCRed = providers.SourceLRCRed
 )
 
 // TrackMeta contains metadata about the matched track from Apple Music

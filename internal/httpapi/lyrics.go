@@ -220,9 +220,8 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setCachedLyrics(ctx, cacheKey, ttmlString, trackDurationMs, score, language, isRTL, source)
 
-	// Contribute only Apple-sourced lyrics; never re-submit a lrc.red fetch.
-	if trackMeta != nil && trackMeta.Source == ttml.SourceApple {
-		go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.RawAttributes, ttmlString)
+	if trackMeta != nil {
+		go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.Source, trackMeta.RawAttributes, ttmlString)
 	}
 
 	if trackMeta != nil {

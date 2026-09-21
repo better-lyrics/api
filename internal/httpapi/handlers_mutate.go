@@ -171,9 +171,8 @@ func (s *Server) revalidateHandler(w http.ResponseWriter, r *http.Request) {
 			source = trackMeta.Source
 		}
 		s.setCachedLyrics(ctx, usedKey, ttmlString, trackDurationMs, score, language, isRTL, source)
-		// Contribute only Apple-sourced content back to lrc.red, never a lrc.red re-fetch.
-		if trackMeta != nil && trackMeta.Source == ttml.SourceApple {
-			go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.RawAttributes, ttmlString)
+		if trackMeta != nil {
+			go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.Source, trackMeta.RawAttributes, ttmlString)
 		}
 		go func() {
 			bg := context.Background()

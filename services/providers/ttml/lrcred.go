@@ -13,8 +13,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// lrcRedReadBase is the lrc.red public read origin, from LRC_RED_BASE_URL
-// (default https://lrc.red). A package var so tests can point it at a stub.
+// lrcRedReadBase is the lrc.red read origin, from LRC_RED_BASE_URL (empty
+// disables the lrc.red lookup). A package var so tests can point it at a stub.
 var lrcRedReadBase = config.Get().Configuration.LRCRedBaseURL
 
 var lrcRedClient = &http.Client{Timeout: 10 * time.Second}
@@ -27,6 +27,9 @@ var lrcRedSem = make(chan struct{}, 8)
 // fetchLRCRedByISRC fetches TTML from lrc.red by ISRC: (ttml,true,nil) on 200,
 // ("",false,nil) on 404 or empty ISRC (a clean miss), ("",false,err) otherwise.
 func fetchLRCRedByISRC(isrc string) (string, bool, error) {
+	if lrcRedReadBase == "" {
+		return "", false, nil
+	}
 	isrc = utils.NormalizeISRC(isrc)
 	if isrc == "" {
 		return "", false, nil

@@ -9,6 +9,7 @@ import (
 
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
+	"lyrics-api-go/services/providers"
 	"lyrics-api-go/utils"
 
 	log "github.com/sirupsen/logrus"
@@ -45,10 +46,14 @@ type metadataResponse struct {
 }
 
 // Contribute posts a track's metadata then its lyric to lrc.red, keyed by ISRC.
-// Fire-and-forget; no-ops when the ingress key is unset. Metadata goes first so an
-// unknown track is in-catalog before the lyric (avoids pending_metadata). Callers
-// must pass only Apple-sourced content.
-func Contribute(trackName, artistName, isrc, rawAttributes, ttmlRaw string) {
+// It no-ops unless source is Apple, so a lrc.red-sourced fetch is never re-submitted
+// (that would land as a lossy "replace" of lrc.red's own record). Fire-and-forget;
+// also no-ops when the ingress key is unset. Metadata goes first so an unknown track
+// is in-catalog before the lyric (avoids pending_metadata).
+func Contribute(trackName, artistName, isrc, source, rawAttributes, ttmlRaw string) {
+	if source != providers.SourceApple {
+		return
+	}
 	key := ingressKey()
 	if key == "" {
 		return
@@ -68,10 +73,11 @@ func Contribute(trackName, artistName, isrc, rawAttributes, ttmlRaw string) {
 	}
 }
 
-// PostLyrics is the lyric-only entry point kept for the legacy call sites. New
-// code should call Contribute so metadata is backfilled too.
+// PostLyrics is the entry point kept for the legacy call sites, which cannot pass
+// provenance. It forwards an empty source so Contribute never contributes from the
+// legacy path (which now resolves lrc.red first and could otherwise re-submit it).
 func PostLyrics(trackName, artistName, albumName string, durationMs int, ttmlRaw, isrc string) {
-	Contribute(trackName, artistName, isrc, "", ttmlRaw)
+	Contribute(trackName, artistName, isrc, "", "", ttmlRaw)
 }
 
 func postMetadata(key, isrc, trackName, artistName, rawAttributes string) {

@@ -223,8 +223,9 @@ func scrapeToken() (string, error) {
 // MINTED BEARER LANE (search only, no media-user-token)
 // =============================================================================
 
-// mintTokenURL is the binimum minter that returns a short-lived Apple developer
-// bearer, from TTML_MINT_URL. A package var so tests can point it at a stub.
+// mintTokenURL is the minter that returns a short-lived Apple developer bearer,
+// from TTML_MINT_URL (empty disables the minted lane). A package var so tests
+// can point it at a stub.
 var mintTokenURL = config.Get().Configuration.TTMLMintURL
 
 // mintUserAgent is the am-mint UA; that endpoint is not UA-whitelisted, so a plain
@@ -274,6 +275,10 @@ func getMintedBearer() (string, error) {
 		return token, nil
 	}
 	mintedMu.RUnlock()
+
+	if mintTokenURL == "" {
+		return "", fmt.Errorf("mint url not configured")
+	}
 
 	mintedMu.Lock()
 	defer mintedMu.Unlock()

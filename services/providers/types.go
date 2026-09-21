@@ -1,5 +1,12 @@
 package providers
 
+// Lyrics provenance values, recorded per cache entry and used to gate the
+// contribution loop: only Apple-sourced lyrics are contributed back to lrc.red.
+const (
+	SourceApple  = "apple"
+	SourceLRCRed = "lrc.red"
+)
+
 // Syllable represents a single word/syllable with timing information
 type Syllable struct {
 	Text         string `json:"text"`

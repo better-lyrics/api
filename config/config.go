@@ -29,8 +29,8 @@ type Config struct {
 		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
 		LRCRedIngressKey                   string `envconfig:"LRC_RED_INGRESS_KEY" default:""`
 		LRCRedUserAgent                    string `envconfig:"LRC_RED_USER_AGENT" default:"better-lyrics-api (+https://betterlyrics.org)"`
-		LRCRedBaseURL                      string `envconfig:"LRC_RED_BASE_URL" default:"https://lrc.red"`
-		TTMLMintURL                        string `envconfig:"TTML_MINT_URL" default:"https://am-mint.binimum.org/token"`
+		LRCRedBaseURL                      string `envconfig:"LRC_RED_BASE_URL" default:""`
+		TTMLMintURL                        string `envconfig:"TTML_MINT_URL" default:""`
 		ProxyRevalidateURL                 string `envconfig:"PROXY_REVALIDATE_URL" default:""`
 		ProxyAPIKey                        string `envconfig:"PROXY_API_KEY" default:""`
 

@@ -4,7 +4,7 @@
 ![GitHub License](https://img.shields.io/github/license/better-lyrics/api)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/better-lyrics/api/go.yml)
 
-This repository contains the source code for the official Better Lyrics API - primarily serving as the backend for [Better Lyrics](https://better-lyrics.boidu.dev).
+This repository contains the source code for the official Better Lyrics API - primarily serving as the backend for [Better Lyrics](https://betterlyrics.org).
 
 > [!NOTE]
 > A few endpoints are defined as environment variables in the `.env` file. This is deliberate to prevent abuse of the API and to ensure that the API is used responsibly. If you would like to use a similar API for your own project, consider using something like [spotify-lyrics-api](https://github.com/akashrchandran/spotify-lyrics-api). This repository is intended to address privacy concerns and to provide a more transparent API for users.
@@ -46,11 +46,11 @@ Admin/cache endpoints (`/cache/*`, `/revalidate`, `/override`, `/health/mut`, et
 
 Lyrics for `/getLyrics` (and `/ttml/getLyrics`) resolve in this order, stopping at the first hit:
 
-1. **Local cache** (Postgres). Entries persist until cleared, so any track is fetched from upstream at most once.
-2. **[lrc.red](https://lrc.red) by ISRC**, the primary source: a free, open, Cloudflare-cached lookup table with broad coverage. An upstream catalog lookup first identifies the track and its ISRC, then lrc.red is queried by that ISRC.
-3. **Upstream lyrics provider**, used only as a fallback when lrc.red has no entry for that ISRC. This path is rate-limited and account-gated, which is the dependency lrc.red lets the common path avoid.
+1. Local cache (Postgres). Entries persist until cleared, so a track is fetched from upstream at most once.
+2. [lrc.red](https://lrc.red) by ISRC. An upstream catalog lookup finds the track and its ISRC, then lrc.red is queried by that ISRC.
+3. The upstream lyrics provider, only when lrc.red has no entry for that ISRC.
 
-Anything fetched from the upstream provider in the fallback is contributed back to [lrc.red](https://lrc.red)'s ingress, keyed by ISRC, so their catalog improves and more tracks resolve at step 2 over time. Contributions are idempotent: lrc.red de-duplicates server-side and treats a better-synced submission as a replacement. Lyrics pulled from lrc.red are never re-submitted.
+Lyrics fetched from the upstream provider are contributed back to lrc.red's ingress, keyed by ISRC; lyrics that came from lrc.red are not.
 
 Upstream lyrics source: [lrc.red](https://lrc.red) by w4v.
 
@@ -66,4 +66,4 @@ Contributions are welcome! If you find any issues or have suggestions for improv
 
 ## License
 
-This project is licensed under the [GPL v3 License](LICENSE). As long as you attribute me or [Better Lyrics](https://better-lyrics.boidu.dev) as the original creator and you comply with the rest of the license terms, you can use this project for personal or commercial purposes.
+This project is licensed under the [GPL v3 License](LICENSE). As long as you attribute me or [Better Lyrics](https://betterlyrics.org) as the original creator and you comply with the rest of the license terms, you can use this project for personal or commercial purposes.
