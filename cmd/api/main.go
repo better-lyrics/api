@@ -10,6 +10,7 @@ import (
 	"lyrics-api-go/config"
 	"lyrics-api-go/internal/httpapi"
 	"lyrics-api-go/internal/store"
+	"lyrics-api-go/internal/syncupgrade"
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/services/notifier"
 
@@ -90,6 +91,7 @@ func main() {
 
 	ttml.StartBearerTokenMonitor()
 	ttml.StartHealthCheckScheduler()
+	go syncupgrade.StartSyncUpgradeDetector(st, cfg)
 
 	port := os.Getenv("PORT")
 	if port == "" {

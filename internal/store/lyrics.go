@@ -78,6 +78,14 @@ func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedL
 	return tx.Commit(ctx)
 }
 
+func (s *Store) SetLyricsSyncState(ctx context.Context, cacheKey, timingType, appleETag string, checkedAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE lyrics SET timing_type = $2, apple_etag = $3, last_checked_at = $4
+		WHERE cache_key = $1`,
+		cacheKey, timingType, appleETag, checkedAt)
+	return err
+}
+
 func (s *Store) GetLyricsExact(ctx context.Context, cacheKey string) (CachedLyrics, bool, error) {
 	var blob []byte
 	var l CachedLyrics
