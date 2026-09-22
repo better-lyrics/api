@@ -148,7 +148,8 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 		durationMs = durationMs * 1000
 	}
 
-	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
+	priority, _ := r.Context().Value(apiKeyAuthenticatedKey).(bool)
+	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, priority)
 
 	req.err = err
 	if err == nil {

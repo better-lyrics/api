@@ -198,7 +198,7 @@ func scoreTrack(track *Track, targetSongName, targetArtistName, targetAlbumName 
 
 // makeAPIRequestWithAccount makes an HTTP request using the specified account.
 // Returns the response, the account that succeeded (may differ from input if retried), and error.
-func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int) (*http.Response, MusicAccount, error) {
+func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int, priority bool) (*http.Response, MusicAccount, error) {
 	if apiCircuitBreaker == nil {
 		initCircuitBreaker()
 	}
@@ -212,6 +212,10 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 		}
 		log.Warnf("%s Request blocked, circuit is OPEN (retry in %v)", logcolors.LogCircuitBreaker, timeUntilRetry)
 		return nil, account, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
+	}
+
+	if err := getOutbound().acquireAccount(priority); err != nil {
+		return nil, account, err
 	}
 
 	attemptNum := retries + 1
@@ -284,7 +288,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 			log.Warnf("%s 429 on %s (quarantined), switching to %s (attempt %d/%d, sleeping %v, %d accounts available)...",
 				logcolors.LogRateLimit, logcolors.Account(account.NameID), logcolors.Account(nextAccount.NameID), attemptNum, maxRetries, sleepDuration, availableAccounts)
 			time.Sleep(sleepDuration)
-			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)
+			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1, priority)
 		}
 
 		body, _ := io.ReadAll(resp.Body)
@@ -309,7 +313,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 			log.Warnf("%s 401 on %s (MUT invalid), switching to %s (attempt %d/%d, sleeping %v)...",
 				logcolors.LogAuthError, logcolors.Account(account.NameID), logcolors.Account(nextAccount.NameID), attemptNum, maxRetries, sleepDuration)
 			time.Sleep(sleepDuration)
-			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1)
+			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1, priority)
 		}
 	}
 
@@ -335,7 +339,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int)
 
 // searchTrack searches for a track and returns the best match, score, the account that succeeded, and any error.
 // The returned account may differ from the input if a retry occurred due to rate limiting.
-func searchTrack(query string, storefront string, songName, artistName, albumName string, durationMs int, account MusicAccount) (*Track, float64, MusicAccount, error) {
+func searchTrack(query string, storefront string, songName, artistName, albumName string, durationMs int, account MusicAccount, priority bool) (*Track, float64, MusicAccount, error) {
 	if query == "" {
 		return nil, 0.0, account, fmt.Errorf("empty search query")
 	}
@@ -352,7 +356,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 	)
 
 	log.Infof("%s Querying TTML API via %s: %s", logcolors.LogSearch, logcolors.Account(account.NameID), query)
-	resp, successAccount, err := makeAPIRequestWithAccount(searchURL, account, 0)
+	resp, successAccount, err := makeAPIRequestWithAccount(searchURL, account, 0, priority)
 	if err != nil {
 		return nil, 0.0, successAccount, fmt.Errorf("search request failed: %v", err)
 	}
@@ -526,6 +530,10 @@ func searchTrackMinted(query, songName, artistName, albumName string, durationMs
 	req.Header.Set("Origin", "https://music.apple.com")
 	req.Header.Set("Referer", "https://music.apple.com")
 
+	if err := getOutbound().acquireMinted(); err != nil {
+		return nil, 0.0, false, err
+	}
+
 	log.Infof("%s Querying TTML API via minted bearer (storefront %s): %s", logcolors.LogSearch, storefront, query)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
@@ -562,7 +570,7 @@ func searchTrackMinted(query, songName, artistName, albumName string, durationMs
 // fallback), so a scarce account is never spent re-running the same query. The
 // returned account is the one to use for any subsequent Apple lyrics fetch; the
 // minted lane spends none, so the caller's round-robin pick is returned unchanged.
-func searchTwoLane(query, storefront, songName, artistName, albumName string, durationMs int, account MusicAccount) (*Track, float64, MusicAccount, error) {
+func searchTwoLane(query, storefront, songName, artistName, albumName string, durationMs int, account MusicAccount, priority bool) (*Track, float64, MusicAccount, error) {
 	track, score, ok, err := searchTrackMinted(query, songName, artistName, albumName, durationMs)
 	if ok {
 		if err != nil {
@@ -573,10 +581,10 @@ func searchTwoLane(query, storefront, songName, artistName, albumName string, du
 	}
 
 	log.Warnf("%s Minted search unavailable (%v), falling back to account lane", logcolors.LogSearch, err)
-	return searchTrack(query, storefront, songName, artistName, albumName, durationMs, account)
+	return searchTrack(query, storefront, songName, artistName, albumName, durationMs, account, priority)
 }
 
-func fetchLyricsTTML(trackID string, storefront string, account MusicAccount) (string, error) {
+func fetchLyricsTTML(trackID string, storefront string, account MusicAccount, priority bool) (string, error) {
 	conf := config.Get()
 	lyricsURL := conf.Configuration.TTMLBaseURL + fmt.Sprintf(
 		conf.Configuration.TTMLLyricsPath,
@@ -585,7 +593,7 @@ func fetchLyricsTTML(trackID string, storefront string, account MusicAccount) (s
 	)
 
 	log.Infof("%s Fetching TTML via %s for track: %s", logcolors.LogLyrics, logcolors.Account(account.NameID), trackID)
-	resp, _, err := makeAPIRequestWithAccount(lyricsURL, account, 0)
+	resp, _, err := makeAPIRequestWithAccount(lyricsURL, account, 0, priority)
 	if err != nil {
 		return "", fmt.Errorf("lyrics request failed: %v", err)
 	}

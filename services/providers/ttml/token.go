@@ -158,6 +158,10 @@ func scrapeToken() (string, error) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
+	if err := getOutbound().acquireScrape(); err != nil {
+		return "", err
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch token source: %w", err)
@@ -188,6 +192,10 @@ func scrapeToken() (string, error) {
 		return "", fmt.Errorf("failed to create JS bundle request: %w", err)
 	}
 	jsReq.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+
+	if err := getOutbound().acquireScrape(); err != nil {
+		return "", err
+	}
 
 	jsResp, err := client.Do(jsReq)
 	if err != nil {
@@ -437,6 +445,10 @@ func getMintedBearer() (mintedBearer, error) {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", mintUserAgent)
+
+	if err := getOutbound().acquireMint(); err != nil {
+		return mintedBearer{}, err
+	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)

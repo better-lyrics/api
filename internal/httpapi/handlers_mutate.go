@@ -137,7 +137,7 @@ func (s *Server) revalidateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Infof("%s Revalidating cache for: %s %s", logcolors.LogRevalidate, songName, artistName)
-	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
+	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, true)
 
 	if err != nil {
 		log.Warnf("%s Revalidation fetch failed: %v", logcolors.LogRevalidate, err)
@@ -290,7 +290,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Infof("%s Fetching lyrics for track ID %s to override %d cache entries", logcolors.LogOverride, trackID, len(matchingKeys))
-	ttmlString, err := ttml.FetchLyricsByTrackID(trackID)
+	ttmlString, err := ttml.FetchLyricsByTrackID(trackID, true)
 	if err != nil {
 		log.Errorf("%s Failed to fetch lyrics for track ID %s: %v", logcolors.LogOverride, trackID, err)
 		respond(w, r).Error(http.StatusInternalServerError, map[string]interface{}{

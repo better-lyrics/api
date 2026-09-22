@@ -10,7 +10,7 @@ import (
 
 // FetchLyricsByTrackID fetches TTML lyrics directly by Apple Music track ID, skipping search.
 // Used by the /override endpoint to correct cached lyrics with a known-good track ID.
-func FetchLyricsByTrackID(trackID string) (string, error) {
+func FetchLyricsByTrackID(trackID string, priority bool) (string, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
@@ -37,7 +37,7 @@ func FetchLyricsByTrackID(trackID string) (string, error) {
 
 	log.Infof("%s Fetching lyrics by track ID %s via %s", logcolors.LogRequest, trackID, logcolors.Account(account.NameID))
 
-	ttml, err := fetchLyricsTTML(trackID, storefront, account)
+	ttml, err := fetchLyricsTTML(trackID, storefront, account, priority)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch TTML for track %s: %v", trackID, err)
 	}
@@ -55,7 +55,7 @@ func FetchLyricsByTrackID(trackID string) (string, error) {
 // FetchTTMLLyrics is the main function to fetch TTML API lyrics
 // durationMs is optional (0 means no duration filter), used to find closest matching track by duration
 // Returns: raw TTML string, track duration in ms, similarity score, track metadata, error
-func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (string, int, float64, *TrackMeta, error) {
+func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, priority bool) (string, int, float64, *TrackMeta, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
@@ -101,7 +101,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 	}
 
 	// Minted lane first (no account spent); account lane only on mint/request failure.
-	track, score, workingAccount, err := searchTwoLane(query, storefront, songName, artistName, albumName, durationMs, account)
+	track, score, workingAccount, err := searchTwoLane(query, storefront, songName, artistName, albumName, durationMs, account, priority)
 	if err != nil {
 		return "", 0, 0.0, nil, fmt.Errorf("search failed: %v", err)
 	}
@@ -153,7 +153,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int) (st
 		if lyricsStorefront == "" {
 			lyricsStorefront = "us"
 		}
-		ttml, err := fetchLyricsTTML(track.ID, lyricsStorefront, workingAccount)
+		ttml, err := fetchLyricsTTML(track.ID, lyricsStorefront, workingAccount, priority)
 		if err != nil {
 			return "", fmt.Errorf("failed to fetch TTML: %v", err)
 		}

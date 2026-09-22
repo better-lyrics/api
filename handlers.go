@@ -52,6 +52,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 	// Check if API key was required but not provided (cache-first mode)
 	apiKeyRequired, _ := r.Context().Value(apiKeyRequiredForFreshKey).(bool)
 	apiKeyInvalid, _ := r.Context().Value(apiKeyInvalidKey).(bool)
+	apiKeyAuthenticated, _ := r.Context().Value(apiKeyAuthenticatedKey).(bool)
 
 	// Check cache first with fuzzy duration matching (handles normalized + legacy keys)
 	// This allows cache hits when duration differs by up to DURATION_MATCH_DELTA_MS (default 2s)
@@ -170,7 +171,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		durationMs = durationMs * 1000 // Convert seconds to milliseconds
 	}
 
-	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
+	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, apiKeyAuthenticated)
 
 	req.err = err
 	if err == nil {
@@ -1201,7 +1202,7 @@ func overrideHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 7. Fetch lyrics by track ID
 	log.Infof("%s Fetching lyrics for track ID %s to override %d cache entries", logcolors.LogOverride, trackID, len(matchingKeys))
-	ttmlString, err := ttml.FetchLyricsByTrackID(trackID)
+	ttmlString, err := ttml.FetchLyricsByTrackID(trackID, true)
 	if err != nil {
 		log.Errorf("%s Failed to fetch lyrics for track ID %s: %v", logcolors.LogOverride, trackID, err)
 		Respond(w, r).Error(http.StatusInternalServerError, map[string]interface{}{
@@ -1359,7 +1360,7 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Infof("%s Revalidating cache for: %s %s", logcolors.LogRevalidate, songName, artistName)
-	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs)
+	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, true)
 
 	if err != nil {
 		log.Warnf("%s Revalidation fetch failed: %v", logcolors.LogRevalidate, err)

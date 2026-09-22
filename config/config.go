@@ -18,10 +18,22 @@ type Config struct {
 		DefaultProvider string `envconfig:"DEFAULT_PROVIDER" default:"ttml"` // Default lyrics provider (ttml, kugou, legacy)
 
 		// Rate Limiting
-		RateLimitPerSecond                 int    `envconfig:"RATE_LIMIT_PER_SECOND" default:"2"`
-		RateLimitBurstLimit                int    `envconfig:"RATE_LIMIT_BURST_LIMIT" default:"5"`
-		CachedRateLimitPerSecond           int    `envconfig:"CACHED_RATE_LIMIT_PER_SECOND" default:"10"`
-		CachedRateLimitBurstLimit          int    `envconfig:"CACHED_RATE_LIMIT_BURST_LIMIT" default:"20"`
+		RateLimitPerSecond        int `envconfig:"RATE_LIMIT_PER_SECOND" default:"2"`
+		RateLimitBurstLimit       int `envconfig:"RATE_LIMIT_BURST_LIMIT" default:"5"`
+		CachedRateLimitPerSecond  int `envconfig:"CACHED_RATE_LIMIT_PER_SECOND" default:"10"`
+		CachedRateLimitBurstLimit int `envconfig:"CACHED_RATE_LIMIT_BURST_LIMIT" default:"20"`
+
+		// Outbound Throttling
+		AccountRate                        int    `envconfig:"ACCOUNT_RATE" default:"2"`
+		AccountBurst                       int    `envconfig:"ACCOUNT_BURST" default:"10"`
+		MintedRate                         int    `envconfig:"MINTED_RATE" default:"5"`
+		MintedBurst                        int    `envconfig:"MINTED_BURST" default:"20"`
+		ScrapeRate                         int    `envconfig:"SCRAPE_RATE" default:"1"`
+		ScrapeBurst                        int    `envconfig:"SCRAPE_BURST" default:"5"`
+		MintRate                           int    `envconfig:"MINT_RATE" default:"4"`
+		MintBurst                          int    `envconfig:"MINT_BURST" default:"6"`
+		AccountPriorityReserve             int    `envconfig:"ACCOUNT_PRIORITY_RESERVE" default:"2"`
+		OutboundMaxWaitMs                  int    `envconfig:"OUTBOUND_MAX_WAIT_MS" default:"2000"`
 		CacheInvalidationIntervalInSeconds int    `envconfig:"CACHE_INVALIDATION_INTERVAL_IN_SECONDS" default:"3600"`
 		LyricsCacheTTLInSeconds            int    `envconfig:"LYRICS_CACHE_TTL_IN_SECONDS" default:"86400"`
 		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
