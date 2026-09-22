@@ -12,6 +12,7 @@ func main() {
 	statsPath := flag.String("stats", "", "optional path to the legacy stats.db BoltDB snapshot")
 	dsn := flag.String("dsn", "", "target Postgres connection string")
 	verify := flag.Bool("verify", false, "verify already-migrated data against the bolt snapshot instead of migrating")
+	batch := flag.Int("batch", 0, "rows per batch (0 = default)")
 	flag.Parse()
 
 	if *boltPath == "" || *dsn == "" {
@@ -27,6 +28,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer cleanup()
+
+	if *batch > 0 {
+		m.batchSize = *batch
+	}
 
 	if *verify {
 		result, err := m.Verify(ctx)
