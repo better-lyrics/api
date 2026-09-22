@@ -33,7 +33,7 @@ func TestResolveLyrics(t *testing.T) {
 		apple := func() (string, error) { appleCalled = true; return "APPLE", nil }
 		lrc := func(string) (string, bool, error) { return "LRCRED", true, nil }
 
-		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), lrc, apple)
+		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), false, lrc, apple)
 		if err != nil || ttml != "LRCRED" || source != SourceLRCRed {
 			t.Fatalf("got (%q, %q, %v), want (LRCRED, lrc.red, nil)", ttml, source, err)
 		}
@@ -46,7 +46,7 @@ func TestResolveLyrics(t *testing.T) {
 		apple := func() (string, error) { return "APPLE", nil }
 		lrc := func(string) (string, bool, error) { return "", false, nil }
 
-		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), lrc, apple)
+		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), false, lrc, apple)
 		if err != nil || ttml != "APPLE" || source != SourceApple {
 			t.Fatalf("got (%q, %q, %v), want (APPLE, apple, nil)", ttml, source, err)
 		}
@@ -56,7 +56,7 @@ func TestResolveLyrics(t *testing.T) {
 		apple := func() (string, error) { return "APPLE", nil }
 		lrc := func(string) (string, bool, error) { return "", false, errors.New("boom") }
 
-		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", nil), lrc, apple)
+		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", nil), false, lrc, apple)
 		if err != nil || ttml != "APPLE" || source != SourceApple {
 			t.Fatalf("got (%q, %q, %v), want (APPLE, apple, nil)", ttml, source, err)
 		}
@@ -67,7 +67,7 @@ func TestResolveLyrics(t *testing.T) {
 		apple := func() (string, error) { appleCalled = true; return "APPLE", nil }
 		lrc := func(string) (string, bool, error) { return "", false, nil }
 
-		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(false)), lrc, apple)
+		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(false)), false, lrc, apple)
 		if err == nil || ttml != "" || source != SourceApple {
 			t.Fatalf("got (%q, %q, %v), want (empty, apple, error)", ttml, source, err)
 		}
@@ -80,9 +80,71 @@ func TestResolveLyrics(t *testing.T) {
 		apple := func() (string, error) { return "", errors.New("failed to fetch TTML: boom") }
 		lrc := func(string) (string, bool, error) { return "", false, nil }
 
-		_, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), lrc, apple)
+		_, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), false, lrc, apple)
 		if err == nil || source != SourceApple {
 			t.Fatalf("want apple error, got source=%q err=%v", source, err)
+		}
+	})
+
+	t.Run("appleFirst prefers Apple and skips lrc.red when Apple has timed lyrics", func(t *testing.T) {
+		lrcCalled := false
+		apple := func() (string, error) { return "APPLE", nil }
+		lrc := func(string) (string, bool, error) { lrcCalled = true; return "LRCRED", true, nil }
+
+		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), true, lrc, apple)
+		if err != nil || ttml != "APPLE" || source != SourceApple {
+			t.Fatalf("got (%q, %q, %v), want (APPLE, apple, nil)", ttml, source, err)
+		}
+		if lrcCalled {
+			t.Error("lrc.red must not be queried when Apple already returned timed lyrics")
+		}
+	})
+
+	t.Run("appleFirst falls back to lrc.red when hasTimeSyncedLyrics=false", func(t *testing.T) {
+		appleCalled := false
+		apple := func() (string, error) { appleCalled = true; return "APPLE", nil }
+		lrc := func(string) (string, bool, error) { return "LRCRED", true, nil }
+
+		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(false)), true, lrc, apple)
+		if err != nil || ttml != "LRCRED" || source != SourceLRCRed {
+			t.Fatalf("got (%q, %q, %v), want (LRCRED, lrc.red, nil)", ttml, source, err)
+		}
+		if appleCalled {
+			t.Error("Apple lyrics endpoint must not be called when hasTimeSyncedLyrics=false")
+		}
+	})
+
+	t.Run("appleFirst falls back to lrc.red when Apple fetch fails", func(t *testing.T) {
+		apple := func() (string, error) { return "", errors.New("failed to fetch TTML: boom") }
+		lrc := func(string) (string, bool, error) { return "LRCRED", true, nil }
+
+		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), true, lrc, apple)
+		if err != nil || ttml != "LRCRED" || source != SourceLRCRed {
+			t.Fatalf("got (%q, %q, %v), want (LRCRED, lrc.red, nil)", ttml, source, err)
+		}
+	})
+
+	t.Run("appleFirst returns Apple error when both sources miss", func(t *testing.T) {
+		apple := func() (string, error) { return "", errors.New("failed to fetch TTML: boom") }
+		lrc := func(string) (string, bool, error) { return "", false, nil }
+
+		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), true, lrc, apple)
+		if err == nil || ttml != "" || source != SourceApple {
+			t.Fatalf("got (%q, %q, %v), want (empty, apple, error)", ttml, source, err)
+		}
+	})
+
+	t.Run("appleFirst with hasTimeSyncedLyrics=false and lrc.red miss returns Apple error without fetching Apple", func(t *testing.T) {
+		appleCalled := false
+		apple := func() (string, error) { appleCalled = true; return "APPLE", nil }
+		lrc := func(string) (string, bool, error) { return "", false, nil }
+
+		ttml, source, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(false)), true, lrc, apple)
+		if err == nil || ttml != "" || source != SourceApple {
+			t.Fatalf("got (%q, %q, %v), want (empty, apple, error)", ttml, source, err)
+		}
+		if appleCalled {
+			t.Error("Apple lyrics endpoint must not be called when hasTimeSyncedLyrics=false")
 		}
 	})
 }

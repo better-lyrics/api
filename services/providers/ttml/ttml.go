@@ -54,8 +54,9 @@ func FetchLyricsByTrackID(trackID string, priority bool) (string, error) {
 
 // FetchTTMLLyrics is the main function to fetch TTML API lyrics
 // durationMs is optional (0 means no duration filter), used to find closest matching track by duration
+// appleFirst prefers Apple and falls back to lrc.red (used by revalidate to force-refresh the authoritative source); getLyrics passes false for lrc.red-first
 // Returns: raw TTML string, track duration in ms, similarity score, track metadata, error
-func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, priority bool) (string, int, float64, *TrackMeta, error) {
+func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, priority bool, appleFirst bool) (string, int, float64, *TrackMeta, error) {
 	if accountManager == nil {
 		initAccountManager()
 	}
@@ -165,7 +166,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, pri
 		return ttml, nil
 	}
 
-	lyricsTTML, source, err := resolveLyrics(track, fetchLRCRedByISRC, appleFetch)
+	lyricsTTML, source, err := resolveLyrics(track, appleFirst, fetchLRCRedByISRC, appleFetch)
 	trackMeta.Source = source
 	if err != nil {
 		return "", trackDurationMs, score, trackMeta, err
@@ -173,28 +174,53 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, pri
 	return lyricsTTML, trackDurationMs, score, trackMeta, nil
 }
 
-// resolveLyrics applies the post-search resolution order: lrc.red by ISRC first
-// (free, no subscriber account spent), then Apple's MUT-gated lyrics endpoint
-// only on a lrc.red miss. lrcRedFetch and appleFetch are injected so the order
-// and provenance are unit-testable without network or accounts.
-func resolveLyrics(track *Track, lrcRedFetch func(string) (string, bool, error), appleFetch func() (string, error)) (string, string, error) {
-	if lrcTTML, ok, lrcErr := lrcRedFetch(track.Attributes.ISRC); lrcErr != nil {
-		log.Warnf("%s lrc.red lookup failed for ISRC %q: %v", logcolors.LogLyrics, track.Attributes.ISRC, lrcErr)
-	} else if ok {
-		log.Infof("%s Fetched lyrics from lrc.red for: %s - %s (%d bytes)",
-			logcolors.LogSuccess, track.Attributes.Name, track.Attributes.ArtistName, len(lrcTTML))
+// resolveLyrics applies the post-search resolution order and provenance.
+// getLyrics (appleFirst=false) tries lrc.red by ISRC first (free, no subscriber
+// account spent), then Apple's MUT-gated lyrics endpoint only on a lrc.red miss.
+// revalidate (appleFirst=true) prefers Apple so a forced refresh re-reads the
+// authoritative source, and falls back to lrc.red when Apple has nothing: Apple
+// reports hasTimeSyncedLyrics=false for untimed tracks and skips its own fetch,
+// so without the fallback revalidate could never refresh untimed or lrc.red-only
+// entries. lrcRedFetch and appleFetch are injected so the order and provenance
+// are unit-testable without network or accounts.
+func resolveLyrics(track *Track, appleFirst bool, lrcRedFetch func(string) (string, bool, error), appleFetch func() (string, error)) (string, string, error) {
+	tryLRCRed := func() (string, bool) {
+		if lrcTTML, ok, lrcErr := lrcRedFetch(track.Attributes.ISRC); lrcErr != nil {
+			log.Warnf("%s lrc.red lookup failed for ISRC %q: %v", logcolors.LogLyrics, track.Attributes.ISRC, lrcErr)
+		} else if ok {
+			log.Infof("%s Fetched lyrics from lrc.red for: %s - %s (%d bytes)",
+				logcolors.LogSuccess, track.Attributes.Name, track.Attributes.ArtistName, len(lrcTTML))
+			return lrcTTML, true
+		}
+		return "", false
+	}
+
+	tryApple := func() (string, error) {
+		if track.Attributes.HasTimeSyncedLyrics == nil {
+			log.Warnf("%s hasTimeSyncedLyrics field missing from search response for %s - %s, falling back to lyrics fetch",
+				logcolors.LogWarning, track.Attributes.Name, track.Attributes.ArtistName)
+		} else if !*track.Attributes.HasTimeSyncedLyrics {
+			log.Infof("%s Skipping lyrics fetch: hasTimeSyncedLyrics=false for %s - %s",
+				logcolors.LogLyrics, track.Attributes.Name, track.Attributes.ArtistName)
+			return "", fmt.Errorf("no lyrics data found (hasTimeSyncedLyrics=false)")
+		}
+		return appleFetch()
+	}
+
+	if appleFirst {
+		appleTTML, appleErr := tryApple()
+		if appleErr == nil && appleTTML != "" {
+			return appleTTML, SourceApple, nil
+		}
+		if lrcTTML, ok := tryLRCRed(); ok {
+			return lrcTTML, SourceLRCRed, nil
+		}
+		return appleTTML, SourceApple, appleErr
+	}
+
+	if lrcTTML, ok := tryLRCRed(); ok {
 		return lrcTTML, SourceLRCRed, nil
 	}
-
-	if track.Attributes.HasTimeSyncedLyrics == nil {
-		log.Warnf("%s hasTimeSyncedLyrics field missing from search response for %s - %s, falling back to lyrics fetch",
-			logcolors.LogWarning, track.Attributes.Name, track.Attributes.ArtistName)
-	} else if !*track.Attributes.HasTimeSyncedLyrics {
-		log.Infof("%s Skipping lyrics fetch: hasTimeSyncedLyrics=false for %s - %s",
-			logcolors.LogLyrics, track.Attributes.Name, track.Attributes.ArtistName)
-		return "", SourceApple, fmt.Errorf("no lyrics data found (hasTimeSyncedLyrics=false)")
-	}
-
-	ttml, err := appleFetch()
+	ttml, err := tryApple()
 	return ttml, SourceApple, err
 }
