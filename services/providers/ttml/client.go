@@ -630,3 +630,61 @@ func fetchLyricsTTML(trackID string, storefront string, account MusicAccount, pr
 	log.Debugf("%s Successfully fetched TTML content, length: %d bytes", logcolors.LogLyrics, len(ttml))
 	return ttml, nil
 }
+
+func parseTrackByIDResponse(body []byte) (*TrackMeta, error) {
+	var r struct {
+		Data []Track `json:"data"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("failed to parse song response: %w", err)
+	}
+	if len(r.Data) == 0 {
+		return nil, fmt.Errorf("no song data found")
+	}
+	return trackMetaFrom(&r.Data[0]), nil
+}
+
+func FetchTrackByID(trackID string, priority bool) (*TrackMeta, error) {
+	conf := config.Get()
+	if conf.Configuration.TTMLSongPath == "" {
+		return nil, fmt.Errorf("TTML_SONG_PATH not configured")
+	}
+
+	if accountManager == nil {
+		initAccountManager()
+	}
+	if !accountManager.hasAccounts() {
+		return nil, fmt.Errorf("no TTML accounts configured")
+	}
+
+	if apiCircuitBreaker == nil {
+		initCircuitBreaker()
+	}
+	if apiCircuitBreaker.IsOpen() {
+		if timeUntilRetry := apiCircuitBreaker.TimeUntilRetry(); timeUntilRetry > 0 {
+			return nil, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
+		}
+	}
+
+	account := accountManager.getNextAccount()
+	storefront := account.Storefront
+	if storefront == "" {
+		storefront = "us"
+	}
+
+	songURL := conf.Configuration.TTMLBaseURL + fmt.Sprintf(conf.Configuration.TTMLSongPath, storefront, trackID)
+	log.Infof("%s Fetching track metadata by ID %s via %s", logcolors.LogRequest, trackID, logcolors.Account(account.NameID))
+
+	resp, _, err := makeAPIRequestWithAccount(songURL, account, 0, priority)
+	if err != nil {
+		return nil, fmt.Errorf("song request failed for track %s: %v", trackID, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read song response: %v", err)
+	}
+
+	return parseTrackByIDResponse(body)
+}

@@ -52,10 +52,6 @@ func FetchLyricsByTrackID(trackID string, priority bool) (string, error) {
 	return ttml, nil
 }
 
-// FetchTTMLLyrics is the main function to fetch TTML API lyrics
-// durationMs is optional (0 means no duration filter), used to find closest matching track by duration
-// appleFirst prefers Apple and falls back to lrc.red (used by revalidate to force-refresh the authoritative source); getLyrics passes false for lrc.red-first
-// Returns: raw TTML string, track duration in ms, similarity score, track metadata, error
 func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, priority bool, appleFirst bool) (string, int, float64, *TrackMeta, error) {
 	if accountManager == nil {
 		initAccountManager()
@@ -126,25 +122,7 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, pri
 			logcolors.LogMatch, track.Attributes.Name, track.Attributes.ArtistName, track.ID, trackDurationMs, score)
 	}
 
-	// Build TrackMeta early so it's available even on lyrics-fetch errors.
-	// Prefer the untouched Apple attributes blob; fall back to re-marshaling the
-	// typed view if the raw form is somehow absent.
-	rawAttrs := string(track.RawAttributes)
-	if rawAttrs == "" {
-		b, _ := json.Marshal(track.Attributes)
-		rawAttrs = string(b)
-	}
-	trackMeta := &TrackMeta{
-		TrackID:             track.ID,
-		Name:                track.Attributes.Name,
-		ArtistName:          track.Attributes.ArtistName,
-		AlbumName:           track.Attributes.AlbumName,
-		ISRC:                track.Attributes.ISRC,
-		ReleaseDate:         track.Attributes.ReleaseDate,
-		HasTimeSyncedLyrics: track.Attributes.HasTimeSyncedLyrics,
-		RawAttributes:       rawAttrs,
-		Source:              SourceApple,
-	}
+	trackMeta := trackMetaFrom(track)
 
 	appleFetch := func() (string, error) {
 		// Fetch from the account that actually succeeded for search, using ITS
@@ -174,15 +152,6 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, pri
 	return lyricsTTML, trackDurationMs, score, trackMeta, nil
 }
 
-// resolveLyrics applies the post-search resolution order and provenance.
-// getLyrics (appleFirst=false) tries lrc.red by ISRC first (free, no subscriber
-// account spent), then Apple's MUT-gated lyrics endpoint only on a lrc.red miss.
-// revalidate (appleFirst=true) prefers Apple so a forced refresh re-reads the
-// authoritative source, and falls back to lrc.red when Apple has nothing: Apple
-// reports hasTimeSyncedLyrics=false for untimed tracks and skips its own fetch,
-// so without the fallback revalidate could never refresh untimed or lrc.red-only
-// entries. lrcRedFetch and appleFetch are injected so the order and provenance
-// are unit-testable without network or accounts.
 func resolveLyrics(track *Track, appleFirst bool, lrcRedFetch func(string) (string, bool, error), appleFetch func() (string, error)) (string, string, error) {
 	tryLRCRed := func() (string, bool) {
 		if lrcTTML, ok, lrcErr := lrcRedFetch(track.Attributes.ISRC); lrcErr != nil {
@@ -223,4 +192,23 @@ func resolveLyrics(track *Track, appleFirst bool, lrcRedFetch func(string) (stri
 	}
 	ttml, err := tryApple()
 	return ttml, SourceApple, err
+}
+
+func trackMetaFrom(track *Track) *TrackMeta {
+	rawAttrs := string(track.RawAttributes)
+	if rawAttrs == "" {
+		b, _ := json.Marshal(track.Attributes)
+		rawAttrs = string(b)
+	}
+	return &TrackMeta{
+		TrackID:             track.ID,
+		Name:                track.Attributes.Name,
+		ArtistName:          track.Attributes.ArtistName,
+		AlbumName:           track.Attributes.AlbumName,
+		ISRC:                track.Attributes.ISRC,
+		ReleaseDate:         track.Attributes.ReleaseDate,
+		HasTimeSyncedLyrics: track.Attributes.HasTimeSyncedLyrics,
+		RawAttributes:       rawAttrs,
+		Source:              SourceApple,
+	}
 }

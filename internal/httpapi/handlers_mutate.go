@@ -300,6 +300,15 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	go func() {
+		meta, err := ttml.FetchTrackByID(trackID, true)
+		if err != nil {
+			log.Warnf("%s Skipping lrc.red backfill for track %s: %v", logcolors.LogOverride, trackID, err)
+			return
+		}
+		bini.Contribute(meta.Name, meta.ArtistName, meta.ISRC, ttml.SourceApple, meta.RawAttributes, ttmlString)
+	}()
+
 	var updatedKeys []string
 	created := false
 
