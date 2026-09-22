@@ -668,7 +668,7 @@ func fetchLyricsTTMLConditional(trackID string, storefront string, account Music
 
 	resp, _, err := makeAPIRequestWithAccount(lyricsURL, account, 0, priority, ifNoneMatch)
 	if err != nil {
-		return "", "", false, fmt.Errorf("lyrics request failed: %v", err)
+		return "", "", false, fmt.Errorf("lyrics request failed: %w", err)
 	}
 	defer resp.Body.Close()
 

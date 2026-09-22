@@ -2,6 +2,7 @@ package syncupgrade
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -33,6 +34,9 @@ func decideCandidate(c store.SyncUpgradeCandidate, fetch condFetch, timingOf fun
 
 	body, etag, notModified, err := fetch(c.AppleTrackID, c.AppleETag)
 	if err != nil {
+		if errors.Is(err, ttml.ErrThrottled) {
+			return Action{}, err
+		}
 		return Action{Bump: true, NewTiming: oldTiming, NewETag: c.AppleETag}, err
 	}
 	if notModified {
@@ -118,6 +122,9 @@ func persistSyncUpgrade(ctx context.Context, st *store.Store, cand store.SyncUpg
 	now := time.Now().UTC()
 
 	if !act.Upgraded {
+		if !act.Bump {
+			return
+		}
 		timing := cand.TimingType
 		etag := cand.AppleETag
 		if act.NewTiming != "" {
