@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func setDurationVariant(t *testing.T, song, artist string, sec int, ttml string) string {
@@ -17,6 +18,23 @@ func setDurationVariant(t *testing.T, song, artist string, sec int, ttml string)
 		t.Fatalf("seed duration %d: %v", sec, err)
 	}
 	return key
+}
+
+func TestSetLyrics_PersistsSyncTracking(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+	checked := time.Now().UTC().Truncate(time.Second)
+	in := CachedLyrics{TTML: "<tt/>", Source: "apple", TimingType: "line", AppleETag: `"abc--gzip"`, LastCheckedAt: &checked}
+	if err := testStore.SetLyrics(ctx, "k1", Key{Provider: "ttml_lyrics", BaseKey: "song artist"}, in); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := testStore.GetLyricsExact(ctx, "k1")
+	if err != nil || !ok {
+		t.Fatalf("get: %v ok=%v", err, ok)
+	}
+	if got.TimingType != "line" || got.AppleETag != `"abc--gzip"` || got.LastCheckedAt == nil || !got.LastCheckedAt.Equal(checked) {
+		t.Fatalf("sync fields not round-tripped: %+v", got)
+	}
 }
 
 func TestLyrics_SetGetExact(t *testing.T) {
