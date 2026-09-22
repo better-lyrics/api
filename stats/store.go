@@ -42,12 +42,19 @@ type PersistedStats struct {
 	CacheMisses       int64 `json:"cache_misses"`
 	NegativeCacheHits int64 `json:"negative_cache_hits"`
 	StaleCacheHits    int64 `json:"stale_cache_hits"`
-	RateLimitNormal   int64 `json:"rate_limit_normal"`
-	RateLimitCached   int64 `json:"rate_limit_cached"`
-	RateLimitExceeded int64 `json:"rate_limit_exceeded"`
-	Status2xx         int64 `json:"status_2xx"`
-	Status4xx         int64 `json:"status_4xx"`
-	Status5xx         int64 `json:"status_5xx"`
+
+	LRCRedFetchAttempts     int64 `json:"lrcred_fetch_attempts"`
+	LRCRedFetchHits         int64 `json:"lrcred_fetch_hits"`
+	LRCRedFetchMisses       int64 `json:"lrcred_fetch_misses"`
+	LRCRedFetchErrors       int64 `json:"lrcred_fetch_errors"`
+	LRCRedContributeSent    int64 `json:"lrcred_contribute_sent"`
+	LRCRedContributeSkipped int64 `json:"lrcred_contribute_skipped"`
+	RateLimitNormal         int64 `json:"rate_limit_normal"`
+	RateLimitCached         int64 `json:"rate_limit_cached"`
+	RateLimitExceeded       int64 `json:"rate_limit_exceeded"`
+	Status2xx               int64 `json:"status_2xx"`
+	Status4xx               int64 `json:"status_4xx"`
+	Status5xx               int64 `json:"status_5xx"`
 
 	// Response time tracking
 	TotalResponseTime   int64 `json:"total_response_time"`

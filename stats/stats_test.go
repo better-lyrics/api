@@ -6,6 +6,42 @@ import (
 	"time"
 )
 
+func TestRecordLRCRedFetch(t *testing.T) {
+	s := newStats()
+	s.RecordLRCRedFetch(true, nil)
+	s.RecordLRCRedFetch(false, nil)
+	s.RecordLRCRedFetch(false, fmt.Errorf("boom"))
+	if got := s.LRCRedFetchAttempts.Load(); got != 3 {
+		t.Fatalf("attempts = %d, want 3", got)
+	}
+	if s.LRCRedFetchHits.Load() != 1 || s.LRCRedFetchMisses.Load() != 1 || s.LRCRedFetchErrors.Load() != 1 {
+		t.Fatalf("hit/miss/err = %d/%d/%d, want 1/1/1",
+			s.LRCRedFetchHits.Load(), s.LRCRedFetchMisses.Load(), s.LRCRedFetchErrors.Load())
+	}
+}
+
+func TestRecordLRCRedContribute(t *testing.T) {
+	s := newStats()
+	s.RecordLRCRedContribute(true)
+	s.RecordLRCRedContribute(true)
+	s.RecordLRCRedContribute(false)
+	if s.LRCRedContributeSent.Load() != 2 || s.LRCRedContributeSkipped.Load() != 1 {
+		t.Fatalf("sent/skipped = %d/%d, want 2/1", s.LRCRedContributeSent.Load(), s.LRCRedContributeSkipped.Load())
+	}
+}
+
+func TestLRCRedCounters_PersistRoundTrip(t *testing.T) {
+	s := newStats()
+	s.RecordLRCRedFetch(true, nil)
+	s.RecordLRCRedContribute(true)
+	restored := newStats()
+	restored.Restore(s.Serialize())
+	if restored.LRCRedFetchHits.Load() != 1 || restored.LRCRedContributeSent.Load() != 1 {
+		t.Fatalf("round-trip lost lrc.red counters: hits=%d sent=%d",
+			restored.LRCRedFetchHits.Load(), restored.LRCRedContributeSent.Load())
+	}
+}
+
 // newStats returns a fresh Stats instance for testing (avoids global state).
 func newStats() *Stats {
 	s := &Stats{StartTime: time.Now()}

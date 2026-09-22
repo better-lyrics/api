@@ -8,6 +8,7 @@ import (
 
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
+	"lyrics-api-go/stats"
 	"lyrics-api-go/utils"
 
 	log "github.com/sirupsen/logrus"
@@ -26,7 +27,7 @@ var lrcRedSem = make(chan struct{}, 8)
 
 // fetchLRCRedByISRC fetches TTML from lrc.red by ISRC: (ttml,true,nil) on 200,
 // ("",false,nil) on 404 or empty ISRC (a clean miss), ("",false,err) otherwise.
-func fetchLRCRedByISRC(isrc string) (string, bool, error) {
+func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 	if lrcRedReadBase == "" {
 		return "", false, nil
 	}
@@ -34,6 +35,8 @@ func fetchLRCRedByISRC(isrc string) (string, bool, error) {
 	if isrc == "" {
 		return "", false, nil
 	}
+
+	defer func() { stats.Get().RecordLRCRedFetch(ok, err) }()
 
 	lrcRedSem <- struct{}{}
 	defer func() { <-lrcRedSem }()
