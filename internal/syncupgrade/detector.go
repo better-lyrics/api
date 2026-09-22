@@ -17,6 +17,7 @@ import (
 type condFetch func(trackID, ifNoneMatch string) (lyricsTTML string, etag string, notModified bool, err error)
 
 type Action struct {
+	Bump      bool
 	Upgraded  bool
 	NewTTML   string
 	NewETag   string
@@ -24,18 +25,31 @@ type Action struct {
 }
 
 func decideCandidate(c store.SyncUpgradeCandidate, fetch condFetch, timingOf func(string) string) (Action, error) {
+	oldTiming := timingOf(c.TTML)
+	if syncRank(oldTiming) >= syncRank("word") {
+		return Action{Bump: true, NewTiming: oldTiming, NewETag: c.AppleETag}, nil
+	}
+
 	body, etag, notModified, err := fetch(c.AppleTrackID, c.AppleETag)
 	if err != nil {
-		return Action{}, err
+		return Action{Bump: true, NewTiming: oldTiming, NewETag: c.AppleETag}, err
 	}
 	if notModified {
-		return Action{}, nil
+		return Action{Bump: true, NewTiming: oldTiming, NewETag: c.AppleETag}, nil
 	}
+
 	newTiming := timingOf(body)
-	if isUpgrade(c.TimingType, newTiming) {
+	if isUpgrade(oldTiming, newTiming) {
 		return Action{Upgraded: true, NewTTML: body, NewETag: etag, NewTiming: newTiming}, nil
 	}
-	return Action{NewETag: etag, NewTiming: newTiming}, nil
+	return Action{Bump: true, NewTiming: oldTiming, NewETag: etag}, nil
+}
+
+func syncUpgradeInterval(mins int) time.Duration {
+	if mins <= 0 {
+		mins = 360
+	}
+	return time.Duration(mins) * time.Minute
 }
 
 func StartSyncUpgradeDetector(st *store.Store, cfg config.Config) {
@@ -44,7 +58,7 @@ func StartSyncUpgradeDetector(st *store.Store, cfg config.Config) {
 		return
 	}
 
-	interval := time.Duration(conf.SyncUpgradeIntervalMins) * time.Minute
+	interval := syncUpgradeInterval(conf.SyncUpgradeIntervalMins)
 	windowDays := conf.SyncUpgradeWindowDays
 	batchLimit := conf.SyncUpgradeBatchLimit
 	fetch := func(trackID, ifNoneMatch string) (string, string, bool, error) {
@@ -80,7 +94,6 @@ func runSyncUpgradePass(st *store.Store, windowDays, batchLimit int, fetch condF
 		act, err := decideCandidate(cand, fetch, ttml.TimingType)
 		if err != nil {
 			log.Warnf("%s Sync-upgrade check failed for %s: %v", logcolors.LogLyrics, cand.CacheKey, err)
-			continue
 		}
 		persistSyncUpgrade(ctx, st, cand, act)
 	}

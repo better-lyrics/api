@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const NoLyricsSentinel = "__NO_LYRICS__"
+
 type SyncUpgradeCandidate struct {
 	CacheKey     string
 	AppleTrackID string
@@ -54,6 +56,9 @@ func (s *Store) SelectSyncUpgradeCandidates(ctx context.Context, windowStart tim
 		c.TTML, err = gunzipBytes(blob)
 		if err != nil {
 			return nil, err
+		}
+		if c.TTML == NoLyricsSentinel {
+			continue
 		}
 		out = append(out, c)
 	}

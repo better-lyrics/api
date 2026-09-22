@@ -42,6 +42,35 @@ func TestSelectSyncUpgradeCandidates(t *testing.T) {
 	}
 }
 
+func TestSelectSyncUpgradeCandidates_ExcludesNoLyricsSentinel(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+	now := time.Now()
+	recent := now.AddDate(0, 0, -5).Format("2006-01-02")
+
+	seed := func(key, ttml, trackID string) {
+		if err := testStore.SetLyrics(ctx, key, Key{Provider: "ttml", BaseKey: key},
+			CachedLyrics{TTML: ttml}); err != nil {
+			t.Fatalf("SetLyrics(%s): %v", key, err)
+		}
+		if err := testStore.SetSongMetadata(ctx, &SongMetadata{
+			CacheKey: key, AppleTrackID: trackID, TrackName: key, ReleaseDate: recent,
+		}); err != nil {
+			t.Fatalf("SetSongMetadata(%s): %v", key, err)
+		}
+	}
+	seed("k_real", "<tt/>", "1")
+	seed("k_sentinel", NoLyricsSentinel, "2")
+
+	got, err := testStore.SelectSyncUpgradeCandidates(ctx, now.AddDate(0, 0, -42), 200)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(got) != 1 || got[0].CacheKey != "k_real" {
+		t.Fatalf("sentinel row must be excluded; got %+v", got)
+	}
+}
+
 func seedLyric(t *testing.T, key string, k Key, ttml string) {
 	t.Helper()
 	if err := testStore.SetLyrics(context.Background(), key, k, CachedLyrics{TTML: ttml}); err != nil {
