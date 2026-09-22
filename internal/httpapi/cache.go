@@ -7,6 +7,7 @@ import (
 
 	"lyrics-api-go/internal/store"
 	"lyrics-api-go/logcolors"
+	ttml "lyrics-api-go/services/providers/ttml"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -122,6 +123,9 @@ func (s *Server) setCachedLyrics(ctx context.Context, cacheKey, lyrics string, t
 		IsRTL:           isRTL,
 		Format:          k.Provider,
 		Source:          source,
+	}
+	if lyrics != NoLyricsSentinel {
+		l.TimingType = ttml.TimingType(lyrics)
 	}
 	if err := s.store.SetLyrics(ctx, cacheKey, k, l); err != nil {
 		log.Errorf("%s Error setting cache value: %v", logcolors.LogCacheLyrics, err)
