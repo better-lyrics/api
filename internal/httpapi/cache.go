@@ -124,7 +124,7 @@ func (s *Server) setCachedLyrics(ctx context.Context, cacheKey, lyrics string, t
 		Format:          k.Provider,
 		Source:          source,
 	}
-	if lyrics != NoLyricsSentinel {
+	if lyrics != store.NoLyricsSentinel {
 		l.TimingType = ttml.TimingType(lyrics)
 	}
 	if err := s.store.SetLyrics(ctx, cacheKey, k, l); err != nil {

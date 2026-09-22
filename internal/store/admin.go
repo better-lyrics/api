@@ -25,6 +25,10 @@ type SyncUpgradeCandidate struct {
 }
 
 func (s *Store) SelectSyncUpgradeCandidates(ctx context.Context, windowStart time.Time, limit int) ([]SyncUpgradeCandidate, error) {
+	sentinel, err := gzipBytes(NoLyricsSentinel)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT l.cache_key, m.apple_track_id, m.isrc, l.timing_type, l.apple_etag,
 		       l.raw_lyrics, m.track_name, m.artist_name, m.album_name,
@@ -35,10 +39,11 @@ func (s *Store) SelectSyncUpgradeCandidates(ctx context.Context, windowStart tim
 		  AND l.timing_type IN ('', 'none', 'line')
 		  AND m.apple_track_id <> ''
 		  AND m.release_date <> ''
+		  AND l.raw_lyrics <> $3
 		  AND to_date(m.release_date, 'YYYY-MM-DD') >= $1::date
 		ORDER BY l.last_checked_at ASC NULLS FIRST, m.release_date DESC
 		LIMIT $2`,
-		windowStart, limit)
+		windowStart, limit, sentinel)
 	if err != nil {
 		return nil, err
 	}

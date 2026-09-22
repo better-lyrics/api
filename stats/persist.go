@@ -39,6 +39,7 @@ func (s *Stats) Serialize() PersistedStats {
 		LyricsResponseCount:     s.lyricsResponseCount.Load(),
 		AccountUsage:            s.AccountUsageSnapshot(),
 		UserAgentUsage:          s.UserAgentSnapshot(),
+		OutboundThrottle:        s.OutboundThrottleSnapshot(),
 		LastSaved:               time.Now(),
 		FirstStarted:            s.StartTime,
 	}
@@ -91,6 +92,14 @@ func (s *Stats) Restore(p PersistedStats) {
 		counter := &atomic.Int64{}
 		counter.Store(count)
 		s.userAgentUsage.Store(ua, counter)
+	}
+
+	for name, v := range p.OutboundThrottle {
+		if b := s.outboundBucket(name); b != nil {
+			b.waited.Store(v.Waited)
+			b.rejected.Store(v.Rejected)
+			b.waitMicros.Store(v.WaitMicros)
+		}
 	}
 
 	if !p.FirstStarted.IsZero() {

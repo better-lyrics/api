@@ -100,7 +100,7 @@ func (s *Server) revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		usedKey = legacyCacheKey
 	}
 
-	wasNoLyricsSentinel := found && cached.TTML == NoLyricsSentinel
+	wasNoLyricsSentinel := found && cached.TTML == store.NoLyricsSentinel
 
 	wasInNegativeCache := false
 	if !found {
@@ -262,7 +262,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 
 		if len(matchingKeys) == 0 {
 			cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
-			s.setCachedLyrics(ctx, cacheKey, NoLyricsSentinel, 0, 0, "", false, "")
+			s.setCachedLyrics(ctx, cacheKey, store.NoLyricsSentinel, 0, 0, "", false, "")
 			updatedKeys = append(updatedKeys, cacheKey)
 			created = true
 			log.Infof("%s Created no_lyrics marker for %s", logcolors.LogOverride, cacheKey)
@@ -272,7 +272,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					continue
 				}
-				s.setCachedLyrics(ctx, key, NoLyricsSentinel, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL, "")
+				s.setCachedLyrics(ctx, key, store.NoLyricsSentinel, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL, "")
 				updatedKeys = append(updatedKeys, key)
 			}
 			log.Infof("%s Set no_lyrics marker on %d cache entries", logcolors.LogOverride, len(updatedKeys))
@@ -443,7 +443,7 @@ func (s *Server) enrichMetadata(ctx context.Context, meta *store.SongMetadata) m
 
 	lyricsInfo := map[string]interface{}{"cached": false}
 	if cached, ok := s.getCachedLyrics(ctx, meta.CacheKey); ok {
-		if cached.TTML == NoLyricsSentinel {
+		if cached.TTML == store.NoLyricsSentinel {
 			lyricsInfo["cached"] = true
 			lyricsInfo["noLyrics"] = true
 		} else {

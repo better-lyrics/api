@@ -71,6 +71,36 @@ func TestSelectSyncUpgradeCandidates_ExcludesNoLyricsSentinel(t *testing.T) {
 	}
 }
 
+func TestSelectSyncUpgradeCandidates_SentinelDoesNotConsumeLimit(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+	now := time.Now()
+	newest := now.AddDate(0, 0, -1).Format("2006-01-02")
+	older := now.AddDate(0, 0, -10).Format("2006-01-02")
+
+	seed := func(key, ttml, trackID, release string) {
+		if err := testStore.SetLyrics(ctx, key, Key{Provider: "ttml", BaseKey: key},
+			CachedLyrics{TTML: ttml, TimingType: "line"}); err != nil {
+			t.Fatalf("SetLyrics(%s): %v", key, err)
+		}
+		if err := testStore.SetSongMetadata(ctx, &SongMetadata{
+			CacheKey: key, AppleTrackID: trackID, TrackName: key, ReleaseDate: release,
+		}); err != nil {
+			t.Fatalf("SetSongMetadata(%s): %v", key, err)
+		}
+	}
+	seed("k_sentinel", NoLyricsSentinel, "1", newest)
+	seed("k_real", "<tt/>", "2", older)
+
+	got, err := testStore.SelectSyncUpgradeCandidates(ctx, now.AddDate(0, 0, -42), 1)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(got) != 1 || got[0].CacheKey != "k_real" {
+		t.Fatalf("sentinel must be excluded in SQL so it never consumes the limit; got %+v", got)
+	}
+}
+
 func seedLyric(t *testing.T, key string, k Key, ttml string) {
 	t.Helper()
 	if err := testStore.SetLyrics(context.Background(), key, k, CachedLyrics{TTML: ttml}); err != nil {

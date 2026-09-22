@@ -7,7 +7,84 @@ import (
 	"time"
 
 	"lyrics-api-go/config"
+	"lyrics-api-go/stats"
 )
+
+func drain(b *tokenBucket) {
+	for b.tryConsume(time.Now(), 0) {
+	}
+}
+
+func TestAcquireRecordsThrottle(t *testing.T) {
+	t.Run("no contention records nothing", func(t *testing.T) {
+		o := &outboundLimiter{minted: newTokenBucket(1, 5, time.Now()), maxWait: time.Second}
+		before := stats.Get().OutboundThrottleSnapshot()["minted"]
+		if err := o.acquireMinted(); err != nil {
+			t.Fatalf("acquire under limit: %v", err)
+		}
+		after := stats.Get().OutboundThrottleSnapshot()["minted"]
+		if after.Waited != before.Waited || after.Rejected != before.Rejected {
+			t.Fatalf("no-contention recorded: before=%+v after=%+v", before, after)
+		}
+	})
+
+	t.Run("contention records a wait", func(t *testing.T) {
+		o := &outboundLimiter{scrape: newTokenBucket(100, 1, time.Now()), maxWait: time.Second}
+		drain(o.scrape)
+		before := stats.Get().OutboundThrottleSnapshot()["scrape"]
+		if err := o.acquireScrape(); err != nil {
+			t.Fatalf("acquire after refill: %v", err)
+		}
+		after := stats.Get().OutboundThrottleSnapshot()["scrape"]
+		if after.Waited-before.Waited != 1 {
+			t.Fatalf("waited delta = %d, want 1", after.Waited-before.Waited)
+		}
+		if after.WaitMicros <= before.WaitMicros {
+			t.Fatalf("wait duration not accumulated: before=%d after=%d", before.WaitMicros, after.WaitMicros)
+		}
+		if after.Rejected != before.Rejected {
+			t.Fatalf("wait path recorded a rejection")
+		}
+	})
+
+	t.Run("exhaustion records a rejection", func(t *testing.T) {
+		o := &outboundLimiter{mint: newTokenBucket(1, 1, time.Now()), maxWait: 20 * time.Millisecond}
+		drain(o.mint)
+		before := stats.Get().OutboundThrottleSnapshot()["mint"]
+		if err := o.acquireMint(); err != errThrottled {
+			t.Fatalf("err = %v, want errThrottled", err)
+		}
+		after := stats.Get().OutboundThrottleSnapshot()["mint"]
+		if after.Rejected-before.Rejected != 1 {
+			t.Fatalf("rejected delta = %d, want 1", after.Rejected-before.Rejected)
+		}
+	})
+
+	t.Run("buckets counted independently", func(t *testing.T) {
+		o := &outboundLimiter{
+			minted:  newTokenBucket(1, 1, time.Now()),
+			account: newTokenBucket(1, 5, time.Now()),
+			maxWait: 20 * time.Millisecond,
+		}
+		drain(o.minted)
+		beforeM := stats.Get().OutboundThrottleSnapshot()["minted"]
+		beforeA := stats.Get().OutboundThrottleSnapshot()["account"]
+		if err := o.acquireMinted(); err != errThrottled {
+			t.Fatalf("minted err = %v, want errThrottled", err)
+		}
+		if err := o.acquireAccount(true); err != nil {
+			t.Fatalf("account acquire: %v", err)
+		}
+		afterM := stats.Get().OutboundThrottleSnapshot()["minted"]
+		afterA := stats.Get().OutboundThrottleSnapshot()["account"]
+		if afterM.Rejected-beforeM.Rejected != 1 {
+			t.Fatalf("minted rejected delta = %d, want 1", afterM.Rejected-beforeM.Rejected)
+		}
+		if afterA.Rejected != beforeA.Rejected || afterA.Waited != beforeA.Waited {
+			t.Fatalf("account bucket changed: before=%+v after=%+v", beforeA, afterA)
+		}
+	})
+}
 
 var t0 = time.Unix(1000, 0)
 
@@ -255,7 +332,7 @@ func TestAcquire(t *testing.T) {
 	t.Run("returns nil under the limit", func(t *testing.T) {
 		o := &outboundLimiter{maxWait: 50 * time.Millisecond}
 		b := newTokenBucket(1, 5, time.Now())
-		if err := o.acquire(b, 0); err != nil {
+		if err := o.acquire(b, 0, "account"); err != nil {
 			t.Fatalf("acquire under limit: %v", err)
 		}
 	})
@@ -267,7 +344,7 @@ func TestAcquire(t *testing.T) {
 			t.Fatal("setup consume should succeed")
 		}
 		start := time.Now()
-		err := o.acquire(b, 0)
+		err := o.acquire(b, 0, "account")
 		if err != errThrottled {
 			t.Fatalf("err = %v, want errThrottled", err)
 		}
@@ -280,7 +357,7 @@ func TestAcquire(t *testing.T) {
 		o := &outboundLimiter{maxWait: 1 * time.Second}
 		b := newTokenBucket(100, 1, time.Now())
 		b.tryConsume(time.Now(), 0)
-		if err := o.acquire(b, 0); err != nil {
+		if err := o.acquire(b, 0, "account"); err != nil {
 			t.Fatalf("acquire after refill: %v", err)
 		}
 	})

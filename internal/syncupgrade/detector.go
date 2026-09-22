@@ -2,6 +2,7 @@ package syncupgrade
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"lyrics-api-go/config"
@@ -65,7 +66,7 @@ func StartSyncUpgradeDetector(st *store.Store, cfg config.Config) {
 		return ttml.FetchLyricsByTrackIDConditional(trackID, false, ifNoneMatch)
 	}
 
-	run := func() { runSyncUpgradePass(st, windowDays, batchLimit, fetch) }
+	run := guardedRunner(func() { runSyncUpgradePass(st, windowDays, batchLimit, fetch) })
 	go run()
 
 	ticker := time.NewTicker(interval)
@@ -74,6 +75,20 @@ func StartSyncUpgradeDetector(st *store.Store, cfg config.Config) {
 			run()
 		}
 	}()
+}
+
+// guardedRunner wraps fn so that a call while a prior call is still running is
+// skipped rather than run concurrently.
+func guardedRunner(fn func()) func() {
+	var mu sync.Mutex
+	return func() {
+		if !mu.TryLock() {
+			log.Warnf("%s Sync-upgrade pass still running, skipping this tick", logcolors.LogLyrics)
+			return
+		}
+		defer mu.Unlock()
+		fn()
+	}
 }
 
 func runSyncUpgradePass(st *store.Store, windowDays, batchLimit int, fetch condFetch) {

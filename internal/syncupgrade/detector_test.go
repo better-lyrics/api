@@ -2,12 +2,43 @@ package syncupgrade
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"lyrics-api-go/internal/store"
 	ttml "lyrics-api-go/services/providers/ttml"
 )
+
+func TestGuardedRunnerSkipsOverlap(t *testing.T) {
+	var active, maxActive int32
+	run := guardedRunner(func() {
+		n := atomic.AddInt32(&active, 1)
+		for {
+			old := atomic.LoadInt32(&maxActive)
+			if n <= old || atomic.CompareAndSwapInt32(&maxActive, old, n) {
+				break
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+		atomic.AddInt32(&active, -1)
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			run()
+		}()
+	}
+	wg.Wait()
+
+	if maxActive != 1 {
+		t.Fatalf("guarded runner allowed overlap: maxActive = %d, want 1", maxActive)
+	}
+}
 
 const (
 	ttmlWord = `<tt itunes:timing="Word"><body><div><p><span begin="0s">hi</span></p></div></body></tt>`

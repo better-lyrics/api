@@ -462,7 +462,7 @@ func (s *Server) cacheDebug(w http.ResponseWriter, r *http.Request) {
 	result := map[string]interface{}{"key": key}
 	if cached, ok := s.getCachedLyrics(r.Context(), key); ok {
 		result["found"] = true
-		if cached.TTML == NoLyricsSentinel {
+		if cached.TTML == store.NoLyricsSentinel {
 			result["type"] = "no_lyrics_sentinel"
 		} else {
 			result["type"] = "lyrics"

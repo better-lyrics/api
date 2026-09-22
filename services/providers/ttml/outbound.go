@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"lyrics-api-go/config"
+	"lyrics-api-go/stats"
 )
 
 const (
@@ -111,14 +112,19 @@ func newOutboundLimiter(cfg config.Config, now time.Time) *outboundLimiter {
 	}
 }
 
-func (o *outboundLimiter) acquire(b *tokenBucket, reserve float64) error {
+func (o *outboundLimiter) acquire(b *tokenBucket, reserve float64, bucket string) error {
 	deadline := time.Now().Add(o.maxWait)
+	var slept time.Duration
 	for {
 		now := time.Now()
 		if b.tryConsume(now, reserve) {
+			if slept > 0 {
+				stats.Get().RecordOutboundWait(bucket, slept)
+			}
 			return nil
 		}
 		if !now.Before(deadline) {
+			stats.Get().RecordOutboundReject(bucket, slept)
 			return errThrottled
 		}
 		wait := b.msUntilNextToken(now, reserve)
@@ -129,6 +135,7 @@ func (o *outboundLimiter) acquire(b *tokenBucket, reserve float64) error {
 			wait = time.Millisecond
 		}
 		time.Sleep(wait)
+		slept += wait
 	}
 }
 
@@ -137,12 +144,12 @@ func (o *outboundLimiter) acquireAccount(priority bool) error {
 	if priority {
 		reserve = 0
 	}
-	return o.acquire(o.account, reserve)
+	return o.acquire(o.account, reserve, "account")
 }
 
-func (o *outboundLimiter) acquireMinted() error { return o.acquire(o.minted, 0) }
-func (o *outboundLimiter) acquireScrape() error { return o.acquire(o.scrape, 0) }
-func (o *outboundLimiter) acquireMint() error   { return o.acquire(o.mint, 0) }
+func (o *outboundLimiter) acquireMinted() error { return o.acquire(o.minted, 0, "minted") }
+func (o *outboundLimiter) acquireScrape() error { return o.acquire(o.scrape, 0, "scrape") }
+func (o *outboundLimiter) acquireMint() error   { return o.acquire(o.mint, 0, "mint") }
 
 var (
 	outboundOnce sync.Once

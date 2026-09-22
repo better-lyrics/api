@@ -42,7 +42,7 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 	apiKeyInvalid, _ := r.Context().Value(apiKeyInvalidKey).(bool)
 
 	if cached, foundKey, ok := s.getCachedLyricsWithDurationTolerance(ctx, songName, artistName, albumName, durationStr); ok {
-		if cached.TTML == NoLyricsSentinel {
+		if cached.TTML == store.NoLyricsSentinel {
 			stats.Get().RecordCacheHit()
 			log.Infof("%s No-lyrics marker found for: %s", logcolors.LogCacheLyrics, query)
 			respond(w, r).SetCacheStatus("HIT").Error(http.StatusNotFound, map[string]interface{}{
@@ -287,7 +287,7 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 		apiKeyInvalid, _ := r.Context().Value(apiKeyInvalidKey).(bool)
 
 		if cached, ok := s.getCachedLyrics(ctx, cacheKey); ok {
-			if cached.TTML == NoLyricsSentinel {
+			if cached.TTML == store.NoLyricsSentinel {
 				stats.Get().RecordCacheHit()
 				log.Infof("%s [%s] No-lyrics marker found", logcolors.LogCacheLyrics, providerName)
 				respond(w, r).SetProvider(providerName).SetCacheStatus("HIT").Error(http.StatusNotFound, map[string]interface{}{

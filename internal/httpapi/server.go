@@ -17,9 +17,6 @@ const (
 	apiKeyInvalidKey          contextKey = "apiKeyInvalid"
 )
 
-// NoLyricsSentinel is stored as TTML content to permanently mark a track as having no lyrics.
-const NoLyricsSentinel = "__NO_LYRICS__"
-
 // Server holds the dependencies every handler needs. Handlers are methods on it,
 // replacing the old package-level globals.
 type Server struct {

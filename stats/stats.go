@@ -66,6 +66,33 @@ type Stats struct {
 	userAgentUsage sync.Map // map[string]*atomic.Int64
 	uniqueUACount  atomic.Int64
 	uaMu           sync.Mutex
+
+	// Outbound throttle pressure, per token bucket
+	outboundAccount outboundBucketStat
+	outboundMinted  outboundBucketStat
+	outboundScrape  outboundBucketStat
+	outboundMint    outboundBucketStat
+}
+
+type outboundBucketStat struct {
+	waited     atomic.Int64
+	rejected   atomic.Int64
+	waitMicros atomic.Int64
+}
+
+func (b *outboundBucketStat) load() OutboundThrottleStat {
+	return OutboundThrottleStat{
+		Waited:     b.waited.Load(),
+		Rejected:   b.rejected.Load(),
+		WaitMicros: b.waitMicros.Load(),
+	}
+}
+
+// OutboundThrottleStat is the persistable/serializable view of one bucket.
+type OutboundThrottleStat struct {
+	Waited     int64 `json:"waited"`
+	Rejected   int64 `json:"rejected"`
+	WaitMicros int64 `json:"wait_micros"`
 }
 
 // Global stats instance
@@ -261,6 +288,48 @@ func (s *Stats) RecordRateLimit(tier string) {
 	}
 }
 
+func (s *Stats) outboundBucket(name string) *outboundBucketStat {
+	switch name {
+	case "account":
+		return &s.outboundAccount
+	case "minted":
+		return &s.outboundMinted
+	case "scrape":
+		return &s.outboundScrape
+	case "mint":
+		return &s.outboundMint
+	}
+	return nil
+}
+
+// RecordOutboundWait records that an outbound acquire had to sleep before succeeding.
+func (s *Stats) RecordOutboundWait(bucket string, waited time.Duration) {
+	if b := s.outboundBucket(bucket); b != nil {
+		b.waited.Add(1)
+		b.waitMicros.Add(waited.Microseconds())
+	}
+}
+
+// RecordOutboundReject records that an outbound acquire hit the deadline and was throttled.
+// waited is the time spent blocking before the deadline was reached; it counts toward
+// total wait time but not toward the waited (successful-wait) counter.
+func (s *Stats) RecordOutboundReject(bucket string, waited time.Duration) {
+	if b := s.outboundBucket(bucket); b != nil {
+		b.rejected.Add(1)
+		b.waitMicros.Add(waited.Microseconds())
+	}
+}
+
+// OutboundThrottleSnapshot returns per-bucket throttle counters for all known buckets.
+func (s *Stats) OutboundThrottleSnapshot() map[string]OutboundThrottleStat {
+	return map[string]OutboundThrottleStat{
+		"account": s.outboundAccount.load(),
+		"minted":  s.outboundMinted.load(),
+		"scrape":  s.outboundScrape.load(),
+		"mint":    s.outboundMint.load(),
+	}
+}
+
 // RecordStatusCode records a response status code
 func (s *Stats) RecordStatusCode(code int) {
 	switch {
@@ -391,6 +460,7 @@ func (s *Stats) Snapshot() map[string]interface{} {
 			"cached_tier": s.RateLimitCached.Load(),
 			"exceeded":    s.RateLimitExceeded.Load(),
 		},
+		"outbound_throttle": s.OutboundThrottleSnapshot(),
 		"responses": map[string]interface{}{
 			"2xx": s.Status2xx.Load(),
 			"4xx": s.Status4xx.Load(),

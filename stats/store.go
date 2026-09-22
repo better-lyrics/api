@@ -70,6 +70,9 @@ type PersistedStats struct {
 	// User agent usage
 	UserAgentUsage map[string]int64 `json:"user_agent_usage,omitempty"`
 
+	// Outbound throttle counters, keyed by bucket name
+	OutboundThrottle map[string]OutboundThrottleStat `json:"outbound_throttle,omitempty"`
+
 	// Metadata
 	LastSaved    time.Time `json:"last_saved"`
 	FirstStarted time.Time `json:"first_started"`
