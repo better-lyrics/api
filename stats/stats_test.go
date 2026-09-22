@@ -622,3 +622,72 @@ func TestRecordUserAgent_OtherStringBeforeCap(t *testing.T) {
 		t.Fatalf("expected uniqueUACount=1, got %d", s.uniqueUACount.Load())
 	}
 }
+
+func TestRecordOutboundThrottle(t *testing.T) {
+	t.Run("wait increments waited and accumulates duration", func(t *testing.T) {
+		s := newStats()
+		s.RecordOutboundWait("account", 150*time.Millisecond)
+		s.RecordOutboundWait("account", 50*time.Millisecond)
+		got := s.OutboundThrottleSnapshot()["account"]
+		if got.Waited != 2 {
+			t.Fatalf("waited = %d, want 2", got.Waited)
+		}
+		if got.WaitMicros != 200_000 {
+			t.Fatalf("wait micros = %d, want 200000", got.WaitMicros)
+		}
+		if got.Rejected != 0 {
+			t.Fatalf("rejected = %d, want 0", got.Rejected)
+		}
+	})
+
+	t.Run("reject increments rejected only", func(t *testing.T) {
+		s := newStats()
+		s.RecordOutboundReject("minted")
+		got := s.OutboundThrottleSnapshot()["minted"]
+		if got.Rejected != 1 {
+			t.Fatalf("rejected = %d, want 1", got.Rejected)
+		}
+		if got.Waited != 0 || got.WaitMicros != 0 {
+			t.Fatalf("reject touched wait counters: waited=%d micros=%d", got.Waited, got.WaitMicros)
+		}
+	})
+
+	t.Run("buckets are independent", func(t *testing.T) {
+		s := newStats()
+		s.RecordOutboundWait("scrape", time.Second)
+		s.RecordOutboundReject("mint")
+		snap := s.OutboundThrottleSnapshot()
+		if snap["scrape"].Waited != 1 || snap["scrape"].Rejected != 0 {
+			t.Fatalf("scrape = %+v", snap["scrape"])
+		}
+		if snap["mint"].Rejected != 1 || snap["mint"].Waited != 0 {
+			t.Fatalf("mint = %+v", snap["mint"])
+		}
+		if snap["account"].Waited != 0 || snap["account"].Rejected != 0 {
+			t.Fatalf("account should be untouched: %+v", snap["account"])
+		}
+	})
+
+	t.Run("snapshot always reports the four known buckets", func(t *testing.T) {
+		s := newStats()
+		snap := s.OutboundThrottleSnapshot()
+		for _, name := range []string{"account", "minted", "scrape", "mint"} {
+			if _, ok := snap[name]; !ok {
+				t.Fatalf("bucket %q missing from snapshot", name)
+			}
+		}
+		if len(snap) != 4 {
+			t.Fatalf("snapshot has %d buckets, want 4", len(snap))
+		}
+	})
+
+	t.Run("unknown bucket is a no-op", func(t *testing.T) {
+		s := newStats()
+		s.RecordOutboundWait("bogus", time.Second)
+		s.RecordOutboundReject("bogus")
+		snap := s.OutboundThrottleSnapshot()
+		if _, ok := snap["bogus"]; ok {
+			t.Fatal("bogus bucket should not appear in snapshot")
+		}
+	})
+}

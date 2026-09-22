@@ -21,6 +21,9 @@ func TestSerializeRestore_RoundTrip(t *testing.T) {
 	s1.RecordAccountUsage("acct-1")
 	s1.RecordAccountUsage("acct-2")
 	s1.RecordUserAgent("ua-x")
+	s1.RecordOutboundWait("account", 300*time.Millisecond)
+	s1.RecordOutboundWait("account", 200*time.Millisecond)
+	s1.RecordOutboundReject("minted")
 
 	p := s1.Serialize()
 
@@ -52,6 +55,12 @@ func TestSerializeRestore_RoundTrip(t *testing.T) {
 	if got.UserAgentUsage["ua-x"] != 1 {
 		t.Fatalf("user agent usage not restored: %+v", got.UserAgentUsage)
 	}
+	if ob := s2.OutboundThrottleSnapshot()["account"]; ob.Waited != 2 || ob.WaitMicros != 500_000 {
+		t.Fatalf("outbound account not restored: %+v", ob)
+	}
+	if ob := s2.OutboundThrottleSnapshot()["minted"]; ob.Rejected != 1 {
+		t.Fatalf("outbound minted reject not restored: %+v", ob)
+	}
 	if !got.FirstStarted.Equal(s1.StartTime) {
 		t.Fatalf("FirstStarted not preserved: got %v, want %v", got.FirstStarted, s1.StartTime)
 	}
@@ -67,6 +76,16 @@ func TestRestore_ZeroMinDoesNotClobberSentinel(t *testing.T) {
 
 	if got := s.Serialize().MinResponseTime; got != sentinel {
 		t.Fatalf("expected sentinel min preserved, got %d", got)
+	}
+}
+
+func TestRestore_EmptyOutboundThrottleLeavesZeros(t *testing.T) {
+	s := newStats()
+	s.Restore(PersistedStats{})
+	for _, name := range []string{"account", "minted", "scrape", "mint"} {
+		if ob := s.OutboundThrottleSnapshot()[name]; ob.Waited != 0 || ob.Rejected != 0 || ob.WaitMicros != 0 {
+			t.Fatalf("bucket %q not zero after empty restore: %+v", name, ob)
+		}
 	}
 }
 
