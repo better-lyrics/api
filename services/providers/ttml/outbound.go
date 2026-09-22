@@ -124,7 +124,7 @@ func (o *outboundLimiter) acquire(b *tokenBucket, reserve float64, bucket string
 			return nil
 		}
 		if !now.Before(deadline) {
-			stats.Get().RecordOutboundReject(bucket)
+			stats.Get().RecordOutboundReject(bucket, slept)
 			return errThrottled
 		}
 		wait := b.msUntilNextToken(now, reserve)

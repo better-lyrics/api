@@ -640,22 +640,33 @@ func TestRecordOutboundThrottle(t *testing.T) {
 		}
 	})
 
-	t.Run("reject increments rejected only", func(t *testing.T) {
+	t.Run("reject counts wait micros but not the waited count", func(t *testing.T) {
 		s := newStats()
-		s.RecordOutboundReject("minted")
+		s.RecordOutboundReject("minted", 250*time.Millisecond)
 		got := s.OutboundThrottleSnapshot()["minted"]
 		if got.Rejected != 1 {
 			t.Fatalf("rejected = %d, want 1", got.Rejected)
 		}
-		if got.Waited != 0 || got.WaitMicros != 0 {
-			t.Fatalf("reject touched wait counters: waited=%d micros=%d", got.Waited, got.WaitMicros)
+		if got.Waited != 0 {
+			t.Fatalf("reject bumped waited count: %d", got.Waited)
+		}
+		if got.WaitMicros != 250_000 {
+			t.Fatalf("reject wait micros = %d, want 250000", got.WaitMicros)
+		}
+	})
+
+	t.Run("reject with zero wait leaves micros untouched", func(t *testing.T) {
+		s := newStats()
+		s.RecordOutboundReject("minted", 0)
+		if got := s.OutboundThrottleSnapshot()["minted"]; got.WaitMicros != 0 {
+			t.Fatalf("reject wait micros = %d, want 0", got.WaitMicros)
 		}
 	})
 
 	t.Run("buckets are independent", func(t *testing.T) {
 		s := newStats()
 		s.RecordOutboundWait("scrape", time.Second)
-		s.RecordOutboundReject("mint")
+		s.RecordOutboundReject("mint", 0)
 		snap := s.OutboundThrottleSnapshot()
 		if snap["scrape"].Waited != 1 || snap["scrape"].Rejected != 0 {
 			t.Fatalf("scrape = %+v", snap["scrape"])
@@ -684,7 +695,7 @@ func TestRecordOutboundThrottle(t *testing.T) {
 	t.Run("unknown bucket is a no-op", func(t *testing.T) {
 		s := newStats()
 		s.RecordOutboundWait("bogus", time.Second)
-		s.RecordOutboundReject("bogus")
+		s.RecordOutboundReject("bogus", time.Second)
 		snap := s.OutboundThrottleSnapshot()
 		if _, ok := snap["bogus"]; ok {
 			t.Fatal("bogus bucket should not appear in snapshot")

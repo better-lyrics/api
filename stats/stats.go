@@ -311,9 +311,12 @@ func (s *Stats) RecordOutboundWait(bucket string, waited time.Duration) {
 }
 
 // RecordOutboundReject records that an outbound acquire hit the deadline and was throttled.
-func (s *Stats) RecordOutboundReject(bucket string) {
+// waited is the time spent blocking before the deadline was reached; it counts toward
+// total wait time but not toward the waited (successful-wait) counter.
+func (s *Stats) RecordOutboundReject(bucket string, waited time.Duration) {
 	if b := s.outboundBucket(bucket); b != nil {
 		b.rejected.Add(1)
+		b.waitMicros.Add(waited.Microseconds())
 	}
 }
 

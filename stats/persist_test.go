@@ -23,7 +23,7 @@ func TestSerializeRestore_RoundTrip(t *testing.T) {
 	s1.RecordUserAgent("ua-x")
 	s1.RecordOutboundWait("account", 300*time.Millisecond)
 	s1.RecordOutboundWait("account", 200*time.Millisecond)
-	s1.RecordOutboundReject("minted")
+	s1.RecordOutboundReject("minted", 0)
 
 	p := s1.Serialize()
 

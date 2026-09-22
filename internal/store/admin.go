@@ -62,6 +62,9 @@ func (s *Store) SelectSyncUpgradeCandidates(ctx context.Context, windowStart tim
 		if err != nil {
 			return nil, err
 		}
+		if c.TTML == NoLyricsSentinel {
+			continue
+		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
