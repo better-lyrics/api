@@ -44,7 +44,7 @@ func CheckMUTHealth(account MusicAccount) *MUTHealthStatus {
 	}
 
 	// Attempt to fetch lyrics for canary song
-	_, err := fetchLyricsTTML(HealthCheckSongID, account.Storefront, account)
+	_, err := fetchLyricsTTML(HealthCheckSongID, account.Storefront, account, false)
 
 	if err == nil {
 		status.Healthy = true

@@ -4,7 +4,7 @@
 ![GitHub License](https://img.shields.io/github/license/better-lyrics/api)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/better-lyrics/api/go.yml)
 
-This repository contains the source code for the official Better Lyrics API - primarily serving as the backend for [Better Lyrics](https://better-lyrics.boidu.dev).
+This repository contains the source code for the official Better Lyrics API - primarily serving as the backend for [Better Lyrics](https://betterlyrics.org).
 
 > [!NOTE]
 > A few endpoints are defined as environment variables in the `.env` file. This is deliberate to prevent abuse of the API and to ensure that the API is used responsibly. If you would like to use a similar API for your own project, consider using something like [spotify-lyrics-api](https://github.com/akashrchandran/spotify-lyrics-api). This repository is intended to address privacy concerns and to provide a more transparent API for users.
@@ -13,6 +13,7 @@ This repository contains the source code for the official Better Lyrics API - pr
 
 - [Quickstart](#quickstart)
 - [API Endpoints](#api-endpoints)
+- [Data sources](#data-sources)
 - [Deployment](#deployment)
 - [Contributing](#contributing)
 - [License](#license)
@@ -41,19 +42,23 @@ Public:
 
 Admin/cache endpoints (`/cache/*`, `/revalidate`, `/override`, `/health/mut`, etc.) are documented live at `GET /cache/help`.
 
+## Data sources
+
+Lyrics for `/getLyrics` (and `/ttml/getLyrics`) resolve in this order, stopping at the first hit:
+
+1. Local cache (Postgres). Entries persist until cleared, so a track is fetched from upstream at most once.
+2. [lrc.red](https://lrc.red) by ISRC. An upstream catalog lookup finds the track and its ISRC, then lrc.red is queried by that ISRC.
+3. The upstream lyrics provider, only when lrc.red has no entry for that ISRC.
+
+Lyrics fetched from the upstream provider are contributed back to lrc.red's ingress, keyed by ISRC; lyrics that came from lrc.red are not.
+
+Upstream lyrics source: [lrc.red](https://lrc.red) by w4v.
+
 ## Deployment
 
-Production runs on a single Hetzner CAX21 (ARM64, Helsinki). The whole server stack (Caddy, the API, Infisical agent for secrets sync, Beszel agent for metrics, Logdy for log streaming, B2 backups, UFW, fail2ban) lives in [`infra/`](./infra/README.md) as code.
+Deploys to [Railway](https://railway.com) from the `Dockerfile` (a distroless build of `./cmd/api`), configured in `railway.json`. Railway builds the image, runs the container, and health-checks `/health`; on failure it restarts (up to 10 times). Lyrics and metadata live in a managed Railway Postgres, and schema migrations run on startup.
 
-To rebuild from scratch on any Ubuntu 24.04 host:
-
-```bash
-cp infra/secrets.env.example infra/secrets.env
-$EDITOR infra/secrets.env                    # fill in every value from your password manager
-sudo ./infra/bootstrap.sh                    # about 10 minutes, idempotent
-```
-
-See [`infra/README.md`](./infra/README.md) for the prerequisites and the manual steps that stay manual (DNS, provisioning, `cache.db` restore).
+Configuration is all environment variables. Copy `.env.example` and fill it in; `DATABASE_URL` and the upstream API settings are required, and `LRC_RED_INGRESS_KEY` turns on contributing lyrics back to lrc.red (the contribution path stays off when it is unset).
 
 ## Contributing
 
@@ -61,4 +66,4 @@ Contributions are welcome! If you find any issues or have suggestions for improv
 
 ## License
 
-This project is licensed under the [GPL v3 License](LICENSE). As long as you attribute me or [Better Lyrics](https://better-lyrics.boidu.dev) as the original creator and you comply with the rest of the license terms, you can use this project for personal or commercial purposes.
+This project is licensed under the [GPL v3 License](LICENSE). As long as you attribute me or [Better Lyrics](https://betterlyrics.org) as the original creator and you comply with the rest of the license terms, you can use this project for personal or commercial purposes.

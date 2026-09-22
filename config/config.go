@@ -18,18 +18,31 @@ type Config struct {
 		DefaultProvider string `envconfig:"DEFAULT_PROVIDER" default:"ttml"` // Default lyrics provider (ttml, kugou, legacy)
 
 		// Rate Limiting
-		RateLimitPerSecond                 int    `envconfig:"RATE_LIMIT_PER_SECOND" default:"2"`
-		RateLimitBurstLimit                int    `envconfig:"RATE_LIMIT_BURST_LIMIT" default:"5"`
-		CachedRateLimitPerSecond           int    `envconfig:"CACHED_RATE_LIMIT_PER_SECOND" default:"10"`
-		CachedRateLimitBurstLimit          int    `envconfig:"CACHED_RATE_LIMIT_BURST_LIMIT" default:"20"`
+		RateLimitPerSecond        int `envconfig:"RATE_LIMIT_PER_SECOND" default:"2"`
+		RateLimitBurstLimit       int `envconfig:"RATE_LIMIT_BURST_LIMIT" default:"5"`
+		CachedRateLimitPerSecond  int `envconfig:"CACHED_RATE_LIMIT_PER_SECOND" default:"10"`
+		CachedRateLimitBurstLimit int `envconfig:"CACHED_RATE_LIMIT_BURST_LIMIT" default:"20"`
+
+		// Outbound Throttling
+		AccountRate                        int    `envconfig:"ACCOUNT_RATE" default:"2"`
+		AccountBurst                       int    `envconfig:"ACCOUNT_BURST" default:"10"`
+		MintedRate                         int    `envconfig:"MINTED_RATE" default:"5"`
+		MintedBurst                        int    `envconfig:"MINTED_BURST" default:"20"`
+		ScrapeRate                         int    `envconfig:"SCRAPE_RATE" default:"1"`
+		ScrapeBurst                        int    `envconfig:"SCRAPE_BURST" default:"5"`
+		MintRate                           int    `envconfig:"MINT_RATE" default:"4"`
+		MintBurst                          int    `envconfig:"MINT_BURST" default:"6"`
+		AccountPriorityReserve             int    `envconfig:"ACCOUNT_PRIORITY_RESERVE" default:"2"`
+		OutboundMaxWaitMs                  int    `envconfig:"OUTBOUND_MAX_WAIT_MS" default:"2000"`
 		CacheInvalidationIntervalInSeconds int    `envconfig:"CACHE_INVALIDATION_INTERVAL_IN_SECONDS" default:"3600"`
 		LyricsCacheTTLInSeconds            int    `envconfig:"LYRICS_CACHE_TTL_IN_SECONDS" default:"86400"`
 		CacheAccessToken                   string `envconfig:"CACHE_ACCESS_TOKEN" default:""`
 		APIKey                             string `envconfig:"API_KEY" default:""`
 		APIKeyRequired                     bool   `envconfig:"API_KEY_REQUIRED" default:"false"`
-		BiniAPIKey                         string `envconfig:"BINI_API_KEY" default:""`
-		BiniAPIURL                         string `envconfig:"BINI_API_URL" default:"https://kansas.lyric-api.binimum.org/"`
-		BiniSecretKey                      string `envconfig:"BINI_SECRET_KEY" default:""`
+		LRCRedIngressKey                   string `envconfig:"LRC_RED_INGRESS_KEY" default:""`
+		LRCRedUserAgent                    string `envconfig:"LRC_RED_USER_AGENT" default:"better-lyrics-api (+https://betterlyrics.org)"`
+		LRCRedBaseURL                      string `envconfig:"LRC_RED_BASE_URL" default:""`
+		TTMLMintURL                        string `envconfig:"TTML_MINT_URL" default:""`
 		ProxyRevalidateURL                 string `envconfig:"PROXY_REVALIDATE_URL" default:""`
 		ProxyAPIKey                        string `envconfig:"PROXY_API_KEY" default:""`
 

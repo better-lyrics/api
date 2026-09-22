@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [master, rewrite/postgres-railway]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Conformance (contract lock)
+        run: go test -tags=conformance ./internal/contracttest/...

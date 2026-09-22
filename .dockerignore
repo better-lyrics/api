@@ -1,0 +1,10 @@
+.git
+.github
+.worktrees
+docs
+scripts
+*.db
+backups/
+.env
+.env.*
+lyrics-api-go

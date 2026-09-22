@@ -1,6 +1,7 @@
 package ttml
 
 import (
+	"encoding/json"
 	"encoding/xml"
 
 	"lyrics-api-go/services/providers"
@@ -16,6 +17,12 @@ type Line = providers.Line
 // Syllable is an alias for the shared Syllable type
 type Syllable = providers.Syllable
 
+// Provenance values, aliased from the providers package (the shared owner).
+const (
+	SourceApple  = providers.SourceApple
+	SourceLRCRed = providers.SourceLRCRed
+)
+
 // TrackMeta contains metadata about the matched track from Apple Music
 type TrackMeta struct {
 	TrackID             string // Apple Music track ID
@@ -26,6 +33,7 @@ type TrackMeta struct {
 	ReleaseDate         string
 	HasTimeSyncedLyrics *bool  // nil = field absent from API, false = no synced lyrics, true = has synced lyrics
 	RawAttributes       string // JSON string of full Apple Music attributes
+	Source              string // provenance of the returned lyrics: SourceApple or SourceLRCRed
 }
 
 // =============================================================================
@@ -70,24 +78,46 @@ type Artwork struct {
 	TextColor4 string `json:"textColor4,omitempty"`
 }
 
+type TrackAttributes struct {
+	Name                string   `json:"name"`
+	ArtistName          string   `json:"artistName"`
+	AlbumName           string   `json:"albumName"`
+	DurationInMillis    int      `json:"durationInMillis"`
+	URL                 string   `json:"url"`
+	ISRC                string   `json:"isrc"`
+	SongwriterNames     string   `json:"songwriterName"`
+	ReleaseDate         string   `json:"releaseDate"`          // ISO 8601 date, e.g. "2008-05-25"
+	HasLyrics           *bool    `json:"hasLyrics"`            // nil = field absent from API response
+	HasTimeSyncedLyrics *bool    `json:"hasTimeSyncedLyrics"`  // nil = field absent from API response
+	Artwork             *Artwork `json:"artwork,omitempty"`    // Apple Music artwork (URL template, dimensions, colors)
+	GenreNames          []string `json:"genreNames,omitempty"` // e.g. ["Pop", "Alternative"]
+	ComposerName        string   `json:"composerName,omitempty"`
+	HasCredits          *bool    `json:"hasCredits,omitempty"`
+}
+
 type Track struct {
-	ID         string `json:"id"`
-	Attributes struct {
-		Name                string   `json:"name"`
-		ArtistName          string   `json:"artistName"`
-		AlbumName           string   `json:"albumName"`
-		DurationInMillis    int      `json:"durationInMillis"`
-		URL                 string   `json:"url"`
-		ISRC                string   `json:"isrc"`
-		SongwriterNames     string   `json:"songwriterName"`
-		ReleaseDate         string   `json:"releaseDate"`          // ISO 8601 date, e.g. "2008-05-25"
-		HasLyrics           *bool    `json:"hasLyrics"`            // nil = field absent from API response
-		HasTimeSyncedLyrics *bool    `json:"hasTimeSyncedLyrics"`  // nil = field absent from API response
-		Artwork             *Artwork `json:"artwork,omitempty"`    // Apple Music artwork (URL template, dimensions, colors)
-		GenreNames          []string `json:"genreNames,omitempty"` // e.g. ["Pop", "Alternative"]
-		ComposerName        string   `json:"composerName,omitempty"`
-		HasCredits          *bool    `json:"hasCredits,omitempty"`
-	} `json:"attributes"`
+	ID         string          `json:"id"`
+	Attributes TrackAttributes `json:"attributes"`
+	// RawAttributes is the untouched Apple Music attributes JSON, preserved so the
+	// full blob (including fields we do not model) can be stored and contributed.
+	RawAttributes json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON keeps the raw attributes object alongside the typed view.
+func (t *Track) UnmarshalJSON(data []byte) error {
+	var aux struct {
+		ID         string          `json:"id"`
+		Attributes json.RawMessage `json:"attributes"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	t.ID = aux.ID
+	t.RawAttributes = aux.Attributes
+	if len(aux.Attributes) == 0 {
+		return nil
+	}
+	return json.Unmarshal(aux.Attributes, &t.Attributes)
 }
 
 type LyricsResponse struct {
