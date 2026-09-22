@@ -47,15 +47,6 @@ func buildProviderCacheKey(prefix, song, artist, album, duration string) string 
 	return strings.TrimSpace(key)
 }
 
-func buildSongIndexKey(songName, artistName string) string {
-	song := strings.ToLower(strings.TrimSpace(songName))
-	artist := strings.ToLower(strings.TrimSpace(artistName))
-	if song == "" && artist == "" {
-		return ""
-	}
-	return song + " " + artist
-}
-
 // parseDurationSec returns the parsed seconds, or nil when the string is empty or
 // non-numeric (matching the old fmt.Sscanf bail-out).
 func parseDurationSec(durationStr string) *int {
