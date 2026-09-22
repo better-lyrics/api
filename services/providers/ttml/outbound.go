@@ -19,7 +19,7 @@ const (
 	defOutboundMaxWait              = 2 * time.Second
 )
 
-var errThrottled = errors.New("outbound throttle: rate limit exceeded")
+var ErrThrottled = errors.New("outbound throttle: rate limit exceeded")
 
 type tokenBucket struct {
 	mu           sync.Mutex
@@ -125,7 +125,7 @@ func (o *outboundLimiter) acquire(b *tokenBucket, reserve float64, bucket string
 		}
 		if !now.Before(deadline) {
 			stats.Get().RecordOutboundReject(bucket, slept)
-			return errThrottled
+			return ErrThrottled
 		}
 		wait := b.msUntilNextToken(now, reserve)
 		if remaining := deadline.Sub(now); wait > remaining {

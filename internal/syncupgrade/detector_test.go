@@ -1,6 +1,7 @@
 package syncupgrade
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -58,6 +59,15 @@ func fetchErr() condFetch {
 	}
 }
 
+func fetchThrottled(wrap bool) condFetch {
+	return func(trackID, ifNoneMatch string) (string, string, bool, error) {
+		if wrap {
+			return "", "", false, fmt.Errorf("lyrics request failed: %w", ttml.ErrThrottled)
+		}
+		return "", "", false, ttml.ErrThrottled
+	}
+}
+
 func fetchNever(t *testing.T) condFetch {
 	return func(trackID, ifNoneMatch string) (string, string, bool, error) {
 		t.Helper()
@@ -109,6 +119,19 @@ func TestDecideCandidate(t *testing.T) {
 			t.Fatalf("error bump: %+v", act)
 		}
 	})
+
+	for _, wrapped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("regression: throttled fetch does not bump (wrapped=%v)", wrapped), func(t *testing.T) {
+			cand := store.SyncUpgradeCandidate{AppleTrackID: "1", TimingType: "line", TTML: ttmlLine, AppleETag: `"e"`}
+			act, err := decideCandidate(cand, fetchThrottled(wrapped), ttml.TimingType)
+			if !errors.Is(err, ttml.ErrThrottled) {
+				t.Fatalf("throttle error must survive wrapping, got %v", err)
+			}
+			if act != (Action{}) {
+				t.Fatalf("throttled candidate must produce no action, got %+v", act)
+			}
+		})
+	}
 }
 
 func TestSyncUpgradeInterval(t *testing.T) {

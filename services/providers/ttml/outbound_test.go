@@ -51,8 +51,8 @@ func TestAcquireRecordsThrottle(t *testing.T) {
 		o := &outboundLimiter{mint: newTokenBucket(1, 1, time.Now()), maxWait: 20 * time.Millisecond}
 		drain(o.mint)
 		before := stats.Get().OutboundThrottleSnapshot()["mint"]
-		if err := o.acquireMint(); err != errThrottled {
-			t.Fatalf("err = %v, want errThrottled", err)
+		if err := o.acquireMint(); err != ErrThrottled {
+			t.Fatalf("err = %v, want ErrThrottled", err)
 		}
 		after := stats.Get().OutboundThrottleSnapshot()["mint"]
 		if after.Rejected-before.Rejected != 1 {
@@ -69,8 +69,8 @@ func TestAcquireRecordsThrottle(t *testing.T) {
 		drain(o.minted)
 		beforeM := stats.Get().OutboundThrottleSnapshot()["minted"]
 		beforeA := stats.Get().OutboundThrottleSnapshot()["account"]
-		if err := o.acquireMinted(); err != errThrottled {
-			t.Fatalf("minted err = %v, want errThrottled", err)
+		if err := o.acquireMinted(); err != ErrThrottled {
+			t.Fatalf("minted err = %v, want ErrThrottled", err)
 		}
 		if err := o.acquireAccount(true); err != nil {
 			t.Fatalf("account acquire: %v", err)
@@ -337,7 +337,7 @@ func TestAcquire(t *testing.T) {
 		}
 	})
 
-	t.Run("fast-fails with errThrottled when exhausted", func(t *testing.T) {
+	t.Run("fast-fails with ErrThrottled when exhausted", func(t *testing.T) {
 		o := &outboundLimiter{maxWait: 20 * time.Millisecond}
 		b := newTokenBucket(1, 1, time.Now())
 		if !b.tryConsume(time.Now(), 0) {
@@ -345,8 +345,8 @@ func TestAcquire(t *testing.T) {
 		}
 		start := time.Now()
 		err := o.acquire(b, 0, "account")
-		if err != errThrottled {
-			t.Fatalf("err = %v, want errThrottled", err)
+		if err != ErrThrottled {
+			t.Fatalf("err = %v, want ErrThrottled", err)
 		}
 		if waited := time.Since(start); waited > 500*time.Millisecond {
 			t.Fatalf("fast-fail waited too long: %v", waited)
@@ -395,8 +395,8 @@ func TestAcquireAccountReserve(t *testing.T) {
 	if err := o.acquireAccount(false); err != nil {
 		t.Fatalf("first standard acquire: %v", err)
 	}
-	if err := o.acquireAccount(false); err != errThrottled {
-		t.Fatalf("standard past reserve floor: err = %v, want errThrottled", err)
+	if err := o.acquireAccount(false); err != ErrThrottled {
+		t.Fatalf("standard past reserve floor: err = %v, want ErrThrottled", err)
 	}
 	if err := o.acquireAccount(true); err != nil {
 		t.Fatalf("first priority acquire: %v", err)
