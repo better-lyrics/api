@@ -4,6 +4,20 @@ import (
 	"testing"
 )
 
+func TestInterpretLyricsResponse(t *testing.T) {
+	body := []byte(`{"data":[{"id":"1","attributes":{"ttml":"<tt/>"}}]}`)
+	ttml, etag, nm, err := interpretLyricsResponse(200, `"e--gzip"`, body)
+	if err != nil || nm || ttml != "<tt/>" || etag != `"e--gzip"` {
+		t.Fatalf("200: %q %q %v %v", ttml, etag, nm, err)
+	}
+	if _, _, nm304, err := interpretLyricsResponse(304, `"e--gzip"`, nil); err != nil || !nm304 {
+		t.Fatalf("304: nm=%v err=%v", nm304, err)
+	}
+	if _, _, _, err := interpretLyricsResponse(200, "", []byte(`{"data":[]}`)); err == nil {
+		t.Fatal("empty data: want error")
+	}
+}
+
 func TestNormalizeString(t *testing.T) {
 	tests := []struct {
 		name     string

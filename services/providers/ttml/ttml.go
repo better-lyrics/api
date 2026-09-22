@@ -52,6 +52,34 @@ func FetchLyricsByTrackID(trackID string, priority bool) (string, error) {
 	return ttml, nil
 }
 
+func FetchLyricsByTrackIDConditional(trackID string, priority bool, ifNoneMatch string) (string, string, bool, error) {
+	if accountManager == nil {
+		initAccountManager()
+	}
+
+	if !accountManager.hasAccounts() {
+		return "", "", false, fmt.Errorf("no TTML accounts configured")
+	}
+
+	if apiCircuitBreaker == nil {
+		initCircuitBreaker()
+	}
+	if apiCircuitBreaker.IsOpen() {
+		timeUntilRetry := apiCircuitBreaker.TimeUntilRetry()
+		if timeUntilRetry > 0 {
+			return "", "", false, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
+		}
+	}
+
+	account := accountManager.getNextAccount()
+	storefront := account.Storefront
+	if storefront == "" {
+		storefront = "us"
+	}
+
+	return fetchLyricsTTMLConditional(trackID, storefront, account, priority, ifNoneMatch)
+}
+
 func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, priority bool, appleFirst bool) (string, int, float64, *TrackMeta, error) {
 	if accountManager == nil {
 		initAccountManager()
