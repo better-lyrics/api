@@ -11,7 +11,7 @@ import (
 
 func resetMintedToken() {
 	mintedMu.Lock()
-	mintedToken = ""
+	minted = mintedBearer{}
 	mintedExpiry = time.Time{}
 	mintedMu.Unlock()
 }
@@ -57,21 +57,21 @@ func TestGetMintedBearer_MintsAndCaches(t *testing.T) {
 	mintTokenURL = srv.URL
 	defer func() { mintTokenURL = old }()
 
-	tok, err := getMintedBearer()
+	mb, err := getMintedBearer()
 	if err != nil {
 		t.Fatalf("first mint: %v", err)
 	}
-	if tok != "minted-abc" {
-		t.Errorf("token = %q, want %q", tok, "minted-abc")
+	if mb.token != "minted-abc" {
+		t.Errorf("token = %q, want %q", mb.token, "minted-abc")
 	}
 
 	// Second call within TTL must be served from cache, no extra mint.
-	tok2, err := getMintedBearer()
+	mb2, err := getMintedBearer()
 	if err != nil {
 		t.Fatalf("second mint: %v", err)
 	}
-	if tok2 != "minted-abc" {
-		t.Errorf("cached token = %q, want %q", tok2, "minted-abc")
+	if mb2.token != "minted-abc" {
+		t.Errorf("cached token = %q, want %q", mb2.token, "minted-abc")
 	}
 	if n := atomic.LoadInt32(&calls); n != 1 {
 		t.Errorf("minter called %d times, want 1 (second call should hit cache)", n)
@@ -85,7 +85,7 @@ func TestGetMintedBearer_RemintsAfterExpiry(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
-		fmt.Fprintf(w, `{"token":"minted-%d","token_type":"Bearer","cache_ttl_seconds":120}`, n)
+		fmt.Fprintf(w, `{"storefront_id":"143478-2,31","token":"minted-%d","token_type":"Bearer","cache_ttl_seconds":120}`, n)
 	}))
 	defer srv.Close()
 
@@ -102,12 +102,12 @@ func TestGetMintedBearer_RemintsAfterExpiry(t *testing.T) {
 	mintedExpiry = time.Now().Add(-time.Second)
 	mintedMu.Unlock()
 
-	tok, err := getMintedBearer()
+	mb, err := getMintedBearer()
 	if err != nil {
 		t.Fatalf("re-mint: %v", err)
 	}
-	if tok != "minted-2" {
-		t.Errorf("re-minted token = %q, want %q", tok, "minted-2")
+	if mb.token != "minted-2" {
+		t.Errorf("re-minted token = %q, want %q", mb.token, "minted-2")
 	}
 	if n := atomic.LoadInt32(&calls); n != 2 {
 		t.Errorf("minter called %d times, want 2", n)
@@ -137,6 +137,63 @@ func TestGetMintedBearer_Errors(t *testing.T) {
 
 			if _, err := getMintedBearer(); err == nil {
 				t.Error("expected error, got nil")
+			}
+		})
+	}
+}
+
+func TestGetMintedBearer_StorefrontBinding(t *testing.T) {
+	tests := []struct {
+		name           string
+		storefrontID   string
+		wantErr        bool
+		wantStorefront string
+	}{
+		{name: "known storefront maps to catalog code", storefrontID: "143478-2,31", wantStorefront: "pl"},
+		{name: "bare numeric without suffix", storefrontID: "143478", wantStorefront: "pl"},
+		{name: "vietnam is a distinct id", storefrontID: "143471-2,31", wantStorefront: "vn"},
+		{name: "unmapped numeric fails closed", storefrontID: "999999-2,31", wantErr: true},
+		{name: "absent storefront fails closed", storefrontID: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetMintedToken()
+			defer resetMintedToken()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, `{"storefront_id":%q,"token":"minted-tok","token_type":"Bearer","cache_ttl_seconds":120}`, tt.storefrontID)
+			}))
+			defer srv.Close()
+
+			old := mintTokenURL
+			mintTokenURL = srv.URL
+			defer func() { mintTokenURL = old }()
+
+			mb, err := getMintedBearer()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for storefront_id %q, got storefront %q", tt.storefrontID, mb.storefront)
+				}
+				if mb.token != "" {
+					t.Errorf("token leaked on failure: %q", mb.token)
+				}
+				mintedMu.RLock()
+				cached := minted.token
+				mintedMu.RUnlock()
+				if cached != "" {
+					t.Errorf("unusable bearer was cached: %q", cached)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if mb.storefront != tt.wantStorefront {
+				t.Errorf("storefront = %q, want %q", mb.storefront, tt.wantStorefront)
+			}
+			if mb.storefrontID != tt.storefrontID {
+				t.Errorf("storefrontID = %q, want verbatim %q", mb.storefrontID, tt.storefrontID)
 			}
 		})
 	}

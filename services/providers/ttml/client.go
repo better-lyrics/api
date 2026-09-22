@@ -498,18 +498,16 @@ func selectBestTrack(tracks []Track, songName, artistName, albumName string, dur
 // media-user-token, so it never spends a subscriber account. The bool reports
 // whether the HTTP round-trip completed; when true the caller trusts the result
 // (match or not) and does not fall back to the account lane.
-func searchTrackMinted(query, storefront, songName, artistName, albumName string, durationMs int) (*Track, float64, bool, error) {
+func searchTrackMinted(query, songName, artistName, albumName string, durationMs int) (*Track, float64, bool, error) {
 	if query == "" {
 		return nil, 0.0, false, fmt.Errorf("empty search query")
 	}
-	if storefront == "" {
-		storefront = "us"
-	}
 
-	bearer, err := getMintedBearer()
+	mb, err := getMintedBearer()
 	if err != nil {
 		return nil, 0.0, false, err
 	}
+	storefront := mb.storefront
 
 	conf := config.Get()
 	searchURL := conf.Configuration.TTMLBaseURL + fmt.Sprintf(
@@ -522,12 +520,13 @@ func searchTrackMinted(query, storefront, songName, artistName, albumName string
 	if err != nil {
 		return nil, 0.0, false, err
 	}
-	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set("Authorization", "Bearer "+mb.token)
+	req.Header.Set("X-Apple-Store-Front", mb.storefrontID)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	req.Header.Set("Origin", "https://music.apple.com")
 	req.Header.Set("Referer", "https://music.apple.com")
 
-	log.Infof("%s Querying TTML API via minted bearer: %s", logcolors.LogSearch, query)
+	log.Infof("%s Querying TTML API via minted bearer (storefront %s): %s", logcolors.LogSearch, storefront, query)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -564,7 +563,7 @@ func searchTrackMinted(query, storefront, songName, artistName, albumName string
 // returned account is the one to use for any subsequent Apple lyrics fetch; the
 // minted lane spends none, so the caller's round-robin pick is returned unchanged.
 func searchTwoLane(query, storefront, songName, artistName, albumName string, durationMs int, account MusicAccount) (*Track, float64, MusicAccount, error) {
-	track, score, ok, err := searchTrackMinted(query, storefront, songName, artistName, albumName, durationMs)
+	track, score, ok, err := searchTrackMinted(query, songName, artistName, albumName, durationMs)
 	if ok {
 		if err != nil {
 			return nil, 0.0, account, err

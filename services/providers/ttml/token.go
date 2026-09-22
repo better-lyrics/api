@@ -238,11 +238,157 @@ const (
 	mintRefreshBuffer = 15 * time.Second // re-mint this long before expiry
 )
 
+type mintedBearer struct {
+	token        string
+	storefront   string
+	storefrontID string
+}
+
 var (
-	mintedToken  string
+	minted       mintedBearer
 	mintedExpiry time.Time
 	mintedMu     sync.RWMutex
 )
+
+var appleStorefrontCodes = map[string]string{
+	"143441": "us",
+	"143442": "fr",
+	"143443": "de",
+	"143444": "gb",
+	"143445": "at",
+	"143446": "be",
+	"143447": "fi",
+	"143448": "gr",
+	"143449": "ie",
+	"143450": "it",
+	"143451": "lu",
+	"143452": "nl",
+	"143453": "pt",
+	"143454": "es",
+	"143455": "ca",
+	"143456": "se",
+	"143457": "no",
+	"143458": "dk",
+	"143459": "ch",
+	"143460": "au",
+	"143461": "nz",
+	"143462": "jp",
+	"143463": "hk",
+	"143464": "sg",
+	"143465": "cn",
+	"143466": "kr",
+	"143467": "in",
+	"143468": "mx",
+	"143469": "ru",
+	"143470": "tw",
+	"143471": "vn",
+	"143472": "za",
+	"143473": "my",
+	"143474": "ph",
+	"143475": "th",
+	"143476": "id",
+	"143477": "pk",
+	"143478": "pl",
+	"143479": "sa",
+	"143480": "tr",
+	"143481": "ae",
+	"143482": "hu",
+	"143483": "cl",
+	"143484": "np",
+	"143485": "pa",
+	"143486": "lk",
+	"143487": "ro",
+	"143488": "mv",
+	"143489": "cz",
+	"143490": "bd",
+	"143491": "il",
+	"143492": "ua",
+	"143493": "kw",
+	"143494": "hr",
+	"143495": "cr",
+	"143496": "sk",
+	"143497": "lb",
+	"143498": "qa",
+	"143499": "si",
+	"143500": "rs",
+	"143501": "co",
+	"143502": "ve",
+	"143503": "br",
+	"143504": "gt",
+	"143505": "ar",
+	"143506": "sv",
+	"143507": "pe",
+	"143508": "do",
+	"143509": "ec",
+	"143510": "hn",
+	"143511": "jm",
+	"143512": "ni",
+	"143513": "py",
+	"143514": "uy",
+	"143515": "mo",
+	"143516": "eg",
+	"143517": "kz",
+	"143518": "ee",
+	"143519": "lv",
+	"143520": "lt",
+	"143521": "mt",
+	"143522": "li",
+	"143523": "md",
+	"143524": "am",
+	"143525": "bw",
+	"143526": "bg",
+	"143527": "ci",
+	"143528": "jo",
+	"143529": "ke",
+	"143530": "mk",
+	"143531": "mg",
+	"143532": "ml",
+	"143533": "mu",
+	"143534": "ne",
+	"143535": "sn",
+	"143536": "tn",
+	"143537": "ug",
+	"143538": "ai",
+	"143539": "bs",
+	"143540": "ag",
+	"143541": "bb",
+	"143542": "bm",
+	"143543": "vg",
+	"143544": "ky",
+	"143545": "dm",
+	"143546": "gd",
+	"143547": "ms",
+	"143548": "kn",
+	"143549": "lc",
+	"143550": "vc",
+	"143551": "tt",
+	"143552": "tc",
+	"143553": "gy",
+	"143554": "sr",
+	"143555": "bz",
+	"143556": "bo",
+	"143557": "cy",
+	"143558": "is",
+	"143559": "bh",
+	"143560": "bn",
+	"143561": "ng",
+	"143562": "om",
+	"143563": "dz",
+	"143564": "ao",
+	"143565": "by",
+	"143566": "uz",
+	"143568": "az",
+	"143572": "tz",
+	"143573": "gh",
+}
+
+func mintedStorefrontCode(storefrontID string) string {
+	numeric := storefrontID
+	if i := strings.IndexAny(numeric, "-,"); i >= 0 {
+		numeric = numeric[:i]
+	}
+	return appleStorefrontCodes[numeric]
+}
 
 type mintResponse struct {
 	StorefrontID    string `json:"storefront_id"`
@@ -265,31 +411,29 @@ func clampMintTTL(seconds int) time.Duration {
 	return d
 }
 
-// getMintedBearer returns a cached minted bearer, minting a fresh one when the
-// cache is empty or within mintRefreshBuffer of expiry.
-func getMintedBearer() (string, error) {
+func getMintedBearer() (mintedBearer, error) {
 	mintedMu.RLock()
-	if mintedToken != "" && time.Now().Add(mintRefreshBuffer).Before(mintedExpiry) {
-		token := mintedToken
+	if minted.token != "" && time.Now().Add(mintRefreshBuffer).Before(mintedExpiry) {
+		cached := minted
 		mintedMu.RUnlock()
-		return token, nil
+		return cached, nil
 	}
 	mintedMu.RUnlock()
 
 	if mintTokenURL == "" {
-		return "", fmt.Errorf("mint url not configured")
+		return mintedBearer{}, fmt.Errorf("mint url not configured")
 	}
 
 	mintedMu.Lock()
 	defer mintedMu.Unlock()
 
-	if mintedToken != "" && time.Now().Add(mintRefreshBuffer).Before(mintedExpiry) {
-		return mintedToken, nil
+	if minted.token != "" && time.Now().Add(mintRefreshBuffer).Before(mintedExpiry) {
+		return minted, nil
 	}
 
 	req, err := http.NewRequest("GET", mintTokenURL, nil)
 	if err != nil {
-		return "", err
+		return mintedBearer{}, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", mintUserAgent)
@@ -297,31 +441,36 @@ func getMintedBearer() (string, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("mint request failed: %w", err)
+		return mintedBearer{}, fmt.Errorf("mint request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("mint returned status %d", resp.StatusCode)
+		return mintedBearer{}, fmt.Errorf("mint returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read mint response: %w", err)
+		return mintedBearer{}, fmt.Errorf("failed to read mint response: %w", err)
 	}
 
 	var mr mintResponse
 	if err := json.Unmarshal(body, &mr); err != nil {
-		return "", fmt.Errorf("failed to parse mint response: %w", err)
+		return mintedBearer{}, fmt.Errorf("failed to parse mint response: %w", err)
 	}
 	if mr.Token == "" {
-		return "", fmt.Errorf("mint response missing token")
+		return mintedBearer{}, fmt.Errorf("mint response missing token")
 	}
 
-	mintedToken = mr.Token
+	storefront := mintedStorefrontCode(mr.StorefrontID)
+	if storefront == "" {
+		return mintedBearer{}, fmt.Errorf("mint returned unmappable storefront %q", mr.StorefrontID)
+	}
+
+	minted = mintedBearer{token: mr.Token, storefront: storefront, storefrontID: mr.StorefrontID}
 	mintedExpiry = time.Now().Add(clampMintTTL(mr.CacheTTLSeconds))
-	log.Infof("%s Minted search bearer (ttl %v)", logcolors.LogBearerToken, clampMintTTL(mr.CacheTTLSeconds))
-	return mintedToken, nil
+	log.Infof("%s Minted search bearer for storefront %s (ttl %v)", logcolors.LogBearerToken, storefront, clampMintTTL(mr.CacheTTLSeconds))
+	return minted, nil
 }
 
 // StartBearerTokenMonitor fetches the initial bearer token and storefronts synchronously,
