@@ -65,7 +65,7 @@ type Config struct {
 		SyncUpgradeEnabled         bool    `envconfig:"FF_SYNC_UPGRADE_DETECTOR" default:"false"`
 		SyncUpgradeWindowDays      int     `envconfig:"SYNC_UPGRADE_WINDOW_DAYS" default:"42"`
 		SyncUpgradeIntervalMins    int     `envconfig:"SYNC_UPGRADE_INTERVAL_MINUTES" default:"360"`
-		SyncUpgradeBatchLimit      int     `envconfig:"SYNC_UPGRADE_BATCH_LIMIT" default:"200"`
+		SyncUpgradeBatchLimit      int     `envconfig:"SYNC_UPGRADE_BATCH_LIMIT" default:"50"`
 		CircuitBreakerThreshold    int     `envconfig:"CIRCUIT_BREAKER_THRESHOLD" default:"5"`       // Consecutive failures before circuit opens
 		CircuitBreakerCooldownSecs int     `envconfig:"CIRCUIT_BREAKER_COOLDOWN_SECS" default:"300"` // Seconds to wait before retrying (default: 5 minutes)
 

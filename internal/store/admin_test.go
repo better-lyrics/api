@@ -13,8 +13,8 @@ func TestSelectSyncUpgradeCandidates(t *testing.T) {
 	recent := now.AddDate(0, 0, -5).Format("2006-01-02")
 	old := now.AddDate(0, 0, -100).Format("2006-01-02")
 
-	seed := func(key, timing, trackID, release string) {
-		if err := testStore.SetLyrics(ctx, key, Key{Provider: "ttml_lyrics", BaseKey: key},
+	seed := func(key, provider, timing, trackID, release string) {
+		if err := testStore.SetLyrics(ctx, key, Key{Provider: provider, BaseKey: key},
 			CachedLyrics{TTML: "<tt/>", TimingType: timing}); err != nil {
 			t.Fatalf("SetLyrics(%s): %v", key, err)
 		}
@@ -24,9 +24,10 @@ func TestSelectSyncUpgradeCandidates(t *testing.T) {
 			t.Fatalf("SetSongMetadata(%s): %v", key, err)
 		}
 	}
-	seed("k_line", "line", "1", recent)
-	seed("k_word", "word", "2", recent)
-	seed("k_old", "line", "3", old)
+	seed("k_line", "ttml", "line", "1", recent)
+	seed("k_word", "ttml", "word", "2", recent)
+	seed("k_old", "ttml", "line", "3", old)
+	seed("k_kugou", "kugou", "line", "4", recent)
 
 	windowStart := now.AddDate(0, 0, -42)
 	got, err := testStore.SelectSyncUpgradeCandidates(ctx, windowStart, 200)

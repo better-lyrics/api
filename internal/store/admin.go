@@ -29,7 +29,8 @@ func (s *Store) SelectSyncUpgradeCandidates(ctx context.Context, windowStart tim
 		       l.track_duration_ms, m.release_date, l.last_checked_at
 		FROM lyrics l
 		JOIN song_metadata m ON l.cache_key = m.cache_key
-		WHERE l.timing_type IN ('', 'none', 'line')
+		WHERE l.provider = 'ttml'
+		  AND l.timing_type IN ('', 'none', 'line')
 		  AND m.apple_track_id <> ''
 		  AND m.release_date <> ''
 		  AND to_date(m.release_date, 'YYYY-MM-DD') >= $1::date
