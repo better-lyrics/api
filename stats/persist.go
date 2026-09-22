@@ -8,32 +8,39 @@ import (
 // Serialize captures the cumulative counters into a persistable snapshot.
 func (s *Stats) Serialize() PersistedStats {
 	return PersistedStats{
-		TotalRequests:       s.TotalRequests.Load(),
-		LyricsRequests:      s.LyricsRequests.Load(),
-		CacheRequests:       s.CacheRequests.Load(),
-		StatsRequests:       s.StatsRequests.Load(),
-		HealthRequests:      s.HealthRequests.Load(),
-		OtherRequests:       s.OtherRequests.Load(),
-		CacheHits:           s.CacheHits.Load(),
-		CacheMisses:         s.CacheMisses.Load(),
-		NegativeCacheHits:   s.NegativeCacheHits.Load(),
-		StaleCacheHits:      s.StaleCacheHits.Load(),
-		RateLimitNormal:     s.RateLimitNormal.Load(),
-		RateLimitCached:     s.RateLimitCached.Load(),
-		RateLimitExceeded:   s.RateLimitExceeded.Load(),
-		Status2xx:           s.Status2xx.Load(),
-		Status4xx:           s.Status4xx.Load(),
-		Status5xx:           s.Status5xx.Load(),
-		TotalResponseTime:   s.totalResponseTime.Load(),
-		ResponseCount:       s.responseCount.Load(),
-		MinResponseTime:     s.minResponseTime.Load(),
-		MaxResponseTime:     s.maxResponseTime.Load(),
-		LyricsResponseTime:  s.lyricsResponseTime.Load(),
-		LyricsResponseCount: s.lyricsResponseCount.Load(),
-		AccountUsage:        s.AccountUsageSnapshot(),
-		UserAgentUsage:      s.UserAgentSnapshot(),
-		LastSaved:           time.Now(),
-		FirstStarted:        s.StartTime,
+		TotalRequests:     s.TotalRequests.Load(),
+		LyricsRequests:    s.LyricsRequests.Load(),
+		CacheRequests:     s.CacheRequests.Load(),
+		StatsRequests:     s.StatsRequests.Load(),
+		HealthRequests:    s.HealthRequests.Load(),
+		OtherRequests:     s.OtherRequests.Load(),
+		CacheHits:         s.CacheHits.Load(),
+		CacheMisses:       s.CacheMisses.Load(),
+		NegativeCacheHits: s.NegativeCacheHits.Load(),
+		StaleCacheHits:    s.StaleCacheHits.Load(),
+
+		LRCRedFetchAttempts:     s.LRCRedFetchAttempts.Load(),
+		LRCRedFetchHits:         s.LRCRedFetchHits.Load(),
+		LRCRedFetchMisses:       s.LRCRedFetchMisses.Load(),
+		LRCRedFetchErrors:       s.LRCRedFetchErrors.Load(),
+		LRCRedContributeSent:    s.LRCRedContributeSent.Load(),
+		LRCRedContributeSkipped: s.LRCRedContributeSkipped.Load(),
+		RateLimitNormal:         s.RateLimitNormal.Load(),
+		RateLimitCached:         s.RateLimitCached.Load(),
+		RateLimitExceeded:       s.RateLimitExceeded.Load(),
+		Status2xx:               s.Status2xx.Load(),
+		Status4xx:               s.Status4xx.Load(),
+		Status5xx:               s.Status5xx.Load(),
+		TotalResponseTime:       s.totalResponseTime.Load(),
+		ResponseCount:           s.responseCount.Load(),
+		MinResponseTime:         s.minResponseTime.Load(),
+		MaxResponseTime:         s.maxResponseTime.Load(),
+		LyricsResponseTime:      s.lyricsResponseTime.Load(),
+		LyricsResponseCount:     s.lyricsResponseCount.Load(),
+		AccountUsage:            s.AccountUsageSnapshot(),
+		UserAgentUsage:          s.UserAgentSnapshot(),
+		LastSaved:               time.Now(),
+		FirstStarted:            s.StartTime,
 	}
 }
 
@@ -51,6 +58,12 @@ func (s *Stats) Restore(p PersistedStats) {
 	s.CacheMisses.Store(p.CacheMisses)
 	s.NegativeCacheHits.Store(p.NegativeCacheHits)
 	s.StaleCacheHits.Store(p.StaleCacheHits)
+	s.LRCRedFetchAttempts.Store(p.LRCRedFetchAttempts)
+	s.LRCRedFetchHits.Store(p.LRCRedFetchHits)
+	s.LRCRedFetchMisses.Store(p.LRCRedFetchMisses)
+	s.LRCRedFetchErrors.Store(p.LRCRedFetchErrors)
+	s.LRCRedContributeSent.Store(p.LRCRedContributeSent)
+	s.LRCRedContributeSkipped.Store(p.LRCRedContributeSkipped)
 	s.RateLimitNormal.Store(p.RateLimitNormal)
 	s.RateLimitCached.Store(p.RateLimitCached)
 	s.RateLimitExceeded.Store(p.RateLimitExceeded)

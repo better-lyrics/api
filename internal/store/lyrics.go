@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -21,6 +22,9 @@ type CachedLyrics struct {
 	IsRTL           bool
 	Format          string
 	Source          string // upstream provenance: "apple", "lrc.red", or "" when unknown
+	TimingType      string
+	AppleETag       string
+	LastCheckedAt   *time.Time
 }
 
 func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedLyrics) error {
@@ -38,8 +42,9 @@ func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedL
 	var inserted bool
 	err = tx.QueryRow(ctx, `
 		INSERT INTO lyrics (cache_key, provider, base_key, duration_sec,
-		                    raw_lyrics, track_duration_ms, score, language, is_rtl, format, source)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		                    raw_lyrics, track_duration_ms, score, language, is_rtl, format, source,
+		                    timing_type, apple_etag, last_checked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (cache_key) DO UPDATE SET
 			raw_lyrics        = EXCLUDED.raw_lyrics,
 			track_duration_ms = EXCLUDED.track_duration_ms,
@@ -48,10 +53,14 @@ func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedL
 			is_rtl            = EXCLUDED.is_rtl,
 			format            = EXCLUDED.format,
 			source            = EXCLUDED.source,
+			timing_type       = EXCLUDED.timing_type,
+			apple_etag        = EXCLUDED.apple_etag,
+			last_checked_at   = EXCLUDED.last_checked_at,
 			updated_at        = now()
 		RETURNING (xmax = 0)`,
 		cacheKey, k.Provider, k.BaseKey, k.DurationSec,
 		blob, l.TrackDurationMs, l.Score, l.Language, l.IsRTL, l.Format, l.Source,
+		l.TimingType, l.AppleETag, l.LastCheckedAt,
 	).Scan(&inserted)
 	if err != nil {
 		return err
@@ -69,13 +78,23 @@ func (s *Store) SetLyrics(ctx context.Context, cacheKey string, k Key, l CachedL
 	return tx.Commit(ctx)
 }
 
+func (s *Store) SetLyricsSyncState(ctx context.Context, cacheKey, timingType, appleETag string, checkedAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE lyrics SET timing_type = $2, apple_etag = $3, last_checked_at = $4
+		WHERE cache_key = $1`,
+		cacheKey, timingType, appleETag, checkedAt)
+	return err
+}
+
 func (s *Store) GetLyricsExact(ctx context.Context, cacheKey string) (CachedLyrics, bool, error) {
 	var blob []byte
 	var l CachedLyrics
 	err := s.pool.QueryRow(ctx, `
-		SELECT raw_lyrics, track_duration_ms, score, language, is_rtl, format, source
+		SELECT raw_lyrics, track_duration_ms, score, language, is_rtl, format, source,
+		       timing_type, apple_etag, last_checked_at
 		FROM lyrics WHERE cache_key = $1`, cacheKey).
-		Scan(&blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format, &l.Source)
+		Scan(&blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format, &l.Source,
+			&l.TimingType, &l.AppleETag, &l.LastCheckedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CachedLyrics{}, false, nil
 	}
@@ -102,7 +121,8 @@ func (s *Store) GetLyricsTolerant(ctx context.Context, k Key, deltaSec int) (Cac
 	var blob []byte
 	var l CachedLyrics
 	err := s.pool.QueryRow(ctx, `
-		SELECT cache_key, raw_lyrics, track_duration_ms, score, language, is_rtl, format, source
+		SELECT cache_key, raw_lyrics, track_duration_ms, score, language, is_rtl, format, source,
+		       timing_type, apple_etag, last_checked_at
 		FROM lyrics
 		WHERE base_key = $1
 		  AND duration_sec IS NOT NULL
@@ -110,7 +130,8 @@ func (s *Store) GetLyricsTolerant(ctx context.Context, k Key, deltaSec int) (Cac
 		ORDER BY abs(duration_sec - $4), duration_sec ASC
 		LIMIT 1`,
 		k.BaseKey, target-deltaSec, target+deltaSec, target).
-		Scan(&cacheKey, &blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format, &l.Source)
+		Scan(&cacheKey, &blob, &l.TrackDurationMs, &l.Score, &l.Language, &l.IsRTL, &l.Format, &l.Source,
+			&l.TimingType, &l.AppleETag, &l.LastCheckedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CachedLyrics{}, "", false, nil
 	}

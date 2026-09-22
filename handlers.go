@@ -171,7 +171,7 @@ func getLyrics(w http.ResponseWriter, r *http.Request) {
 		durationMs = durationMs * 1000 // Convert seconds to milliseconds
 	}
 
-	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, apiKeyAuthenticated)
+	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, apiKeyAuthenticated, false)
 
 	req.err = err
 	if err == nil {
@@ -1360,7 +1360,7 @@ func revalidateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Infof("%s Revalidating cache for: %s %s", logcolors.LogRevalidate, songName, artistName)
-	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, true)
+	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, true, true)
 
 	if err != nil {
 		log.Warnf("%s Revalidation fetch failed: %v", logcolors.LogRevalidate, err)

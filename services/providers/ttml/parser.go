@@ -49,6 +49,17 @@ func parseTTMLTime(timeStr string) (int64, error) {
 	return int64(totalSeconds * 1000), nil
 }
 
+func TimingType(ttmlContent string) string {
+	if ttmlContent == "" {
+		return ""
+	}
+	_, timingType, err := parseTTMLToLines(ttmlContent)
+	if err != nil {
+		return ""
+	}
+	return timingType
+}
+
 // Parse TTML directly to Lines (handles word-level TTML)
 // Returns: lines, timingType, error
 func parseTTMLToLines(ttmlContent string) ([]Line, string, error) {

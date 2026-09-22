@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func setDurationVariant(t *testing.T, song, artist string, sec int, ttml string) string {
@@ -17,6 +18,62 @@ func setDurationVariant(t *testing.T, song, artist string, sec int, ttml string)
 		t.Fatalf("seed duration %d: %v", sec, err)
 	}
 	return key
+}
+
+func TestSetLyrics_PersistsSyncTracking(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+	checked := time.Now().UTC().Truncate(time.Second)
+	in := CachedLyrics{TTML: "<tt/>", Source: "apple", TimingType: "line", AppleETag: `"abc--gzip"`, LastCheckedAt: &checked}
+	if err := testStore.SetLyrics(ctx, "k1", Key{Provider: "ttml_lyrics", BaseKey: "song artist"}, in); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := testStore.GetLyricsExact(ctx, "k1")
+	if err != nil || !ok {
+		t.Fatalf("get: %v ok=%v", err, ok)
+	}
+	if got.TimingType != "line" || got.AppleETag != `"abc--gzip"` || got.LastCheckedAt == nil || !got.LastCheckedAt.Equal(checked) {
+		t.Fatalf("sync fields not round-tripped: %+v", got)
+	}
+}
+
+func TestSetLyricsSyncState(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("updates_sync_fields_only", func(t *testing.T) {
+		resetTables(t)
+		seeded := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Second)
+		seed := CachedLyrics{TTML: "<tt>x</tt>", Source: "apple", Format: "ttml", TimingType: "line", AppleETag: `"old"`, LastCheckedAt: &seeded}
+		if err := testStore.SetLyrics(ctx, "k1", Key{Provider: "ttml_lyrics", BaseKey: "song artist"}, seed); err != nil {
+			t.Fatal(err)
+		}
+
+		checked := time.Now().UTC().Truncate(time.Second)
+		if err := testStore.SetLyricsSyncState(ctx, "k1", "word", `"new--gzip"`, checked); err != nil {
+			t.Fatalf("set sync state: %v", err)
+		}
+
+		got, ok, err := testStore.GetLyricsExact(ctx, "k1")
+		if err != nil || !ok {
+			t.Fatalf("get: %v ok=%v", err, ok)
+		}
+		if got.TimingType != "word" || got.AppleETag != `"new--gzip"` || got.LastCheckedAt == nil || !got.LastCheckedAt.Equal(checked) {
+			t.Fatalf("sync fields not updated: %+v", got)
+		}
+		if got.TTML != "<tt>x</tt>" || got.Source != "apple" {
+			t.Fatalf("non-sync fields mutated: %+v", got)
+		}
+	})
+
+	t.Run("missing_key_no_error_no_insert", func(t *testing.T) {
+		resetTables(t)
+		if err := testStore.SetLyricsSyncState(ctx, "ghost", "word", `"e"`, time.Now().UTC()); err != nil {
+			t.Fatalf("update of absent row should not error: %v", err)
+		}
+		if _, ok, err := testStore.GetLyricsExact(ctx, "ghost"); err != nil || ok {
+			t.Fatalf("absent row must stay absent: ok=%v err=%v", ok, err)
+		}
+	})
 }
 
 func TestLyrics_SetGetExact(t *testing.T) {

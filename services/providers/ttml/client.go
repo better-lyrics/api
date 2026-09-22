@@ -198,7 +198,7 @@ func scoreTrack(track *Track, targetSongName, targetArtistName, targetAlbumName 
 
 // makeAPIRequestWithAccount makes an HTTP request using the specified account.
 // Returns the response, the account that succeeded (may differ from input if retried), and error.
-func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int, priority bool) (*http.Response, MusicAccount, error) {
+func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int, priority bool, ifNoneMatch string) (*http.Response, MusicAccount, error) {
 	if apiCircuitBreaker == nil {
 		initCircuitBreaker()
 	}
@@ -241,6 +241,9 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int,
 	req.Header.Set("Referer", "https://music.apple.com")
 	if account.MediaUserToken != "" {
 		req.Header.Set("media-user-token", account.MediaUserToken)
+	}
+	if ifNoneMatch != "" {
+		req.Header.Set("If-None-Match", ifNoneMatch)
 	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -288,7 +291,7 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int,
 			log.Warnf("%s 429 on %s (quarantined), switching to %s (attempt %d/%d, sleeping %v, %d accounts available)...",
 				logcolors.LogRateLimit, logcolors.Account(account.NameID), logcolors.Account(nextAccount.NameID), attemptNum, maxRetries, sleepDuration, availableAccounts)
 			time.Sleep(sleepDuration)
-			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1, priority)
+			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1, priority, ifNoneMatch)
 		}
 
 		body, _ := io.ReadAll(resp.Body)
@@ -313,11 +316,11 @@ func makeAPIRequestWithAccount(urlStr string, account MusicAccount, retries int,
 			log.Warnf("%s 401 on %s (MUT invalid), switching to %s (attempt %d/%d, sleeping %v)...",
 				logcolors.LogAuthError, logcolors.Account(account.NameID), logcolors.Account(nextAccount.NameID), attemptNum, maxRetries, sleepDuration)
 			time.Sleep(sleepDuration)
-			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1, priority)
+			return makeAPIRequestWithAccount(urlStr, nextAccount, retries+1, priority, ifNoneMatch)
 		}
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotModified {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		apiCircuitBreaker.RecordFailure()
@@ -356,7 +359,7 @@ func searchTrack(query string, storefront string, songName, artistName, albumNam
 	)
 
 	log.Infof("%s Querying TTML API via %s: %s", logcolors.LogSearch, logcolors.Account(account.NameID), query)
-	resp, successAccount, err := makeAPIRequestWithAccount(searchURL, account, 0, priority)
+	resp, successAccount, err := makeAPIRequestWithAccount(searchURL, account, 0, priority, "")
 	if err != nil {
 		return nil, 0.0, successAccount, fmt.Errorf("search request failed: %v", err)
 	}
@@ -593,7 +596,7 @@ func fetchLyricsTTML(trackID string, storefront string, account MusicAccount, pr
 	)
 
 	log.Infof("%s Fetching TTML via %s for track: %s", logcolors.LogLyrics, logcolors.Account(account.NameID), trackID)
-	resp, _, err := makeAPIRequestWithAccount(lyricsURL, account, 0, priority)
+	resp, _, err := makeAPIRequestWithAccount(lyricsURL, account, 0, priority, "")
 	if err != nil {
 		return "", fmt.Errorf("lyrics request failed: %v", err)
 	}
@@ -629,4 +632,108 @@ func fetchLyricsTTML(trackID string, storefront string, account MusicAccount, pr
 
 	log.Debugf("%s Successfully fetched TTML content, length: %d bytes", logcolors.LogLyrics, len(ttml))
 	return ttml, nil
+}
+
+func interpretLyricsResponse(status int, etag string, body []byte) (string, string, bool, error) {
+	if status == http.StatusNotModified {
+		return "", etag, true, nil
+	}
+	if status != http.StatusOK {
+		return "", etag, false, fmt.Errorf("unexpected lyrics status %d", status)
+	}
+	var lyricsResp LyricsResponse
+	if err := json.Unmarshal(body, &lyricsResp); err != nil {
+		return "", etag, false, fmt.Errorf("failed to parse lyrics response: %v", err)
+	}
+	if len(lyricsResp.Data) == 0 {
+		return "", etag, false, fmt.Errorf("no lyrics data found")
+	}
+	ttml := lyricsResp.Data[0].Attributes.TTML
+	if ttml == "" {
+		ttml = lyricsResp.Data[0].Attributes.TTMLLocalizations
+	}
+	if ttml == "" {
+		return "", etag, false, fmt.Errorf("TTML content is empty")
+	}
+	return ttml, etag, false, nil
+}
+
+func fetchLyricsTTMLConditional(trackID string, storefront string, account MusicAccount, priority bool, ifNoneMatch string) (string, string, bool, error) {
+	conf := config.Get()
+	lyricsURL := conf.Configuration.TTMLBaseURL + fmt.Sprintf(
+		conf.Configuration.TTMLLyricsPath,
+		storefront,
+		trackID,
+	)
+
+	resp, _, err := makeAPIRequestWithAccount(lyricsURL, account, 0, priority, ifNoneMatch)
+	if err != nil {
+		return "", "", false, fmt.Errorf("lyrics request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	etag := resp.Header.Get("ETag")
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", false, fmt.Errorf("failed to read lyrics response: %v", err)
+	}
+	return interpretLyricsResponse(resp.StatusCode, etag, body)
+}
+
+func parseTrackByIDResponse(body []byte) (*TrackMeta, error) {
+	var r struct {
+		Data []Track `json:"data"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("failed to parse song response: %w", err)
+	}
+	if len(r.Data) == 0 {
+		return nil, fmt.Errorf("no song data found")
+	}
+	return trackMetaFrom(&r.Data[0]), nil
+}
+
+func FetchTrackByID(trackID string, priority bool) (*TrackMeta, error) {
+	conf := config.Get()
+	if conf.Configuration.TTMLSongPath == "" {
+		return nil, fmt.Errorf("TTML_SONG_PATH not configured")
+	}
+
+	if accountManager == nil {
+		initAccountManager()
+	}
+	if !accountManager.hasAccounts() {
+		return nil, fmt.Errorf("no TTML accounts configured")
+	}
+
+	if apiCircuitBreaker == nil {
+		initCircuitBreaker()
+	}
+	if apiCircuitBreaker.IsOpen() {
+		if timeUntilRetry := apiCircuitBreaker.TimeUntilRetry(); timeUntilRetry > 0 {
+			return nil, fmt.Errorf("circuit breaker is open, API temporarily unavailable (retry in %v)", timeUntilRetry)
+		}
+	}
+
+	account := accountManager.getNextAccount()
+	storefront := account.Storefront
+	if storefront == "" {
+		storefront = "us"
+	}
+
+	songURL := conf.Configuration.TTMLBaseURL + fmt.Sprintf(conf.Configuration.TTMLSongPath, storefront, trackID)
+	log.Infof("%s Fetching track metadata by ID %s via %s", logcolors.LogRequest, trackID, logcolors.Account(account.NameID))
+
+	resp, _, err := makeAPIRequestWithAccount(songURL, account, 0, priority, "")
+	if err != nil {
+		return nil, fmt.Errorf("song request failed for track %s: %v", trackID, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read song response: %v", err)
+	}
+
+	return parseTrackByIDResponse(body)
 }

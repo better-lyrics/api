@@ -4,6 +4,20 @@ import (
 	"testing"
 )
 
+func TestTimingType(t *testing.T) {
+	cases := map[string]string{
+		`<tt itunes:timing="Word"><body><div><p><span begin="0s">hi</span></p></div></body></tt>`: "word",
+		`<tt itunes:timing="Line"><body><div><p begin="0s">hi</p></div></body></tt>`:              "line",
+		`<tt itunes:timing="None"><body><div><p>hi</p></div></body></tt>`:                         "none",
+		``: "",
+	}
+	for in, want := range cases {
+		if got := TimingType(in); got != want {
+			t.Errorf("TimingType(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestParseTTMLTime(t *testing.T) {
 	tests := []struct {
 		name        string

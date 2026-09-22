@@ -149,7 +149,7 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	priority, _ := r.Context().Value(apiKeyAuthenticatedKey).(bool)
-	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, priority)
+	ttmlString, trackDurationMs, score, trackMeta, err := ttml.FetchTTMLLyrics(songName, artistName, albumName, durationMs, priority, false)
 
 	req.err = err
 	if err == nil {

@@ -4,7 +4,66 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 )
+
+const NoLyricsSentinel = "__NO_LYRICS__"
+
+type SyncUpgradeCandidate struct {
+	CacheKey     string
+	AppleTrackID string
+	ISRC         string
+	TimingType   string
+	AppleETag    string
+	TTML         string
+	Name         string
+	Artist       string
+	Album        string
+	DurationMs   int
+	ReleaseDate  string
+	LastChecked  *time.Time
+}
+
+func (s *Store) SelectSyncUpgradeCandidates(ctx context.Context, windowStart time.Time, limit int) ([]SyncUpgradeCandidate, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT l.cache_key, m.apple_track_id, m.isrc, l.timing_type, l.apple_etag,
+		       l.raw_lyrics, m.track_name, m.artist_name, m.album_name,
+		       l.track_duration_ms, m.release_date, l.last_checked_at
+		FROM lyrics l
+		JOIN song_metadata m ON l.cache_key = m.cache_key
+		WHERE l.provider = 'ttml'
+		  AND l.timing_type IN ('', 'none', 'line')
+		  AND m.apple_track_id <> ''
+		  AND m.release_date <> ''
+		  AND to_date(m.release_date, 'YYYY-MM-DD') >= $1::date
+		ORDER BY l.last_checked_at ASC NULLS FIRST, m.release_date DESC
+		LIMIT $2`,
+		windowStart, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SyncUpgradeCandidate
+	for rows.Next() {
+		var c SyncUpgradeCandidate
+		var blob []byte
+		if err := rows.Scan(&c.CacheKey, &c.AppleTrackID, &c.ISRC, &c.TimingType, &c.AppleETag,
+			&blob, &c.Name, &c.Artist, &c.Album,
+			&c.DurationMs, &c.ReleaseDate, &c.LastChecked); err != nil {
+			return nil, err
+		}
+		c.TTML, err = gunzipBytes(blob)
+		if err != nil {
+			return nil, err
+		}
+		if c.TTML == NoLyricsSentinel {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
 
 // SizeBytes returns the total on-disk size of the database.
 func (s *Store) SizeBytes(ctx context.Context) (int64, error) {

@@ -10,6 +10,7 @@ import (
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/services/providers"
+	"lyrics-api-go/stats"
 	"lyrics-api-go/utils"
 
 	log "github.com/sirupsen/logrus"
@@ -56,11 +57,13 @@ func Contribute(trackName, artistName, isrc, source, rawAttributes, ttmlRaw stri
 	}
 	key := ingressKey()
 	if key == "" {
+		stats.Get().RecordLRCRedContribute(false)
 		return
 	}
 
 	normISRC := utils.NormalizeISRC(isrc)
 	if normISRC == "" {
+		stats.Get().RecordLRCRedContribute(false)
 		log.Warnf("%s Skipping ingress: missing or malformed ISRC %q for %s - %s", logcolors.LogBini, isrc, trackName, artistName)
 		return
 	}
@@ -71,6 +74,7 @@ func Contribute(trackName, artistName, isrc, source, rawAttributes, ttmlRaw stri
 	if ttmlRaw != "" {
 		postLyric(key, normISRC, trackName, artistName, ttmlRaw)
 	}
+	stats.Get().RecordLRCRedContribute(true)
 }
 
 // PostLyrics is the entry point kept for the legacy call sites, which cannot pass

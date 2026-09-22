@@ -26,6 +26,14 @@ type Stats struct {
 	NegativeCacheHits atomic.Int64
 	StaleCacheHits    atomic.Int64
 
+	// lrc.red flow
+	LRCRedFetchAttempts     atomic.Int64
+	LRCRedFetchHits         atomic.Int64
+	LRCRedFetchMisses       atomic.Int64
+	LRCRedFetchErrors       atomic.Int64
+	LRCRedContributeSent    atomic.Int64
+	LRCRedContributeSkipped atomic.Int64
+
 	// Rate limiting
 	RateLimitNormal   atomic.Int64 // Requests served under normal rate limit
 	RateLimitCached   atomic.Int64 // Requests served under cached-only tier
@@ -221,6 +229,26 @@ func (s *Stats) RecordStaleCacheHit() {
 	s.StaleCacheHits.Add(1)
 }
 
+func (s *Stats) RecordLRCRedFetch(hit bool, err error) {
+	s.LRCRedFetchAttempts.Add(1)
+	switch {
+	case err != nil:
+		s.LRCRedFetchErrors.Add(1)
+	case hit:
+		s.LRCRedFetchHits.Add(1)
+	default:
+		s.LRCRedFetchMisses.Add(1)
+	}
+}
+
+func (s *Stats) RecordLRCRedContribute(sent bool) {
+	if sent {
+		s.LRCRedContributeSent.Add(1)
+	} else {
+		s.LRCRedContributeSkipped.Add(1)
+	}
+}
+
 // RecordRateLimit records rate limit tier usage
 func (s *Stats) RecordRateLimit(tier string) {
 	switch tier {
@@ -349,6 +377,14 @@ func (s *Stats) Snapshot() map[string]interface{} {
 			"negative_hits": s.NegativeCacheHits.Load(),
 			"stale_hits":    s.StaleCacheHits.Load(),
 			"hit_rate":      s.CacheHitRate(),
+		},
+		"lrcred": map[string]interface{}{
+			"fetch_attempts":     s.LRCRedFetchAttempts.Load(),
+			"fetch_hits":         s.LRCRedFetchHits.Load(),
+			"fetch_misses":       s.LRCRedFetchMisses.Load(),
+			"fetch_errors":       s.LRCRedFetchErrors.Load(),
+			"contribute_sent":    s.LRCRedContributeSent.Load(),
+			"contribute_skipped": s.LRCRedContributeSkipped.Load(),
 		},
 		"rate_limiting": map[string]interface{}{
 			"normal_tier": s.RateLimitNormal.Load(),

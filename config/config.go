@@ -57,10 +57,15 @@ type Config struct {
 		TTMLBaseURL                string  `envconfig:"TTML_BASE_URL" default:""`
 		TTMLSearchPath             string  `envconfig:"TTML_SEARCH_PATH" default:""`
 		TTMLLyricsPath             string  `envconfig:"TTML_LYRICS_PATH" default:""`
+		TTMLSongPath               string  `envconfig:"TTML_SONG_PATH" default:""`
 		MinSimilarityScore         float64 `envconfig:"MIN_SIMILARITY_SCORE" default:"0.6"`
-		DurationMatchDeltaMs       int     `envconfig:"DURATION_MATCH_DELTA_MS" default:"2000"`      // Strict duration filter: reject tracks outside this delta (in ms)
-		NegativeCacheTTLInDays     int     `envconfig:"NEGATIVE_CACHE_TTL_DAYS" default:"7"`         // TTL for caching "no lyrics found" responses
-		NewSongThresholdDays       int     `envconfig:"NEW_SONG_THRESHOLD_DAYS" default:"30"`        // Songs within this window get graduated shorter negative cache TTL
+		DurationMatchDeltaMs       int     `envconfig:"DURATION_MATCH_DELTA_MS" default:"2000"` // Strict duration filter: reject tracks outside this delta (in ms)
+		NegativeCacheTTLInDays     int     `envconfig:"NEGATIVE_CACHE_TTL_DAYS" default:"7"`    // TTL for caching "no lyrics found" responses
+		NewSongThresholdDays       int     `envconfig:"NEW_SONG_THRESHOLD_DAYS" default:"30"`   // Songs within this window get graduated shorter negative cache TTL
+		SyncUpgradeEnabled         bool    `envconfig:"FF_SYNC_UPGRADE_DETECTOR" default:"false"`
+		SyncUpgradeWindowDays      int     `envconfig:"SYNC_UPGRADE_WINDOW_DAYS" default:"42"`
+		SyncUpgradeIntervalMins    int     `envconfig:"SYNC_UPGRADE_INTERVAL_MINUTES" default:"360"`
+		SyncUpgradeBatchLimit      int     `envconfig:"SYNC_UPGRADE_BATCH_LIMIT" default:"50"`
 		CircuitBreakerThreshold    int     `envconfig:"CIRCUIT_BREAKER_THRESHOLD" default:"5"`       // Consecutive failures before circuit opens
 		CircuitBreakerCooldownSecs int     `envconfig:"CIRCUIT_BREAKER_COOLDOWN_SECS" default:"300"` // Seconds to wait before retrying (default: 5 minutes)
 
