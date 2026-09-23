@@ -272,3 +272,16 @@ func overrideProviderScenarios() []Scenario {
 		},
 	}
 }
+
+func TestConformanceNewPprof(t *testing.T) {
+	base := newServerBase(t, generalProfileEnv(), seedLyricsData, seedNegativeData)
+	admin := map[string]string{"Authorization": "test-admin-token"}
+	RunSpec(t, base, []Scenario{
+		{Name: "pprof_index_requires_admin", Path: "/debug/pprof/", WantStatus: http.StatusUnauthorized},
+		{Name: "pprof_profile_requires_admin", Path: "/debug/pprof/profile?seconds=1", WantStatus: http.StatusUnauthorized},
+		{Name: "pprof_wrong_token_rejected", Path: "/debug/pprof/cmdline", Headers: map[string]string{"Authorization": "nope"}, WantStatus: http.StatusUnauthorized},
+		{Name: "pprof_index_with_admin", Path: "/debug/pprof/", Headers: admin, WantStatus: http.StatusOK, WantBodyRegex: regexp.MustCompile(`goroutine`)},
+		{Name: "pprof_named_profile_with_admin", Path: "/debug/pprof/heap", Headers: admin, WantStatus: http.StatusOK},
+		{Name: "pprof_cpu_profile_with_admin", Path: "/debug/pprof/profile?seconds=1", Headers: admin, WantStatus: http.StatusOK},
+	})
+}

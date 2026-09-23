@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/pprof"
 	"time"
 
 	"lyrics-api-go/config"
@@ -58,6 +59,12 @@ func (s *Server) setupRoutes(router *mux.Router) {
 	router.HandleFunc("/test-notifications", s.testNotifications)
 
 	router.HandleFunc("/openapi.json", openapi.Handler).Methods("GET")
+
+	router.Handle("/debug/pprof/profile", s.adminOnly(pprof.Profile))
+	router.Handle("/debug/pprof/trace", s.adminOnly(pprof.Trace))
+	router.Handle("/debug/pprof/cmdline", s.adminOnly(pprof.Cmdline))
+	router.Handle("/debug/pprof/symbol", s.adminOnly(pprof.Symbol))
+	router.PathPrefix("/debug/pprof/").Handler(s.adminOnly(pprof.Index))
 
 	router.HandleFunc("/", s.helpHandler)
 }

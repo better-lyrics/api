@@ -26,6 +26,11 @@ var undocumentedRoutes = map[string]bool{
 	"/circuit-breaker/reset":            true,
 	"/circuit-breaker/simulate-failure": true,
 	"/test-notifications":               true,
+	"/debug/pprof/profile":              true,
+	"/debug/pprof/trace":                true,
+	"/debug/pprof/cmdline":              true,
+	"/debug/pprof/symbol":               true,
+	"/debug/pprof/":                     true,
 }
 
 func routerPaths(t *testing.T) map[string]bool {
