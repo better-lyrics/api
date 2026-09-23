@@ -84,3 +84,36 @@ func getEnvOrDefault(key, defaultValue string) string {
 	}
 	return defaultValue
 }
+
+const (
+	negativePurgeInterval = time.Hour
+	negativePurgeBatch    = 5000
+	negativePurgePause    = 200 * time.Millisecond
+)
+
+func startNegativePurge(ctx context.Context, st *store.Store) {
+	run := func() {
+		start := time.Now()
+		n, err := st.PurgeAllExpiredNegative(ctx, negativePurgeBatch, negativePurgePause)
+		if err != nil {
+			log.Warnf("%s Expired entry purge stopped after %d rows: %v", logcolors.LogCacheNegative, n, err)
+			return
+		}
+		if n > 0 {
+			log.Infof("%s Purged %d expired entries in %s", logcolors.LogCacheNegative, n, time.Since(start).Round(time.Second))
+		}
+	}
+	go func() {
+		run()
+		ticker := time.NewTicker(negativePurgeInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
+	}()
+}
