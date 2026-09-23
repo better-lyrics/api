@@ -123,11 +123,11 @@ func (s *Store) DeleteNegative(ctx context.Context, cacheKey string) error {
 	return err
 }
 
-// PurgeExpiredNegative deletes up to limit expired rows; reads already ignore them, so this only reclaims space.
+// PurgeExpiredNegative deletes up to limit expired rows, oldest first; the ORDER BY keeps Postgres on the expires_at index instead of rescanning the heap.
 func (s *Store) PurgeExpiredNegative(ctx context.Context, limit int) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM negative_cache WHERE ctid IN (
-			SELECT ctid FROM negative_cache WHERE expires_at < now() LIMIT $1
+			SELECT ctid FROM negative_cache WHERE expires_at < now() ORDER BY expires_at LIMIT $1
 		)`, limit)
 	if err != nil {
 		return 0, err

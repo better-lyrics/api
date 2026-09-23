@@ -89,6 +89,30 @@ func TestPurgeExpiredNegative(t *testing.T) {
 		}
 	})
 
+	t.Run("deletes the longest-expired rows first", func(t *testing.T) {
+		resetTables(t)
+		seedNegatives(t, "old", 3, true)
+		seedNegatives(t, "recent", 3, true)
+		if _, err := testStore.pool.Exec(ctx,
+			`UPDATE negative_cache SET expires_at = now() - interval '30 days' WHERE cache_key LIKE 'ttml_lyrics:old %'`); err != nil {
+			t.Fatalf("age: %v", err)
+		}
+
+		if _, err := testStore.PurgeExpiredNegative(ctx, 3); err != nil {
+			t.Fatalf("purge: %v", err)
+		}
+		var oldLeft, recentLeft int
+		if err := testStore.pool.QueryRow(ctx, `SELECT
+			count(*) FILTER (WHERE cache_key LIKE 'ttml_lyrics:old %'),
+			count(*) FILTER (WHERE cache_key LIKE 'ttml_lyrics:recent %')
+			FROM negative_cache`).Scan(&oldLeft, &recentLeft); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if oldLeft != 0 || recentLeft != 3 {
+			t.Fatalf("old left %d, recent left %d; want 0 and 3", oldLeft, recentLeft)
+		}
+	})
+
 	t.Run("regression: an entry refreshed after expiry is not purged", func(t *testing.T) {
 		resetTables(t)
 		seedNegatives(t, "again", 1, true)
