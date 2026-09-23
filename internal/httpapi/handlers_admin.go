@@ -24,6 +24,16 @@ func (s *Server) adminAuthorized(r *http.Request) bool {
 	return t != "" && r.Header.Get("Authorization") == t
 }
 
+func (s *Server) adminOnly(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.adminAuthorized(r) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	})
+}
+
 // retiredEndpoint keeps the admin auth gate but returns 410 Gone: these BoltDB-file
 // operations have no equivalent on the managed Postgres backend.
 func (s *Server) retiredEndpoint(w http.ResponseWriter, r *http.Request) {
