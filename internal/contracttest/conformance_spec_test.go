@@ -2,6 +2,7 @@ package contracttest
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func TestValidateAgainstSpec(t *testing.T) {
 		path    string
 		resp    *http.Response
 		body    string
-		wantErr bool
+		wantErr string
 	}{
 		{
 			name: "documented hit matches",
@@ -66,70 +67,70 @@ func TestValidateAgainstSpec(t *testing.T) {
 			path:    "/getLyrics?s=a",
 			resp:    fakeResponse(200, "application/json", map[string]string{"X-Cache-Status": "HIT", "X-RateLimit-Type": "normal"}),
 			body:    `{"ttml":"<tt/>","scor":0.5}`,
-			wantErr: true,
+			wantErr: `"scor" is unsupported`,
 		},
 		{
 			name:    "missing required X-Cache-Status fails",
 			path:    "/getLyrics?s=a",
 			resp:    fakeResponse(200, "application/json", map[string]string{"X-RateLimit-Type": "normal"}),
 			body:    `{"ttml":"<tt/>"}`,
-			wantErr: true,
+			wantErr: `header "X-Cache-Status" missing`,
 		},
 		{
 			name:    "score above 1 fails",
 			path:    "/getLyrics?s=a",
 			resp:    fakeResponse(200, "application/json", map[string]string{"X-Cache-Status": "MISS", "X-RateLimit-Type": "normal"}),
 			body:    `{"ttml":"<tt/>","score":1.5}`,
-			wantErr: true,
+			wantErr: `/score`,
 		},
 		{
 			name:    "missing required X-Provider fails",
 			path:    "/kugou/getLyrics?s=a",
 			resp:    fakeResponse(200, "application/json", map[string]string{"X-Cache-Status": "HIT", "X-RateLimit-Type": "normal"}),
 			body:    `{"lyrics":"x","provider":"kugou"}`,
-			wantErr: true,
+			wantErr: `header "X-Provider" missing`,
 		},
 		{
 			name:    "undeclared status fails",
 			path:    "/health",
 			resp:    fakeResponse(500, "application/json", nil),
 			body:    `{}`,
-			wantErr: true,
+			wantErr: "status is not supported",
 		},
 		{
 			name:    "missing required field fails",
 			path:    "/getLyrics?s=a",
-			resp:    fakeResponse(200, "application/json", nil),
+			resp:    fakeResponse(200, "application/json", map[string]string{"X-Cache-Status": "HIT", "X-RateLimit-Type": "normal"}),
 			body:    `{"score":1}`,
-			wantErr: true,
+			wantErr: `property "ttml" is missing`,
 		},
 		{
 			name:    "wrong field type fails",
 			path:    "/getLyrics?s=a",
-			resp:    fakeResponse(200, "application/json", nil),
+			resp:    fakeResponse(200, "application/json", map[string]string{"X-Cache-Status": "HIT", "X-RateLimit-Type": "normal"}),
 			body:    `{"ttml":42}`,
-			wantErr: true,
+			wantErr: "value must be a string",
 		},
 		{
 			name:    "header outside enum fails",
 			path:    "/getLyrics?s=a",
-			resp:    fakeResponse(200, "application/json", map[string]string{"X-Cache-Status": "WARM"}),
+			resp:    fakeResponse(200, "application/json", map[string]string{"X-Cache-Status": "WARM", "X-RateLimit-Type": "normal"}),
 			body:    `{"ttml":"<tt/>"}`,
-			wantErr: true,
+			wantErr: `header "X-Cache-Status" doesn't match schema`,
 		},
 		{
 			name:    "undeclared content type fails",
 			path:    "/health",
 			resp:    fakeResponse(200, "text/html", nil),
 			body:    "<html>",
-			wantErr: true,
+			wantErr: "text/html",
 		},
 		{
 			name:    "enum violation in body fails",
 			path:    "/health",
 			resp:    fakeResponse(200, "application/json", nil),
 			body:    `{"status":"fine","accounts":1,"accounts_active":1,"accounts_out_of_service":0,"circuit_breaker":"CLOSED","cache_ready":true}`,
-			wantErr: true,
+			wantErr: "/status",
 		},
 	}
 	for _, tt := range tests {
@@ -143,11 +144,13 @@ func TestValidateAgainstSpec(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = validateAgainstSpec(req, tt.resp, []byte(tt.body))
-			if tt.wantErr && err == nil {
-				t.Fatal("want validation error, got nil")
-			}
-			if !tt.wantErr && err != nil {
+			switch {
+			case tt.wantErr == "" && err != nil:
 				t.Fatalf("want no error, got %v", err)
+			case tt.wantErr != "" && err == nil:
+				t.Fatalf("want error containing %q, got nil", tt.wantErr)
+			case tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr):
+				t.Fatalf("want error containing %q, got %v", tt.wantErr, err)
 			}
 		})
 	}

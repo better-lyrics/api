@@ -40,9 +40,10 @@ paths:
       operationId: getLyrics
       summary: Get lyrics (default provider)
       description: |
-        Returns TTML lyrics from the default provider. Cache lookups tolerate
-        small duration differences. When the server enforces API keys, a cache
-        miss needs a valid `X-API-Key`; cache hits never do.
+        Returns TTML lyrics from the default provider. Send a song, an artist,
+        or both. Cache lookups tolerate small duration differences. When the
+        server enforces API keys, a cache miss needs a valid `X-API-Key`;
+        cache hits never do.
       security:
         - {}
         - apiKey: []
@@ -152,8 +153,9 @@ paths:
       operationId: getTTMLLyrics
       summary: Get lyrics from the TTML provider
       description: |
-        Syllable-level timing. Uses exact cache keys, with no duration tolerance.
-        When the server enforces API keys, a cache miss needs a valid `X-API-Key`.
+        Syllable-level timing. Send a song, an artist, or both. Uses exact
+        cache keys, with no duration tolerance. When the server enforces API
+        keys, a cache miss needs a valid `X-API-Key`.
       security:
         - {}
         - apiKey: []
@@ -231,7 +233,7 @@ paths:
       tags: [Lyrics]
       operationId: getKugouLyrics
       summary: Get lyrics from the Kugou provider
-      description: Line-level timing. Uses exact cache keys, with no duration tolerance.
+      description: Line-level timing. Send a song, an artist, or both. Uses exact cache keys, with no duration tolerance.
       security:
         - {}
         - apiKey: []
@@ -287,7 +289,7 @@ paths:
       tags: [Lyrics]
       operationId: getQQLyrics
       summary: Get lyrics from the QQ provider
-      description: Uses exact cache keys, with no duration tolerance.
+      description: Send a song, an artist, or both. Uses exact cache keys, with no duration tolerance.
       security:
         - {}
         - apiKey: []
@@ -304,27 +306,11 @@ paths:
         (default TTML) cache, positive or negative, and replaces the entry
         when the content changed. Provider caches (`/ttml`, `/kugou`, `/qq`)
         are not touched. Works only when the server enforces API keys and the
-        request carries a valid one.
+        request carries a valid one. Needs both a song and an artist, through
+        any of their aliases.
       security:
         - apiKey: []
-      parameters:
-        - name: s
-          in: query
-          required: true
-          description: Song name. `song` and `songName` are accepted as aliases.
-          schema:
-            type: string
-        - name: a
-          in: query
-          required: true
-          description: Artist name. `artist` and `artistName` are accepted as aliases.
-          schema:
-            type: string
-        - $ref: '#/components/parameters/al'
-        - $ref: '#/components/parameters/album'
-        - $ref: '#/components/parameters/albumName'
-        - $ref: '#/components/parameters/d'
-        - $ref: '#/components/parameters/duration'
+      parameters: *providerParameters
       responses:
         '200':
           description: |
@@ -342,7 +328,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/RevalidateResult'
         '400':
-          description: Song or artist missing. Both are required.
+          description: Song or artist missing. Both are required, through any alias.
           headers: *authenticatedHeaders
           content:
             application/json:
@@ -495,6 +481,7 @@ paths:
       tags: [Cache]
       operationId: cacheLookup
       summary: Check whether a song is cached
+      description: Send a song, an artist, or both.
       security:
         - adminToken: []
       parameters: *providerParameters
@@ -718,7 +705,7 @@ components:
     s:
       name: s
       in: query
-      description: Song name. Send at least one of song or artist.
+      description: Song name.
       schema:
         type: string
       example: Viva la Vida
@@ -737,7 +724,7 @@ components:
     a:
       name: a
       in: query
-      description: Artist name. Send at least one of song or artist.
+      description: Artist name.
       schema:
         type: string
       example: Coldplay

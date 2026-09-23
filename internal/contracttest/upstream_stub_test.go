@@ -224,6 +224,14 @@ func revalidateScenarios() []Scenario {
 			}),
 		},
 		{
+			Name:          "spec_revalidate_accepts_long_aliases",
+			Path:          "/revalidate?song=Fresh%20Hit&artist=Fresh%20Artist",
+			Headers:       key,
+			WantStatus:    http.StatusOK,
+			WantHeaders:   authed,
+			WantBodyRegex: regexp.MustCompile(`"cacheKey":"ttml_lyrics:fresh hit fresh artist"`),
+		},
+		{
 			Name:          "spec_revalidate_upstream_miss_reports_error",
 			Path:          "/revalidate?s=Conformance%20Hit&a=Tester",
 			Headers:       key,
