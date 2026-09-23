@@ -5,7 +5,9 @@ package contracttest
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -162,4 +164,111 @@ func TestConformanceNewRateLimit(t *testing.T) {
 func TestConformanceNewSpec(t *testing.T) {
 	base := newServerBase(t, generalProfileEnv(), seedLyricsData, seedNegativeData)
 	RunSpec(t, base, specScenarios())
+}
+
+func TestConformanceNewOverrideProvider(t *testing.T) {
+	env := authProfileEnv()
+	env["FF_CACHE_ONLY_MODE"] = "true"
+	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
+
+	_, st := ensurePostgres(t)
+	qqKey := "qq_lyrics:bad song bad artist [bad album] [311s]"
+	if err := st.SetLyrics(context.Background(), qqKey, store.DeriveKey(qqKey), store.CachedLyrics{TTML: "<QrcInfos/>", Format: "qq"}); err != nil {
+		t.Fatalf("seed qq lyrics: %v", err)
+	}
+
+	RunSpec(t, base, overrideProviderScenarios())
+}
+
+func overrideProviderScenarios() []Scenario {
+	key := map[string]string{"X-API-Key": "test-api-key"}
+	badSong := "s=Bad%20Song&a=Bad%20Artist&al=Bad%20Album"
+	return []Scenario{
+		{
+			Name:       "qq_seeded_entry_served_before_override",
+			Path:       "/qq/getLyrics?" + badSong + "&d=311",
+			WantStatus: http.StatusOK,
+			WantBody:   jbody(map[string]interface{}{"lyrics": "<QrcInfos/>", "provider": "qq"}),
+		},
+		{
+			Name:       "override_provider_no_lyrics_marks_duration_variant",
+			Path:       "/override?provider=qq&no_lyrics=true&" + badSong + "&d=312",
+			Headers:    key,
+			WantStatus: http.StatusOK,
+			WantBody: jbody(map[string]interface{}{
+				"updated":   2,
+				"created":   true,
+				"keys":      []string{"qq_lyrics:bad song bad artist [bad album] [311s]", "qq_lyrics:bad song bad artist [bad album] [312s]"},
+				"no_lyrics": true,
+			}),
+		},
+		{
+			Name:       "qq_marked_entry_returns_404",
+			Path:       "/qq/getLyrics?" + badSong + "&d=311",
+			WantStatus: http.StatusNotFound,
+			WantBody:   jbody(map[string]interface{}{"error": "No lyrics available for this track"}),
+		},
+		{
+			Name:       "regression: qq exact requested key is blocked when only a duration variant was cached",
+			Path:       "/qq/getLyrics?" + badSong + "&d=312",
+			WantStatus: http.StatusNotFound,
+			WantBody:   jbody(map[string]interface{}{"error": "No lyrics available for this track"}),
+		},
+		{
+			Name:       "override_provider_no_lyrics_is_idempotent",
+			Path:       "/override?provider=qq&no_lyrics=true&" + badSong + "&d=312",
+			Headers:    key,
+			WantStatus: http.StatusOK,
+			WantBody: jbody(map[string]interface{}{
+				"updated":   2,
+				"created":   false,
+				"keys":      []string{"qq_lyrics:bad song bad artist [bad album] [312s]", "qq_lyrics:bad song bad artist [bad album] [311s]"},
+				"no_lyrics": true,
+			}),
+		},
+		{
+			Name:       "override_provider_no_lyrics_creates_marker_when_uncached",
+			Path:       "/override?provider=qq&no_lyrics=true&s=Never%20Fetched&a=Tester",
+			Headers:    key,
+			WantStatus: http.StatusOK,
+			WantBody: jbody(map[string]interface{}{
+				"updated":   1,
+				"created":   true,
+				"keys":      []string{"qq_lyrics:never fetched tester"},
+				"no_lyrics": true,
+			}),
+		},
+		{
+			Name:       "qq_created_marker_blocks_fetch",
+			Path:       "/qq/getLyrics?s=Never%20Fetched&a=Tester",
+			WantStatus: http.StatusNotFound,
+			WantBody:   jbody(map[string]interface{}{"error": "No lyrics available for this track"}),
+		},
+		{
+			Name:       "override_provider_leaves_default_cache_untouched",
+			Path:       "/override?provider=qq&no_lyrics=true&s=Conformance%20Hit&a=Tester",
+			Headers:    key,
+			WantStatus: http.StatusOK,
+		},
+		{
+			Name:       "default_entry_still_served_after_provider_override",
+			Path:       "/getLyrics?s=Conformance%20Hit&a=Tester",
+			WantStatus: http.StatusOK,
+			WantBody:   jbody(map[string]interface{}{"ttml": "<tt>HIT</tt>"}),
+		},
+		{
+			Name:          "override_unknown_provider_400",
+			Path:          "/override?provider=nope&no_lyrics=true&s=Bad%20Song&a=Bad%20Artist",
+			Headers:       key,
+			WantStatus:    http.StatusBadRequest,
+			WantBodyRegex: regexp.MustCompile(`"error":"invalid provider: nope"`),
+		},
+		{
+			Name:       "override_provider_rejects_track_id",
+			Path:       "/override?provider=qq&id=123&s=Bad%20Song&a=Bad%20Artist",
+			Headers:    key,
+			WantStatus: http.StatusBadRequest,
+			WantBody:   jbody(map[string]interface{}{"error": "provider overrides only support no_lyrics=true or dry_run=true"}),
+		},
+	}
 }

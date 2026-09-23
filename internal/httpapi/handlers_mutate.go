@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
 	"lyrics-api-go/internal/store"
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/services/bini"
+	"lyrics-api-go/services/providers"
 	"lyrics-api-go/services/proxy"
 
 	ttml "lyrics-api-go/services/providers/ttml"
@@ -21,26 +23,26 @@ import (
 
 // findMatchingCacheKeys finds existing cache keys for a song via direct lookups
 // (O(delta), never a full scan). Ported verbatim over the Postgres cache.
-func (s *Server) findMatchingCacheKeys(ctx context.Context, songName, artistName, albumName, durationStr string) []string {
+func (s *Server) findMatchingCacheKeys(ctx context.Context, keysFor func(durationStr string) []string, durationStr string) []string {
 	seen := make(map[string]bool)
 	var keys []string
 
-	addIfExists := func(key string) {
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		if _, ok := s.getCachedLyrics(ctx, key); ok {
-			keys = append(keys, key)
+	addIfExists := func(duration string) {
+		for _, key := range keysFor(duration) {
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			if _, ok := s.getCachedLyrics(ctx, key); ok {
+				keys = append(keys, key)
+			}
 		}
 	}
 
-	addIfExists(buildNormalizedCacheKey(songName, artistName, albumName, durationStr))
-	addIfExists(buildLegacyCacheKey(songName, artistName, albumName, durationStr))
+	addIfExists(durationStr)
 
 	if durationStr != "" {
-		addIfExists(buildNormalizedCacheKey(songName, artistName, albumName, ""))
-		addIfExists(buildLegacyCacheKey(songName, artistName, albumName, ""))
+		addIfExists("")
 	}
 
 	if durationStr != "" {
@@ -52,13 +54,9 @@ func (s *Server) findMatchingCacheKeys(ctx context.Context, songName, artistName
 			}
 			for offset := 1; offset <= deltaSec; offset++ {
 				if durationSec-offset >= 0 {
-					d := fmt.Sprintf("%d", durationSec-offset)
-					addIfExists(buildNormalizedCacheKey(songName, artistName, albumName, d))
-					addIfExists(buildLegacyCacheKey(songName, artistName, albumName, d))
+					addIfExists(fmt.Sprintf("%d", durationSec-offset))
 				}
-				d := fmt.Sprintf("%d", durationSec+offset)
-				addIfExists(buildNormalizedCacheKey(songName, artistName, albumName, d))
-				addIfExists(buildLegacyCacheKey(songName, artistName, albumName, d))
+				addIfExists(fmt.Sprintf("%d", durationSec+offset))
 			}
 		}
 	}
@@ -219,6 +217,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
 	dryRun := r.URL.Query().Get("dry_run") == "true"
 	noLyrics := r.URL.Query().Get("no_lyrics") == "true"
+	providerName := r.URL.Query().Get("provider")
 
 	if songName == "" || artistName == "" {
 		respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
@@ -226,6 +225,34 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	keysFor := func(duration string) []string {
+		return []string{
+			buildNormalizedCacheKey(songName, artistName, albumName, duration),
+			buildLegacyCacheKey(songName, artistName, albumName, duration),
+		}
+	}
+
+	if providerName != "" {
+		provider, err := providers.Get(providerName)
+		if err != nil {
+			respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+				"error":     fmt.Sprintf("invalid provider: %s", providerName),
+				"providers": providers.List(),
+			})
+			return
+		}
+		if !noLyrics && !dryRun {
+			respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+				"error": "provider overrides only support no_lyrics=true or dry_run=true",
+			})
+			return
+		}
+		keysFor = func(duration string) []string {
+			return []string{buildProviderCacheKey(provider.CacheKeyPrefix(), songName, artistName, albumName, duration)}
+		}
+	}
+	primaryKey := keysFor(durationStr)[0]
 
 	if trackID == "" && !dryRun && !noLyrics {
 		respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
@@ -243,7 +270,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	matchingKeys := s.findMatchingCacheKeys(ctx, songName, artistName, albumName, durationStr)
+	matchingKeys := s.findMatchingCacheKeys(ctx, keysFor, durationStr)
 
 	if dryRun {
 		query := strings.ToLower(strings.TrimSpace(songName)) + " " + strings.ToLower(strings.TrimSpace(artistName))
@@ -260,25 +287,27 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 		var updatedKeys []string
 		created := false
 
-		if len(matchingKeys) == 0 {
-			cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
-			s.setCachedLyrics(ctx, cacheKey, store.NoLyricsSentinel, 0, 0, "", false, "")
-			updatedKeys = append(updatedKeys, cacheKey)
-			created = true
-			log.Infof("%s Created no_lyrics marker for %s", logcolors.LogOverride, cacheKey)
-		} else {
-			for _, key := range matchingKeys {
-				cached, ok := s.getCachedLyrics(ctx, key)
-				if !ok {
-					continue
-				}
-				s.setCachedLyrics(ctx, key, store.NoLyricsSentinel, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL, "")
-				updatedKeys = append(updatedKeys, key)
+		for _, key := range matchingKeys {
+			cached, ok := s.getCachedLyrics(ctx, key)
+			if !ok {
+				continue
 			}
+			s.setCachedLyrics(ctx, key, store.NoLyricsSentinel, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL, "")
+			updatedKeys = append(updatedKeys, key)
+		}
+		if len(updatedKeys) > 0 {
 			log.Infof("%s Set no_lyrics marker on %d cache entries", logcolors.LogOverride, len(updatedKeys))
 		}
 
-		s.deleteNegativeCache(ctx, buildNormalizedCacheKey(songName, artistName, albumName, durationStr))
+		// Provider endpoints read only the exact key, so a marker on a duration variant alone would not block a fresh fetch.
+		if len(updatedKeys) == 0 || (providerName != "" && !slices.Contains(updatedKeys, primaryKey)) {
+			s.setCachedLyrics(ctx, primaryKey, store.NoLyricsSentinel, 0, 0, "", false, "")
+			updatedKeys = append(updatedKeys, primaryKey)
+			created = true
+			log.Infof("%s Created no_lyrics marker for %s", logcolors.LogOverride, primaryKey)
+		}
+
+		s.deleteNegativeCache(ctx, primaryKey)
 
 		respond(w, r).JSON(map[string]interface{}{
 			"updated":   len(updatedKeys),
@@ -313,8 +342,6 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 	created := false
 
 	if len(matchingKeys) == 0 {
-		cacheKey := buildNormalizedCacheKey(songName, artistName, albumName, durationStr)
-
 		var durationMs int
 		if durationStr != "" {
 			fmt.Sscanf(durationStr, "%d", &durationMs)
@@ -322,10 +349,10 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		language, isRTL := ttml.DetectLanguage(ttmlString)
-		s.setCachedLyrics(ctx, cacheKey, ttmlString, durationMs, 0, language, isRTL, ttml.SourceApple)
-		updatedKeys = append(updatedKeys, cacheKey)
+		s.setCachedLyrics(ctx, primaryKey, ttmlString, durationMs, 0, language, isRTL, ttml.SourceApple)
+		updatedKeys = append(updatedKeys, primaryKey)
 		created = true
-		log.Infof("%s Created new cache entry %s with lyrics from track ID %s", logcolors.LogOverride, cacheKey, trackID)
+		log.Infof("%s Created new cache entry %s with lyrics from track ID %s", logcolors.LogOverride, primaryKey, trackID)
 	} else {
 		for _, key := range matchingKeys {
 			cached, ok := s.getCachedLyrics(ctx, key)
@@ -338,7 +365,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 		log.Infof("%s Updated %d cache entries with lyrics from track ID %s", logcolors.LogOverride, len(updatedKeys), trackID)
 	}
 
-	s.deleteNegativeCache(ctx, buildNormalizedCacheKey(songName, artistName, albumName, durationStr))
+	s.deleteNegativeCache(ctx, primaryKey)
 
 	respond(w, r).JSON(map[string]interface{}{
 		"updated":  len(updatedKeys),
