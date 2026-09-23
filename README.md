@@ -6,6 +6,8 @@
 
 The backend for [Better Lyrics](https://betterlyrics.org). It resolves synchronized lyrics for a song, caches them, and serves them over a small REST API.
 
+Parameters, response formats, rate limits and error codes are documented at [docs.betterlyrics.org](https://docs.betterlyrics.org), which also has a playground for trying requests.
+
 > [!IMPORTANT]
 > The primary lyrics source is [**lrc.red**](https://lrc.red) by **w4v**. Anything we do fetch from elsewhere is contributed back to lrc.red by ISRC, so the shared catalog keeps growing. Full order below in [Data sources](#data-sources).
 
@@ -42,6 +44,8 @@ Public:
 - `GET /artwork?s={song}&a={artist}` - animated album artwork
 - `GET /health` - health check
 - `GET /stats` - API statistics (requires `Authorization` header)
+
+Every endpoint has a full reference, generated from the OpenAPI spec, starting at [docs.betterlyrics.org/reference/get-lyrics](https://docs.betterlyrics.org/reference/get-lyrics).
 
 Admin and cache endpoints (`/cache/*`, `/revalidate`, `/override`, `/health/mut`, and the rest) are documented live at `GET /cache/help`.
 
