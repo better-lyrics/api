@@ -110,6 +110,7 @@ const (
 const (
 	LogBini  = Cyan + "[Bini]" + Reset
 	LogProxy = Cyan + "[Proxy]" + Reset
+	LogCDN   = Cyan + "[CDN]" + Reset
 )
 
 // Memory monitor log prefixes

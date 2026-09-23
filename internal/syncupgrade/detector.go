@@ -10,6 +10,7 @@ import (
 	"lyrics-api-go/internal/store"
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/services/bini"
+	"lyrics-api-go/services/cdn"
 	ttml "lyrics-api-go/services/providers/ttml"
 	"lyrics-api-go/services/proxy"
 
@@ -153,6 +154,7 @@ func persistSyncUpgrade(ctx context.Context, st *store.Store, cand store.SyncUpg
 		log.Warnf("%s Sync-upgrade write failed for %s: %v", logcolors.LogLyrics, cand.CacheKey, err)
 		return
 	}
+	cdn.Purge(store.KeyCacheTag(cand.CacheKey))
 	log.Infof("%s Sync-upgrade applied for %s: %s to %s", logcolors.LogSuccess, cand.CacheKey, cand.TimingType, act.NewTiming)
 
 	go bini.Contribute(cand.Name, cand.Artist, cand.ISRC, ttml.SourceApple, "", act.NewTTML)

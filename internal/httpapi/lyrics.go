@@ -29,6 +29,8 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 	durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
 	videoID := r.URL.Query().Get("videoId") + r.URL.Query().Get("v")
 
+	w.Header().Set("Cache-Tag", strings.Join(store.SongCacheTags(songName, artistName, albumName), ","))
+
 	if songName == "" && artistName == "" {
 		http.Error(w, "Song name or artist name not provided", http.StatusUnprocessableEntity)
 		return
@@ -263,6 +265,8 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 		artistName := r.URL.Query().Get("a") + r.URL.Query().Get("artist") + r.URL.Query().Get("artistName")
 		albumName := r.URL.Query().Get("al") + r.URL.Query().Get("album") + r.URL.Query().Get("albumName")
 		durationStr := r.URL.Query().Get("d") + r.URL.Query().Get("duration")
+
+		w.Header().Set("Cache-Tag", strings.Join(store.SongCacheTags(songName, artistName, albumName), ","))
 
 		if songName == "" && artistName == "" {
 			http.Error(w, "Song name or artist name not provided", http.StatusUnprocessableEntity)

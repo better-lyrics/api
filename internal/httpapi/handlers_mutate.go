@@ -13,6 +13,7 @@ import (
 	"lyrics-api-go/internal/store"
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/services/bini"
+	"lyrics-api-go/services/cdn"
 	"lyrics-api-go/services/providers"
 	"lyrics-api-go/services/proxy"
 
@@ -169,6 +170,7 @@ func (s *Server) revalidateHandler(w http.ResponseWriter, r *http.Request) {
 			source = trackMeta.Source
 		}
 		s.setCachedLyrics(ctx, usedKey, ttmlString, trackDurationMs, score, language, isRTL, source)
+		cdn.Purge(store.SongCacheTag(songName, artistName))
 		if trackMeta != nil {
 			go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.Source, trackMeta.RawAttributes, ttmlString)
 		}
@@ -308,6 +310,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.deleteNegativeCache(ctx, primaryKey)
+		cdn.Purge(store.SongCacheTag(songName, artistName))
 
 		respond(w, r).JSON(map[string]interface{}{
 			"updated":   len(updatedKeys),
@@ -366,6 +369,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.deleteNegativeCache(ctx, primaryKey)
+	cdn.Purge(store.SongCacheTag(songName, artistName))
 
 	respond(w, r).JSON(map[string]interface{}{
 		"updated":  len(updatedKeys),
