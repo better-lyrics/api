@@ -131,30 +131,35 @@ func newServerBase(t *testing.T, env map[string]string, lyrics []SeedLyrics, neg
 
 func TestConformanceNewSmoke(t *testing.T) {
 	base := newServerBase(t, generalProfileEnv(), seedLyricsData, seedNegativeData)
-	Run(t, base, smokeScenarios())
+	RunSpec(t, base, smokeScenarios())
 }
 
 func TestConformanceNewSeeded(t *testing.T) {
 	base := newServerBase(t, generalProfileEnv(), seedLyricsData, seedNegativeData)
-	Run(t, base, seededGetLyricsScenarios())
+	RunSpec(t, base, seededGetLyricsScenarios())
 }
 
 func TestConformanceNewCORS(t *testing.T) {
 	base := newServerBase(t, generalProfileEnv(), seedLyricsData, seedNegativeData)
-	Run(t, base, corsScenarios())
+	RunSpec(t, base, corsScenarios())
 }
 
 func TestConformanceNewAdmin(t *testing.T) {
 	base := newServerBase(t, generalProfileEnv(), seedLyricsData, seedNegativeData)
-	Run(t, base, adminScenarios())
+	RunSpec(t, base, append(adminScenarios(), cacheGoneScenario(cacheGoneAlternatives)))
 }
 
 func TestConformanceNewAuth(t *testing.T) {
 	base := newServerBase(t, authProfileEnv(), seedLyricsData, seedNegativeData)
-	Run(t, base, authScenarios())
+	RunSpec(t, base, authScenarios())
 }
 
 func TestConformanceNewRateLimit(t *testing.T) {
 	base := newServerBase(t, rateLimitProfileEnv(), seedLyricsData, seedNegativeData)
-	Run(t, base, rateLimitScenarios())
+	RunSpec(t, base, rateLimitScenarios())
+}
+
+func TestConformanceNewSpec(t *testing.T) {
+	base := newServerBase(t, generalProfileEnv(), seedLyricsData, seedNegativeData)
+	RunSpec(t, base, specScenarios())
 }

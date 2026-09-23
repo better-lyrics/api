@@ -39,7 +39,7 @@ func TestConformanceCurrentCORS(t *testing.T) {
 func TestConformanceCurrentAdmin(t *testing.T) {
 	bin := buildServer(t, ".")
 	base := startServer(t, bin, generalProfileEnv())
-	Run(t, base, adminScenarios())
+	Run(t, base, append(adminScenarios(), boltCacheGoneScenario()))
 }
 
 func TestConformanceCurrentAuth(t *testing.T) {

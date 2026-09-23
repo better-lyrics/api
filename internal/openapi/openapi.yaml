@@ -1,0 +1,1197 @@
+openapi: 3.1.0
+info:
+  title: Better Lyrics API
+  version: 1.0.0
+  summary: Synchronized lyrics for Better Lyrics.
+  description: |
+    Fetches word and line synced lyrics, caches them, and serves them to the
+    Better Lyrics extension.
+
+    Query parameters with aliases (for example `s`, `song`, `songName`) are
+    concatenated when more than one alias is sent, so send only one of each.
+
+    Every response passes through a two-tier, per-IP rate limiter. The normal
+    tier serves everything. When it is exhausted, the cached tier serves only
+    cached lyrics. When both are exhausted the server returns `429` with
+    `Retry-After: 1`. Rate limited responses carry `X-RateLimit-Limit`,
+    `X-RateLimit-Remaining` and `X-RateLimit-Type`. A valid `X-API-Key` skips
+    rate limiting and sends `X-RateLimit-Bypass: true` instead.
+  license:
+    name: GPL-3.0
+    url: https://www.gnu.org/licenses/gpl-3.0.html
+externalDocs:
+  url: https://docs.betterlyrics.org
+servers:
+  - url: https://api.betterlyrics.org
+tags:
+  - name: Lyrics
+    description: Lyrics lookups. Cache hits are always public.
+  - name: Cache
+    description: Cache inspection and management. Requires the admin token.
+  - name: Health
+    description: Service health.
+  - name: Meta
+    description: API metadata.
+
+paths:
+  /getLyrics:
+    get:
+      tags: [Lyrics]
+      operationId: getLyrics
+      summary: Get lyrics (default provider)
+      description: |
+        Returns TTML lyrics from the default provider. Cache lookups tolerate
+        small duration differences. When the server enforces API keys, a cache
+        miss needs a valid `X-API-Key`; cache hits never do.
+      security:
+        - {}
+        - apiKey: []
+      parameters:
+        - $ref: '#/components/parameters/s'
+        - $ref: '#/components/parameters/song'
+        - $ref: '#/components/parameters/songName'
+        - $ref: '#/components/parameters/a'
+        - $ref: '#/components/parameters/artist'
+        - $ref: '#/components/parameters/artistName'
+        - $ref: '#/components/parameters/al'
+        - $ref: '#/components/parameters/album'
+        - $ref: '#/components/parameters/albumName'
+        - $ref: '#/components/parameters/d'
+        - $ref: '#/components/parameters/duration'
+        - name: videoId
+          in: query
+          description: Video ID. Links the video to the song so downstream caches can be revalidated.
+          schema:
+            type: string
+        - name: v
+          in: query
+          description: Alias of `videoId`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Lyrics found.
+          headers: &lyricsHeaders
+            X-Cache-Status:
+              $ref: '#/components/headers/X-Cache-Status'
+            X-RateLimit-Type:
+              $ref: '#/components/headers/X-RateLimit-Type'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-RateLimit-Bypass:
+              $ref: '#/components/headers/X-RateLimit-Bypass'
+            X-Auth-Mode:
+              $ref: '#/components/headers/X-Auth-Mode'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TTMLLyrics'
+        '401':
+          description: |
+            The query is not cached and the server enforces API keys, but no
+            valid `X-API-Key` was sent.
+          headers: *lyricsHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorWithMessage'
+        '404':
+          description: No lyrics exist for this song. This result is cached too (`NEGATIVE_HIT`).
+          headers: *lyricsHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          $ref: '#/components/responses/MissingSongAndArtist'
+        '429':
+          description: |
+            Rate limited. `text/plain` with `Retry-After: 1` when both tiers
+            are exhausted. JSON with `Retry-After: 60` and `X-Cache-Status`
+            when the cached tier is in use and the query is not cached.
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/Retry-After'
+            X-RateLimit-Type:
+              $ref: '#/components/headers/X-RateLimit-Type'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-Cache-Status:
+              description: Set on the JSON variant only.
+              schema:
+                $ref: '#/components/schemas/CacheStatus'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorWithMessage'
+            text/plain:
+              schema:
+                type: string
+        '500':
+          description: Upstream failure with no cached fallback.
+          headers: *lyricsHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: The server is in cache-only mode and the query is not cached.
+          headers: *lyricsHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /ttml/getLyrics:
+    get:
+      tags: [Lyrics]
+      operationId: getTTMLLyrics
+      summary: Get lyrics from the TTML provider
+      description: |
+        Syllable-level timing. Uses exact cache keys, with no duration tolerance.
+        When the server enforces API keys, a cache miss needs a valid `X-API-Key`.
+      security:
+        - {}
+        - apiKey: []
+      parameters: &providerParameters
+        - $ref: '#/components/parameters/s'
+        - $ref: '#/components/parameters/song'
+        - $ref: '#/components/parameters/songName'
+        - $ref: '#/components/parameters/a'
+        - $ref: '#/components/parameters/artist'
+        - $ref: '#/components/parameters/artistName'
+        - $ref: '#/components/parameters/al'
+        - $ref: '#/components/parameters/album'
+        - $ref: '#/components/parameters/albumName'
+        - $ref: '#/components/parameters/d'
+        - $ref: '#/components/parameters/duration'
+      responses:
+        '200':
+          description: Lyrics found.
+          headers: &ttmlProviderHeaders
+            X-Cache-Status:
+              $ref: '#/components/headers/X-Cache-Status'
+            X-Provider:
+              $ref: '#/components/headers/X-Provider'
+            X-RateLimit-Type:
+              $ref: '#/components/headers/X-RateLimit-Type'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-RateLimit-Bypass:
+              $ref: '#/components/headers/X-RateLimit-Bypass'
+            X-Auth-Mode:
+              $ref: '#/components/headers/X-Auth-Mode'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderLyrics'
+        '401':
+          description: |
+            The query is not cached and the server enforces API keys, but no
+            valid `X-API-Key` was sent.
+          headers: *ttmlProviderHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderAPIKeyError'
+        '404':
+          description: No lyrics exist for this song from this provider.
+          headers: *ttmlProviderHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderNotFound'
+        '422':
+          $ref: '#/components/responses/MissingSongAndArtist'
+        '429':
+          $ref: '#/components/responses/ProviderRateLimited'
+        '500':
+          description: Upstream failure.
+          headers: *ttmlProviderHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderError'
+        '503':
+          description: The server is in cache-only mode and the query is not cached.
+          headers: *ttmlProviderHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderError'
+
+  /kugou/getLyrics:
+    get:
+      tags: [Lyrics]
+      operationId: getKugouLyrics
+      summary: Get lyrics from the Kugou provider
+      description: Line-level timing. Uses exact cache keys, with no duration tolerance.
+      security:
+        - {}
+        - apiKey: []
+      parameters: *providerParameters
+      responses: &publicProviderResponses
+        '200':
+          description: Lyrics found.
+          headers: &providerHeaders
+            X-Cache-Status:
+              $ref: '#/components/headers/X-Cache-Status'
+            X-Provider:
+              $ref: '#/components/headers/X-Provider'
+            X-RateLimit-Type:
+              $ref: '#/components/headers/X-RateLimit-Type'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-RateLimit-Bypass:
+              $ref: '#/components/headers/X-RateLimit-Bypass'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderLyrics'
+        '404':
+          description: No lyrics exist for this song from this provider.
+          headers: *providerHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderNotFound'
+        '422':
+          $ref: '#/components/responses/MissingSongAndArtist'
+        '429':
+          $ref: '#/components/responses/ProviderRateLimited'
+        '500':
+          description: Upstream failure.
+          headers: *providerHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderError'
+        '503':
+          description: The server is in cache-only mode and the query is not cached.
+          headers: *providerHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderError'
+
+  /qq/getLyrics:
+    get:
+      tags: [Lyrics]
+      operationId: getQQLyrics
+      summary: Get lyrics from the QQ provider
+      description: Uses exact cache keys, with no duration tolerance.
+      security:
+        - {}
+        - apiKey: []
+      parameters: *providerParameters
+      responses: *publicProviderResponses
+
+  /revalidate:
+    get:
+      tags: [Lyrics]
+      operationId: revalidate
+      summary: Refresh cached lyrics
+      description: |
+        Refetches lyrics for a song that is already in the `/getLyrics`
+        (default TTML) cache, positive or negative, and replaces the entry
+        when the content changed. Provider caches (`/ttml`, `/kugou`, `/qq`)
+        are not touched. Works only when the server enforces API keys and the
+        request carries a valid one.
+      security:
+        - apiKey: []
+      parameters:
+        - name: s
+          in: query
+          required: true
+          description: Song name. `song` and `songName` are accepted as aliases.
+          schema:
+            type: string
+        - name: a
+          in: query
+          required: true
+          description: Artist name. `artist` and `artistName` are accepted as aliases.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/al'
+        - $ref: '#/components/parameters/album'
+        - $ref: '#/components/parameters/albumName'
+        - $ref: '#/components/parameters/d'
+        - $ref: '#/components/parameters/duration'
+      responses:
+        '200':
+          description: |
+            Revalidation ran. When the upstream fetch fails, `error` is set
+            and `updated` is `false`.
+          headers: &authenticatedHeaders
+            X-Auth-Mode:
+              $ref: '#/components/headers/X-Auth-Mode-Authenticated'
+            X-RateLimit-Type:
+              $ref: '#/components/headers/X-RateLimit-Type'
+            X-RateLimit-Bypass:
+              $ref: '#/components/headers/X-RateLimit-Bypass'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevalidateResult'
+        '400':
+          description: Song or artist missing. Both are required.
+          headers: *authenticatedHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: No valid API key, or the server does not enforce API keys.
+          headers:
+            X-RateLimit-Type:
+              $ref: '#/components/headers/X-RateLimit-Type'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-Auth-Mode:
+              $ref: '#/components/headers/X-Auth-Mode'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorWithMessage'
+        '404':
+          description: Nothing cached for this query, so there is nothing to revalidate.
+          headers: *authenticatedHeaders
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error, cacheKey]
+                properties:
+                  error:
+                    type: string
+                  cacheKey:
+                    type: string
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Service health
+      description: |
+        Always returns `200`; read `status` for the verdict. With the admin
+        token, the response also lists per-token status.
+      security:
+        - {}
+        - adminToken: []
+      responses:
+        '200':
+          description: Health report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /openapi.json:
+    get:
+      tags: [Meta]
+      operationId: getOpenAPI
+      summary: This OpenAPI document
+      responses:
+        '200':
+          description: OpenAPI 3.1 document.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [openapi, info, paths]
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /cache:
+    get:
+      tags: [Cache]
+      operationId: getCacheDump
+      summary: Removed full cache dump
+      deprecated: true
+      responses:
+        '410':
+          description: Endpoint removed. The body lists alternatives.
+          headers: &cacheHeaders
+            X-RateLimit-Type:
+              $ref: '#/components/headers/X-RateLimit-Type'
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error, message, alternatives]
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  alternatives:
+                    type: object
+                    additionalProperties:
+                      type: string
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /cache/help:
+    get:
+      tags: [Cache]
+      operationId: getCacheHelp
+      summary: Cache endpoint documentation
+      responses:
+        '200':
+          description: Human-readable help.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [description, endpoints, cache_key_format, notes]
+                properties:
+                  description:
+                    type: string
+                  endpoints:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [path, method, auth, description]
+                      properties:
+                        path:
+                          type: string
+                        method:
+                          type: string
+                        auth:
+                          type: string
+                        description:
+                          type: string
+                  cache_key_format:
+                    type: object
+                    additionalProperties:
+                      type: string
+                  notes:
+                    type: array
+                    items:
+                      type: string
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /cache/lookup:
+    get:
+      tags: [Cache]
+      operationId: cacheLookup
+      summary: Check whether a song is cached
+      security:
+        - adminToken: []
+      parameters: *providerParameters
+      responses:
+        '200':
+          description: Lookup result, including the cache keys the query maps to.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheLookup'
+        '400':
+          description: Song and artist both missing.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /cache/debug:
+    get:
+      tags: [Cache]
+      operationId: cacheDebug
+      summary: Inspect one cache key
+      security:
+        - adminToken: []
+      parameters:
+        - name: key
+          in: query
+          required: true
+          description: Full cache key, for example `ttml_lyrics:song artist`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Entry details.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheDebug'
+        '400':
+          description: '`key` missing.'
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /cache/keys:
+    get:
+      tags: [Cache]
+      operationId: cacheKeys
+      summary: List and search cache keys
+      security:
+        - adminToken: []
+      parameters:
+        - name: prefix
+          in: query
+          description: Only keys starting with this string.
+          schema:
+            type: string
+        - name: contains
+          in: query
+          description: Only keys containing this string.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum keys to return. Values above 1000 are capped at 1000.
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: Matching keys.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheKeys'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /cache/clear:
+    get:
+      tags: [Cache]
+      operationId: clearCache
+      summary: Clear all cached lyrics and negative entries
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: Cache cleared.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /cache/clear/{provider}:
+    get:
+      tags: [Cache]
+      operationId: clearProviderCache
+      summary: Clear cached entries for one provider
+      security:
+        - adminToken: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: Provider whose entries to delete.
+          schema:
+            type: string
+            enum: [ttml, kugou, qq, legacy]
+      responses:
+        '200':
+          description: Entries deleted.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [message, provider, keys_deleted]
+                properties:
+                  message:
+                    type: string
+                  provider:
+                    type: string
+                  keys_deleted:
+                    type: integer
+        '400':
+          description: Unknown provider.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [error, valid_providers]
+                properties:
+                  error:
+                    type: string
+                  valid_providers:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /cache/backup:
+    get: &retiredOperation
+      tags: [Cache]
+      summary: Removed (backups are handled by the database platform)
+      deprecated: true
+      security:
+        - adminToken: []
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '410':
+          description: Endpoint removed.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorWithMessage'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /cache/backups:
+    get: *retiredOperation
+  /cache/restore:
+    get: *retiredOperation
+  /cache/migrate:
+    get: *retiredOperation
+  /cache/migrate/status:
+    get: *retiredOperation
+  /cache/dump:
+    get: *retiredOperation
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Skips rate limiting. When the server enforces API keys, it is also
+        required for cache misses on `/getLyrics`, `/ttml/getLyrics` and for
+        `/revalidate`.
+    adminToken:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: The raw admin token, with no `Bearer` prefix.
+
+  parameters:
+    s:
+      name: s
+      in: query
+      description: Song name. Send at least one of song or artist.
+      schema:
+        type: string
+      example: Viva la Vida
+    song:
+      name: song
+      in: query
+      description: Alias of `s`.
+      schema:
+        type: string
+    songName:
+      name: songName
+      in: query
+      description: Alias of `s`.
+      schema:
+        type: string
+    a:
+      name: a
+      in: query
+      description: Artist name. Send at least one of song or artist.
+      schema:
+        type: string
+      example: Coldplay
+    artist:
+      name: artist
+      in: query
+      description: Alias of `a`.
+      schema:
+        type: string
+    artistName:
+      name: artistName
+      in: query
+      description: Alias of `a`.
+      schema:
+        type: string
+    al:
+      name: al
+      in: query
+      description: Album name. Improves matching.
+      schema:
+        type: string
+    album:
+      name: album
+      in: query
+      description: Alias of `al`.
+      schema:
+        type: string
+    albumName:
+      name: albumName
+      in: query
+      description: Alias of `al`.
+      schema:
+        type: string
+    d:
+      name: d
+      in: query
+      description: Track duration in whole seconds. Improves matching.
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+      example: '242'
+    duration:
+      name: duration
+      in: query
+      description: Alias of `d`.
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+
+  headers:
+    X-Cache-Status:
+      required: true
+      description: |
+        `HIT` cached lyrics. `MISS` fetched from upstream (or nothing found).
+        `STALE` upstream failed and an older entry was served.
+        `NEGATIVE_HIT` a cached "no lyrics" result.
+      schema:
+        $ref: '#/components/schemas/CacheStatus'
+    X-Provider:
+      required: true
+      description: Provider that served the request.
+      schema:
+        $ref: '#/components/schemas/Provider'
+    X-Auth-Mode:
+      description: |
+        Set only when the server enforces API keys on this path.
+        `authenticated` valid key, `invalid` wrong key, `cache` no key (cache hits only).
+      schema:
+        type: string
+        enum: [authenticated, invalid, cache]
+    X-Auth-Mode-Authenticated:
+      required: true
+      description: Always `authenticated`, because only a valid key reaches this response.
+      schema:
+        type: string
+        const: authenticated
+    X-RateLimit-Type:
+      required: true
+      description: |
+        `normal` full service. `cached` normal tier exhausted, only cached
+        lyrics are served. `exceeded` both tiers exhausted. `bypass` valid API key.
+      schema:
+        type: string
+        enum: [normal, cached, exceeded, bypass]
+    X-RateLimit-Limit:
+      description: Burst size of the current rate limit tier. Absent with a valid API key.
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+    X-RateLimit-Remaining:
+      description: Requests left in the current tier. Absent with a valid API key.
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+    X-RateLimit-Bypass:
+      description: '`true` when a valid API key skipped rate limiting.'
+      schema:
+        type: string
+        const: 'true'
+    Retry-After:
+      required: true
+      description: Seconds to wait before retrying.
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+
+  responses:
+    RateLimited:
+      description: Both rate limit tiers are exhausted. `Retry-After` is `1`.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+        X-RateLimit-Type:
+          $ref: '#/components/headers/X-RateLimit-Type'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/X-RateLimit-Limit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/X-RateLimit-Remaining'
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: "Too Many Requests\n"
+
+    ProviderRateLimited:
+      description: |
+        Rate limited. `text/plain` with `Retry-After: 1` when both tiers are
+        exhausted. JSON with `Retry-After: 60`, `X-Cache-Status` and
+        `X-Provider` when the cached tier is in use and the query is not cached.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+        X-RateLimit-Type:
+          $ref: '#/components/headers/X-RateLimit-Type'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/X-RateLimit-Limit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/X-RateLimit-Remaining'
+        X-Cache-Status:
+          description: Set on the JSON variant only.
+          schema:
+            $ref: '#/components/schemas/CacheStatus'
+        X-Provider:
+          description: Set on the JSON variant only.
+          schema:
+            $ref: '#/components/schemas/Provider'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProviderError'
+        text/plain:
+          schema:
+            type: string
+
+    MissingSongAndArtist:
+      description: Neither song nor artist was sent.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: "Song name or artist name not provided\n"
+
+    Unauthorized:
+      description: Missing or wrong admin token.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: "Unauthorized\n"
+
+    InternalError:
+      description: Database error.
+      headers:
+        X-RateLimit-Type:
+          $ref: '#/components/headers/X-RateLimit-Type'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    CacheStatus:
+      type: string
+      enum: [HIT, MISS, STALE, NEGATIVE_HIT]
+
+    Provider:
+      type: string
+      enum: [ttml, kugou, qq]
+
+    Score:
+      type: number
+      minimum: 0
+      maximum: 1
+      description: Match confidence.
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    ErrorWithMessage:
+      type: object
+      additionalProperties: false
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+
+    ProviderError:
+      type: object
+      additionalProperties: false
+      required: [error, provider]
+      properties:
+        error:
+          type: string
+        provider:
+          $ref: '#/components/schemas/Provider'
+
+    ProviderNotFound:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+        provider:
+          $ref: '#/components/schemas/Provider'
+          description: Absent when the track is marked as having no lyrics.
+
+    ProviderAPIKeyError:
+      type: object
+      additionalProperties: false
+      required: [error, message, provider]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        provider:
+          $ref: '#/components/schemas/Provider'
+
+    Message:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          type: string
+
+    TTMLLyrics:
+      type: object
+      additionalProperties: false
+      required: [ttml]
+      properties:
+        ttml:
+          type: string
+          description: TTML document with syllable or line timing.
+        score:
+          $ref: '#/components/schemas/Score'
+          description: Match confidence. Present only on fresh fetches.
+
+    ProviderLyrics:
+      type: object
+      additionalProperties: false
+      required: [lyrics, provider]
+      properties:
+        lyrics:
+          type: string
+          description: Raw lyrics in the provider's format.
+        provider:
+          $ref: '#/components/schemas/Provider'
+
+    RevalidateResult:
+      type: object
+      additionalProperties: false
+      required: [updated, cacheKey]
+      properties:
+        updated:
+          type: boolean
+          description: '`true` when the cached content changed.'
+        cacheKey:
+          type: string
+        wasNegativeCache:
+          type: boolean
+          description: '`true` when the entry was a cached "no lyrics" result. Absent when `error` is set.'
+        error:
+          type: string
+          description: Why the upstream fetch failed. Only present when `updated` is `false`.
+
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, accounts, accounts_active, accounts_out_of_service, circuit_breaker, cache_ready]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unhealthy]
+        accounts:
+          type: integer
+        accounts_active:
+          type: integer
+        accounts_out_of_service:
+          type: integer
+        circuit_breaker:
+          type: string
+          enum: [CLOSED, OPEN, HALF-OPEN, UNINITIALIZED, UNKNOWN]
+        circuit_breaker_retry_in:
+          type: string
+          description: Go duration until the breaker retries. Present only when it is `OPEN`.
+        cache_ready:
+          type: boolean
+        error:
+          type: string
+          description: Present when `status` is `unhealthy`.
+        circuit_breaker_failures:
+          type: integer
+          description: Admin token only.
+        tokens:
+          type: array
+          description: Admin token only.
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, type, status]
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+                enum: [bearer, mut]
+              status:
+                type: string
+                enum: [healthy, unhealthy, refreshing_soon, not_initialized, out_of_service, unknown]
+              expires:
+                type: string
+              remaining_minutes:
+                type: integer
+              last_checked:
+                type: string
+                format: date-time
+              last_error:
+                type: string
+              reason:
+                type: string
+              note:
+                type: string
+
+    CacheLookup:
+      type: object
+      additionalProperties: false
+      required: [query, normalized_key, legacy_key, keys_differ, found]
+      properties:
+        query:
+          type: object
+          additionalProperties: false
+          required: [song, artist, album, duration]
+          properties:
+            song:
+              type: string
+            artist:
+              type: string
+            album:
+              type: string
+            duration:
+              type: string
+        normalized_key:
+          type: string
+        legacy_key:
+          type: string
+        keys_differ:
+          type: boolean
+        found:
+          type: boolean
+        found_in:
+          type: string
+          enum: [normalized, legacy]
+        note:
+          type: string
+        track_duration_ms:
+          type: integer
+        score:
+          $ref: '#/components/schemas/Score'
+        language:
+          type: string
+        isRTL:
+          type: boolean
+        ttml_length:
+          type: integer
+        ttml_preview:
+          type: string
+          description: First 200 characters.
+        negative_cache:
+          type: boolean
+        negative_cache_in:
+          type: string
+          enum: [legacy]
+        negative_reason:
+          type: string
+
+    CacheDebug:
+      type: object
+      additionalProperties: false
+      required: [key, found]
+      properties:
+        key:
+          type: string
+        found:
+          type: boolean
+        type:
+          type: string
+          enum: [lyrics, no_lyrics_sentinel, negative_cache]
+        reason:
+          type: string
+          description: Present when `type` is `negative_cache`.
+        track_duration_ms:
+          type: integer
+        score:
+          $ref: '#/components/schemas/Score'
+        language:
+          type: string
+        isRTL:
+          type: boolean
+        ttml_length:
+          type: integer
+        ttml_preview:
+          type: string
+          description: First 300 characters.
+
+    CacheKeys:
+      type: object
+      additionalProperties: false
+      required: [total_keys, matched_keys, limit, keys]
+      properties:
+        total_keys:
+          type: integer
+        matched_keys:
+          type: integer
+        limit:
+          type: integer
+        keys:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [key, size, provider]
+            properties:
+              key:
+                type: string
+              size:
+                type: integer
+              provider:
+                type: string
