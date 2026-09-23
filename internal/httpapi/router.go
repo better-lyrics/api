@@ -74,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 			"https://braccato.boidu.dev",
 			"https://composer.boidu.dev",
 			"https://composer.betterlyrics.org",
+			"https://docs.betterlyrics.org",
 		},
 		AllowCredentials: true,
 	})

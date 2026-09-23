@@ -34,6 +34,7 @@ var corsAllowedOrigins = []string{
 	"https://braccato.boidu.dev",
 	"https://composer.boidu.dev",
 	"https://composer.betterlyrics.org",
+	"https://docs.betterlyrics.org",
 }
 
 func corsScenarios() []Scenario {
