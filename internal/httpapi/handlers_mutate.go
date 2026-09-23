@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -286,21 +287,24 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 		var updatedKeys []string
 		created := false
 
-		if len(matchingKeys) == 0 {
+		for _, key := range matchingKeys {
+			cached, ok := s.getCachedLyrics(ctx, key)
+			if !ok {
+				continue
+			}
+			s.setCachedLyrics(ctx, key, store.NoLyricsSentinel, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL, "")
+			updatedKeys = append(updatedKeys, key)
+		}
+		if len(updatedKeys) > 0 {
+			log.Infof("%s Set no_lyrics marker on %d cache entries", logcolors.LogOverride, len(updatedKeys))
+		}
+
+		// Provider endpoints read only the exact key, so a marker on a duration variant alone would not block a fresh fetch.
+		if len(updatedKeys) == 0 || (providerName != "" && !slices.Contains(updatedKeys, primaryKey)) {
 			s.setCachedLyrics(ctx, primaryKey, store.NoLyricsSentinel, 0, 0, "", false, "")
 			updatedKeys = append(updatedKeys, primaryKey)
 			created = true
 			log.Infof("%s Created no_lyrics marker for %s", logcolors.LogOverride, primaryKey)
-		} else {
-			for _, key := range matchingKeys {
-				cached, ok := s.getCachedLyrics(ctx, key)
-				if !ok {
-					continue
-				}
-				s.setCachedLyrics(ctx, key, store.NoLyricsSentinel, cached.TrackDurationMs, cached.Score, cached.Language, cached.IsRTL, "")
-				updatedKeys = append(updatedKeys, key)
-			}
-			log.Infof("%s Set no_lyrics marker on %d cache entries", logcolors.LogOverride, len(updatedKeys))
 		}
 
 		s.deleteNegativeCache(ctx, primaryKey)

@@ -196,9 +196,9 @@ func overrideProviderScenarios() []Scenario {
 			Headers:    key,
 			WantStatus: http.StatusOK,
 			WantBody: jbody(map[string]interface{}{
-				"updated":   1,
-				"created":   false,
-				"keys":      []string{"qq_lyrics:bad song bad artist [bad album] [311s]"},
+				"updated":   2,
+				"created":   true,
+				"keys":      []string{"qq_lyrics:bad song bad artist [bad album] [311s]", "qq_lyrics:bad song bad artist [bad album] [312s]"},
 				"no_lyrics": true,
 			}),
 		},
@@ -207,6 +207,24 @@ func overrideProviderScenarios() []Scenario {
 			Path:       "/qq/getLyrics?" + badSong + "&d=311",
 			WantStatus: http.StatusNotFound,
 			WantBody:   jbody(map[string]interface{}{"error": "No lyrics available for this track"}),
+		},
+		{
+			Name:       "regression: qq exact requested key is blocked when only a duration variant was cached",
+			Path:       "/qq/getLyrics?" + badSong + "&d=312",
+			WantStatus: http.StatusNotFound,
+			WantBody:   jbody(map[string]interface{}{"error": "No lyrics available for this track"}),
+		},
+		{
+			Name:       "override_provider_no_lyrics_is_idempotent",
+			Path:       "/override?provider=qq&no_lyrics=true&" + badSong + "&d=312",
+			Headers:    key,
+			WantStatus: http.StatusOK,
+			WantBody: jbody(map[string]interface{}{
+				"updated":   2,
+				"created":   false,
+				"keys":      []string{"qq_lyrics:bad song bad artist [bad album] [312s]", "qq_lyrics:bad song bad artist [bad album] [311s]"},
+				"no_lyrics": true,
+			}),
 		},
 		{
 			Name:       "override_provider_no_lyrics_creates_marker_when_uncached",
