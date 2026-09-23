@@ -136,6 +136,9 @@ var AccountNameMigrations = map[string]string{
 var APIKeyProtectedPaths = []string{
 	"/getLyrics",
 	"/ttml/getLyrics",
+	"/qq/getLyrics",
+	"/kugou/getLyrics",
+	"/legacy/getLyrics",
 	"/revalidate",
 	"/override",
 }

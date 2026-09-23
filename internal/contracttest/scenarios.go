@@ -128,6 +128,61 @@ func authScenarios() []Scenario {
 			}),
 		},
 		{
+			Name:       "auth_qq_uncached_no_key_401",
+			Path:       "/qq/getLyrics?s=Auth%20Miss&a=Nobody",
+			WantStatus: http.StatusUnauthorized,
+			WantHeaders: map[string]string{
+				"X-Cache-Status": "MISS",
+				"X-Auth-Mode":    "cache",
+				"X-Provider":     "qq",
+			},
+			WantBody: jbody(map[string]interface{}{
+				"error":    "API key required",
+				"message":  "Uncached queries require a valid API key via X-API-Key header",
+				"provider": "qq",
+			}),
+		},
+		{
+			Name:       "auth_kugou_uncached_no_key_401",
+			Path:       "/kugou/getLyrics?s=Auth%20Miss&a=Nobody",
+			WantStatus: http.StatusUnauthorized,
+			WantHeaders: map[string]string{
+				"X-Cache-Status": "MISS",
+				"X-Auth-Mode":    "cache",
+				"X-Provider":     "kugou",
+			},
+			WantBody: jbody(map[string]interface{}{
+				"error":    "API key required",
+				"message":  "Uncached queries require a valid API key via X-API-Key header",
+				"provider": "kugou",
+			}),
+		},
+		{
+			Name:       "auth_legacy_uncached_no_key_401",
+			Path:       "/legacy/getLyrics?s=Auth%20Miss&a=Nobody",
+			WantStatus: http.StatusUnauthorized,
+			WantHeaders: map[string]string{
+				"X-Cache-Status": "MISS",
+				"X-Auth-Mode":    "cache",
+				"X-Provider":     "legacy",
+			},
+			WantBody: jbody(map[string]interface{}{
+				"error":    "API key required",
+				"message":  "Uncached queries require a valid API key via X-API-Key header",
+				"provider": "legacy",
+			}),
+		},
+		{
+			Name:       "auth_provider_cache_hit_without_key_is_public",
+			Path:       "/ttml/getLyrics?s=Conformance%20Hit&a=Tester",
+			WantStatus: http.StatusOK,
+			WantHeaders: map[string]string{
+				"X-Cache-Status": "HIT",
+				"X-Auth-Mode":    "cache",
+			},
+			WantBody: jbody(map[string]interface{}{"lyrics": "<tt>HIT</tt>", "provider": "ttml"}),
+		},
+		{
 			Name:       "auth_uncached_wrong_key_401",
 			Path:       "/getLyrics?s=Auth%20Miss&a=Nobody",
 			Headers:    map[string]string{"X-API-Key": "wrong-key"},

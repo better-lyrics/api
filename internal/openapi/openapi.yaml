@@ -171,10 +171,10 @@ paths:
         - $ref: '#/components/parameters/albumName'
         - $ref: '#/components/parameters/d'
         - $ref: '#/components/parameters/duration'
-      responses:
+      responses: &providerResponses
         '200':
           description: Lyrics found.
-          headers: &ttmlProviderHeaders
+          headers: &providerHeaders
             X-Cache-Status:
               $ref: '#/components/headers/X-Cache-Status'
             X-Provider:
@@ -197,14 +197,14 @@ paths:
           description: |
             The query is not cached and the server enforces API keys, but no
             valid `X-API-Key` was sent.
-          headers: *ttmlProviderHeaders
+          headers: *providerHeaders
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProviderAPIKeyError'
         '404':
           description: No lyrics exist for this song from this provider.
-          headers: *ttmlProviderHeaders
+          headers: *providerHeaders
           content:
             application/json:
               schema:
@@ -215,14 +215,14 @@ paths:
           $ref: '#/components/responses/ProviderRateLimited'
         '500':
           description: Upstream failure.
-          headers: *ttmlProviderHeaders
+          headers: *providerHeaders
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProviderError'
         '503':
           description: The server is in cache-only mode and the query is not cached.
-          headers: *ttmlProviderHeaders
+          headers: *providerHeaders
           content:
             application/json:
               schema:
@@ -233,68 +233,30 @@ paths:
       tags: [Lyrics]
       operationId: getKugouLyrics
       summary: Get lyrics from the Kugou provider
-      description: Line-level timing. Send a song, an artist, or both. Uses exact cache keys, with no duration tolerance.
+      description: |
+        Line-level timing. Send a song, an artist, or both. Uses exact cache
+        keys, with no duration tolerance. When the server enforces API keys, a
+        cache miss needs a valid `X-API-Key`.
       security:
         - {}
         - apiKey: []
       parameters: *providerParameters
-      responses: &publicProviderResponses
-        '200':
-          description: Lyrics found.
-          headers: &providerHeaders
-            X-Cache-Status:
-              $ref: '#/components/headers/X-Cache-Status'
-            X-Provider:
-              $ref: '#/components/headers/X-Provider'
-            X-RateLimit-Type:
-              $ref: '#/components/headers/X-RateLimit-Type'
-            X-RateLimit-Limit:
-              $ref: '#/components/headers/X-RateLimit-Limit'
-            X-RateLimit-Remaining:
-              $ref: '#/components/headers/X-RateLimit-Remaining'
-            X-RateLimit-Bypass:
-              $ref: '#/components/headers/X-RateLimit-Bypass'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderLyrics'
-        '404':
-          description: No lyrics exist for this song from this provider.
-          headers: *providerHeaders
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderNotFound'
-        '422':
-          $ref: '#/components/responses/MissingSongAndArtist'
-        '429':
-          $ref: '#/components/responses/ProviderRateLimited'
-        '500':
-          description: Upstream failure.
-          headers: *providerHeaders
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderError'
-        '503':
-          description: The server is in cache-only mode and the query is not cached.
-          headers: *providerHeaders
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderError'
+      responses: *providerResponses
 
   /qq/getLyrics:
     get:
       tags: [Lyrics]
       operationId: getQQLyrics
       summary: Get lyrics from the QQ provider
-      description: Send a song, an artist, or both. Uses exact cache keys, with no duration tolerance.
+      description: |
+        Send a song, an artist, or both. Uses exact cache keys, with no
+        duration tolerance. When the server enforces API keys, a cache miss
+        needs a valid `X-API-Key`.
       security:
         - {}
         - apiKey: []
       parameters: *providerParameters
-      responses: *publicProviderResponses
+      responses: *providerResponses
 
   /revalidate:
     get:
