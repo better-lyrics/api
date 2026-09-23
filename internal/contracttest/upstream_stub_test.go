@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -50,9 +51,14 @@ func upstreamStub(t *testing.T) *httptest.Server {
 			fmt.Fprintf(w, `{"storefront_id":"143478-2,31","token":"%s","token_type":"Bearer","cache_ttl_seconds":120}`, jwt)
 
 		case strings.HasPrefix(path, "/search/"):
-			w.Header().Set("Content-Type", "application/json")
 			term := r.URL.Query().Get("term")
+			if !strings.Contains(term, "Upstream Boom") {
+				w.Header().Set("Content-Type", "application/json")
+			}
 			switch {
+			case strings.Contains(term, "Upstream Boom"):
+				http.Error(w, "upstream exploded", http.StatusInternalServerError)
+				return
 			case strings.Contains(term, "Fresh Hit"):
 				// ISRC that lrc.red does NOT have -> falls through to the Apple lyrics stub.
 				fmt.Fprint(w, `{"results":{"songs":{"data":[{"id":"1000001","attributes":{"name":"Fresh Hit","artistName":"Fresh Artist","albumName":"Fresh Album","durationInMillis":200000,"isrc":"USFRESH00001","releaseDate":"2020-01-01","hasTimeSyncedLyrics":true}}]}}}`)
@@ -163,7 +169,7 @@ func TestConformanceCurrentMiss(t *testing.T) {
 func TestConformanceNewMiss(t *testing.T) {
 	stub := upstreamStub(t)
 	base := newServerBase(t, stubEnv(stub.URL), seedLyricsData, seedNegativeData)
-	Run(t, base, missScenarios())
+	RunSpec(t, base, missScenarios())
 }
 
 func TestConformanceCurrentCacheOnly(t *testing.T) {
@@ -179,5 +185,121 @@ func TestConformanceNewCacheOnly(t *testing.T) {
 	env := generalProfileEnv()
 	env["FF_CACHE_ONLY_MODE"] = "true"
 	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
-	Run(t, base, cacheOnlyScenarios())
+	RunSpec(t, base, cacheOnlyScenarios())
+}
+
+func upstreamFailureScenarios() []Scenario {
+	return []Scenario{
+		{
+			Name:          "spec_getlyrics_upstream_failure_500",
+			Path:          "/getLyrics?s=Upstream%20Boom&a=Nobody",
+			WantStatus:    http.StatusInternalServerError,
+			WantHeaders:   map[string]string{"X-Cache-Status": "MISS"},
+			WantBodyRegex: regexp.MustCompile(`^\{"error":".+"\}\n$`),
+		},
+		{
+			Name:          "spec_ttml_provider_upstream_failure_500",
+			Path:          "/ttml/getLyrics?s=Upstream%20Boom&a=Nobody",
+			WantStatus:    http.StatusInternalServerError,
+			WantHeaders:   map[string]string{"X-Cache-Status": "MISS", "X-Provider": "ttml"},
+			WantBodyRegex: regexp.MustCompile(`"provider":"ttml"`),
+		},
+	}
+}
+
+func revalidateScenarios() []Scenario {
+	key := map[string]string{"X-API-Key": "test-api-key"}
+	authed := map[string]string{"X-Auth-Mode": "authenticated", "X-RateLimit-Type": "bypass", "X-RateLimit-Bypass": "true"}
+	return []Scenario{
+		{
+			Name:        "spec_revalidate_changed_content_updates",
+			Path:        "/revalidate?s=Fresh%20Hit&a=Fresh%20Artist",
+			Headers:     key,
+			WantStatus:  http.StatusOK,
+			WantHeaders: authed,
+			WantBody: jbody(map[string]interface{}{
+				"updated":          true,
+				"cacheKey":         "ttml_lyrics:fresh hit fresh artist",
+				"wasNegativeCache": false,
+			}),
+		},
+		{
+			Name:          "spec_revalidate_accepts_long_aliases",
+			Path:          "/revalidate?song=Fresh%20Hit&artist=Fresh%20Artist",
+			Headers:       key,
+			WantStatus:    http.StatusOK,
+			WantHeaders:   authed,
+			WantBodyRegex: regexp.MustCompile(`"cacheKey":"ttml_lyrics:fresh hit fresh artist"`),
+		},
+		{
+			Name:          "spec_revalidate_upstream_miss_reports_error",
+			Path:          "/revalidate?s=Conformance%20Hit&a=Tester",
+			Headers:       key,
+			WantStatus:    http.StatusOK,
+			WantHeaders:   authed,
+			WantBodyRegex: regexp.MustCompile(`"updated":false`),
+		},
+		{
+			Name:        "spec_revalidate_missing_artist_400",
+			Path:        "/revalidate?s=Fresh%20Hit",
+			Headers:     key,
+			WantStatus:  http.StatusBadRequest,
+			WantHeaders: authed,
+			WantBody:    jbody(map[string]interface{}{"error": "song (s) and artist (a) parameters are required"}),
+		},
+		{
+			Name:        "spec_revalidate_not_cached_404",
+			Path:        "/revalidate?s=Never%20Cached&a=Nobody",
+			Headers:     key,
+			WantStatus:  http.StatusNotFound,
+			WantHeaders: authed,
+			WantBody: jbody(map[string]interface{}{
+				"error":    "no cached lyrics found for this query",
+				"cacheKey": "ttml_lyrics:never cached nobody",
+			}),
+		},
+		{
+			Name:        "spec_revalidate_without_key_401",
+			Path:        "/revalidate?s=Fresh%20Hit&a=Fresh%20Artist",
+			WantStatus:  http.StatusUnauthorized,
+			WantHeaders: map[string]string{"X-Auth-Mode": "cache", "X-RateLimit-Type": "normal"},
+		},
+	}
+}
+
+func providerCacheOnlyScenarios() []Scenario {
+	return []Scenario{
+		{
+			Name:        "spec_ttml_provider_cache_only_503",
+			Path:        "/ttml/getLyrics?s=Cache%20Only%20Miss&a=Nobody",
+			WantStatus:  http.StatusServiceUnavailable,
+			WantHeaders: map[string]string{"X-Cache-Status": "MISS", "X-Provider": "ttml"},
+			WantBody: jbody(map[string]interface{}{
+				"error":    "Service running in cache-only mode. No cached lyrics available for this query.",
+				"provider": "ttml",
+			}),
+		},
+	}
+}
+
+func TestConformanceNewUpstreamFailure(t *testing.T) {
+	stub := upstreamStub(t)
+	base := newServerBase(t, stubEnv(stub.URL), seedLyricsData, seedNegativeData)
+	RunSpec(t, base, upstreamFailureScenarios())
+}
+
+func TestConformanceNewRevalidate(t *testing.T) {
+	stub := upstreamStub(t)
+	env := stubEnv(stub.URL)
+	env["API_KEY_REQUIRED"] = "true"
+	seed := append([]SeedLyrics{{Song: "Fresh Hit", Artist: "Fresh Artist", TTML: "<tt>OLD</tt>"}}, seedLyricsData...)
+	base := newServerBase(t, env, seed, seedNegativeData)
+	RunSpec(t, base, revalidateScenarios())
+}
+
+func TestConformanceNewProviderCacheOnly(t *testing.T) {
+	env := generalProfileEnv()
+	env["FF_CACHE_ONLY_MODE"] = "true"
+	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
+	RunSpec(t, base, providerCacheOnlyScenarios())
 }

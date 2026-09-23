@@ -267,13 +267,15 @@ func (s *Server) simulateCircuitBreakerFailure(w http.ResponseWriter, r *http.Re
 func (s *Server) helpHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"help": "Lyrics API with multiple provider support",
-		"docs": "https://lyrics-api-docs.boidu.dev",
+		"help":    "Lyrics API with multiple provider support",
+		"docs":    "https://docs.betterlyrics.org",
+		"openapi": "/openapi.json",
 		"endpoints": map[string]string{
 			"/getLyrics":        "Default provider (TTML)",
-			"/ttml/getLyrics":   "TTML provider (word-level timing)",
+			"/ttml/getLyrics":   "TTML provider (syllable-level timing)",
 			"/kugou/getLyrics":  "Kugou provider (line-level timing)",
-			"/legacy/getLyrics": "Legacy Spotify-based provider",
+			"/qq/getLyrics":     "QQ provider",
+			"/legacy/getLyrics": "Legacy provider",
 		},
 		"parameters": map[string]string{
 			"s, song, songName":     "Song name (required)",
@@ -297,8 +299,6 @@ func (s *Server) getCacheDump(w http.ResponseWriter, r *http.Request) {
 			"/cache/keys":               "List cache keys (paginated)",
 			"/cache/debug?key=...":      "Inspect a specific cache entry",
 			"/cache/lookup?s=...&a=...": "Check if a song is cached",
-			"/cache/backup":             "Create a timestamped backup file",
-			"/cache/dump":               "Stream the raw BoltDB file as a download",
 		},
 	})
 }

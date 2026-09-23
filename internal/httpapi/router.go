@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"lyrics-api-go/config"
+	"lyrics-api-go/internal/openapi"
 	"lyrics-api-go/logcolors"
 	"lyrics-api-go/middleware"
 	"lyrics-api-go/stats"
@@ -55,6 +56,8 @@ func (s *Server) setupRoutes(router *mux.Router) {
 	router.HandleFunc("/circuit-breaker/simulate-failure", s.simulateCircuitBreakerFailure)
 
 	router.HandleFunc("/test-notifications", s.testNotifications)
+
+	router.HandleFunc("/openapi.json", openapi.Handler).Methods("GET")
 
 	router.HandleFunc("/", s.helpHandler)
 }

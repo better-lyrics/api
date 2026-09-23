@@ -182,6 +182,39 @@ func rateLimitScenarios() []Scenario {
 	}
 }
 
+var cacheGoneAlternatives = map[string]string{
+	"/stats":                    "Request, cache, and performance statistics",
+	"/cache/keys":               "List cache keys (paginated)",
+	"/cache/debug?key=...":      "Inspect a specific cache entry",
+	"/cache/lookup?s=...&a=...": "Check if a song is cached",
+}
+
+// cacheGoneScenario takes the alternatives because the BoltDB server still offers
+// file backups and dumps, while the Postgres server has retired them.
+func cacheGoneScenario(alternatives map[string]string) Scenario {
+	return Scenario{
+		Name:       "admin_cache_dump_endpoint_gone_410",
+		Path:       "/cache",
+		WantStatus: http.StatusGone,
+		WantBody: jbody(map[string]interface{}{
+			"error":        "Endpoint removed",
+			"message":      "/cache has been removed. Use the alternatives below.",
+			"alternatives": alternatives,
+		}),
+	}
+}
+
+func boltCacheGoneScenario() Scenario {
+	alternatives := map[string]string{
+		"/cache/backup": "Create a timestamped backup file",
+		"/cache/dump":   "Stream the raw BoltDB file as a download",
+	}
+	for k, v := range cacheGoneAlternatives {
+		alternatives[k] = v
+	}
+	return cacheGoneScenario(alternatives)
+}
+
 type adminGate struct {
 	method string
 	path   string
@@ -230,23 +263,6 @@ func adminScenarios() []Scenario {
 			Path:        "/cache/help",
 			WantStatus:  http.StatusOK,
 			WantHeaders: map[string]string{"Content-Type": "application/json"},
-		},
-		Scenario{
-			Name:       "admin_cache_dump_endpoint_gone_410",
-			Path:       "/cache",
-			WantStatus: http.StatusGone,
-			WantBody: jbody(map[string]interface{}{
-				"error":   "Endpoint removed",
-				"message": "/cache has been removed. Use the alternatives below.",
-				"alternatives": map[string]string{
-					"/stats":                    "Request, cache, and performance statistics",
-					"/cache/keys":               "List cache keys (paginated)",
-					"/cache/debug?key=...":      "Inspect a specific cache entry",
-					"/cache/lookup?s=...&a=...": "Check if a song is cached",
-					"/cache/backup":             "Create a timestamped backup file",
-					"/cache/dump":               "Stream the raw BoltDB file as a download",
-				},
-			}),
 		},
 		Scenario{
 			Name:        "admin_stats_authorized_200",
@@ -368,6 +384,139 @@ func smokeScenarios() []Scenario {
 			WantStatus:     http.StatusOK,
 			WantHeaders:    map[string]string{"X-RateLimit-Type": "normal"},
 			PresentHeaders: []string{"X-RateLimit-Limit", "X-RateLimit-Remaining"},
+		},
+	}
+}
+
+// specScenarios exercise documented endpoints the frozen contract never covered,
+// so every documented response shape is checked against openapi.yaml. They target
+// the Postgres server only.
+func specScenarios() []Scenario {
+	admin := map[string]string{"Authorization": "test-admin-token"}
+	return []Scenario{
+		{
+			Name:        "spec_openapi_json_served",
+			Path:        "/openapi.json",
+			WantStatus:  http.StatusOK,
+			WantHeaders: map[string]string{"Content-Type": "application/json"},
+		},
+		{
+			Name:       "spec_ttml_provider_hit",
+			Path:       "/ttml/getLyrics?s=Conformance%20Hit&a=Tester",
+			WantStatus: http.StatusOK,
+			WantHeaders: map[string]string{
+				"X-Cache-Status": "HIT",
+				"X-Provider":     "ttml",
+			},
+			WantBody: jbody(map[string]interface{}{"lyrics": "<tt>HIT</tt>", "provider": "ttml"}),
+		},
+		{
+			Name:        "spec_ttml_provider_sentinel_404",
+			Path:        "/ttml/getLyrics?s=Sentinel%20Song&a=Tester",
+			WantStatus:  http.StatusNotFound,
+			WantHeaders: map[string]string{"X-Cache-Status": "HIT", "X-Provider": "ttml"},
+		},
+		{
+			Name:        "spec_ttml_provider_negative_hit_404",
+			Path:        "/ttml/getLyrics?s=Neg%20Song&a=Tester",
+			WantStatus:  http.StatusNotFound,
+			WantHeaders: map[string]string{"X-Cache-Status": "NEGATIVE_HIT", "X-Provider": "ttml"},
+			WantBody: jbody(map[string]interface{}{
+				"error":    "Lyrics not available for this track",
+				"provider": "ttml",
+			}),
+		},
+		{
+			Name:       "spec_kugou_422_missing_song_and_artist",
+			Path:       "/kugou/getLyrics",
+			WantStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			Name:       "spec_qq_422_missing_song_and_artist",
+			Path:       "/qq/getLyrics",
+			WantStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			Name:       "spec_revalidate_without_key_401",
+			Path:       "/revalidate?s=Conformance%20Hit&a=Tester",
+			WantStatus: http.StatusUnauthorized,
+			WantBody: jbody(map[string]interface{}{
+				"error":   "API key required for revalidation",
+				"message": "Provide a valid API key via X-API-Key header",
+			}),
+		},
+		{
+			Name:          "spec_health_with_admin_token",
+			Path:          "/health",
+			Headers:       admin,
+			WantStatus:    http.StatusOK,
+			WantBodyRegex: regexp.MustCompile(`"tokens":`),
+		},
+		{
+			Name:          "spec_cache_lookup_hit",
+			Path:          "/cache/lookup?s=Conformance%20Hit&a=Tester",
+			Headers:       admin,
+			WantStatus:    http.StatusOK,
+			WantBodyRegex: regexp.MustCompile(`"found":true`),
+		},
+		{
+			Name:          "spec_cache_lookup_negative",
+			Path:          "/cache/lookup?s=Neg%20Song&a=Tester",
+			Headers:       admin,
+			WantStatus:    http.StatusOK,
+			WantBodyRegex: regexp.MustCompile(`"negative_cache":true`),
+		},
+		{
+			Name:       "spec_cache_lookup_missing_params_400",
+			Path:       "/cache/lookup",
+			Headers:    admin,
+			WantStatus: http.StatusBadRequest,
+		},
+		{
+			Name:          "spec_cache_debug_lyrics",
+			Path:          "/cache/debug?key=ttml_lyrics:conformance%20hit%20tester",
+			Headers:       admin,
+			WantStatus:    http.StatusOK,
+			WantBodyRegex: regexp.MustCompile(`"type":"lyrics"`),
+		},
+		{
+			Name:          "spec_cache_debug_sentinel",
+			Path:          "/cache/debug?key=ttml_lyrics:sentinel%20song%20tester",
+			Headers:       admin,
+			WantStatus:    http.StatusOK,
+			WantBodyRegex: regexp.MustCompile(`"type":"no_lyrics_sentinel"`),
+		},
+		{
+			Name:          "spec_cache_debug_negative",
+			Path:          "/cache/debug?key=ttml_lyrics:neg%20song%20tester",
+			Headers:       admin,
+			WantStatus:    http.StatusOK,
+			WantBodyRegex: regexp.MustCompile(`"type":"negative_cache"`),
+		},
+		{
+			Name:       "spec_cache_debug_missing_key_400",
+			Path:       "/cache/debug",
+			Headers:    admin,
+			WantStatus: http.StatusBadRequest,
+		},
+		{
+			Name:          "spec_cache_keys",
+			Path:          "/cache/keys?prefix=ttml_lyrics:",
+			Headers:       admin,
+			WantStatus:    http.StatusOK,
+			WantBodyRegex: regexp.MustCompile(`"keys":\[\{`),
+		},
+		{
+			Name:       "spec_cache_clear_unknown_provider_400",
+			Path:       "/cache/clear/nope",
+			Headers:    admin,
+			WantStatus: http.StatusBadRequest,
+		},
+		{
+			Name:       "spec_retired_endpoint_410",
+			Path:       "/cache/backup",
+			Headers:    admin,
+			WantStatus: http.StatusGone,
 		},
 	}
 }
