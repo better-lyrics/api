@@ -45,6 +45,10 @@ type Config struct {
 		TTMLMintURL                        string `envconfig:"TTML_MINT_URL" default:""`
 		ProxyRevalidateURL                 string `envconfig:"PROXY_REVALIDATE_URL" default:""`
 		ProxyAPIKey                        string `envconfig:"PROXY_API_KEY" default:""`
+		CloudflareZoneID                   string `envconfig:"CLOUDFLARE_ZONE_ID" default:""`
+		CloudflareAPIToken                 string `envconfig:"CLOUDFLARE_API_TOKEN" default:""`
+		CloudflareAPIBaseURL               string `envconfig:"CLOUDFLARE_API_BASE_URL" default:"https://api.cloudflare.com/client/v4"`
+		CloudflarePurgeIntervalSeconds     int    `envconfig:"CLOUDFLARE_PURGE_INTERVAL_SECONDS" default:"15"`
 
 		// TTML API Configuration
 		// Token source for auto-scraping bearer tokens (web frontend URL)
