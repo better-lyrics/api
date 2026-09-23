@@ -206,6 +206,7 @@ func shouldNegativeCache(err error) bool {
 		"no track found",
 		"no tracks found",
 		"no tracks within",
+		"no songs within",
 		"no matching tracks found",
 		"No related resources",
 		"no lyrics data found",

@@ -1,6 +1,9 @@
 package httpapi
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestBuildNormalizedCacheKey(t *testing.T) {
 	tests := []struct {
@@ -81,3 +84,27 @@ func TestParseDurationSec(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+func TestShouldNegativeCache(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"ttml duration miss", fmt.Errorf("no tracks within 2000ms of duration 170000ms (closest: a - b at 180000ms, diff: 10000ms)"), true},
+		{"regression: kugou duration miss is permanent", fmt.Errorf("kugou: no songs within 2000ms of duration 312000ms"), true},
+		{"regression: qq duration miss is permanent", fmt.Errorf("qq: no songs within 2000ms of duration 312000ms"), true},
+		{"provider search miss", fmt.Errorf("qq: no songs found for: Hass Und Liebe - Miss Construction"), true},
+		{"empty lyrics", fmt.Errorf("lyrics content is empty"), true},
+		{"timeout is transient", fmt.Errorf("context deadline exceeded"), false},
+		{"upstream 500 is transient", fmt.Errorf("kugou: search returned 500"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldNegativeCache(tt.err); got != tt.want {
+				t.Fatalf("shouldNegativeCache(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
