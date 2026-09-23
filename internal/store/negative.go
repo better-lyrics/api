@@ -122,3 +122,38 @@ func (s *Store) DeleteNegative(ctx context.Context, cacheKey string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM negative_cache WHERE cache_key = $1`, cacheKey)
 	return err
 }
+
+// PurgeExpiredNegative deletes up to limit expired rows; reads already ignore them, so this only reclaims space.
+func (s *Store) PurgeExpiredNegative(ctx context.Context, limit int) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM negative_cache WHERE ctid IN (
+			SELECT ctid FROM negative_cache WHERE expires_at < now() LIMIT $1
+		)`, limit)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// PurgeAllExpiredNegative pauses between batches so a large backlog never holds long locks or saturates IO.
+func (s *Store) PurgeAllExpiredNegative(ctx context.Context, batchSize int, pause time.Duration) (int64, error) {
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		n, err := s.PurgeExpiredNegative(ctx, batchSize)
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if n < int64(batchSize) {
+			return total, nil
+		}
+		select {
+		case <-ctx.Done():
+			return total, ctx.Err()
+		case <-time.After(pause):
+		}
+	}
+}

@@ -93,6 +93,7 @@ func main() {
 	ttml.StartBearerTokenMonitor()
 	ttml.StartHealthCheckScheduler()
 	cdn.Start(ctx, cfg)
+	startNegativePurge(ctx, st)
 	go syncupgrade.StartSyncUpgradeDetector(st, cfg)
 
 	port := os.Getenv("PORT")
