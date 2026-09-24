@@ -1,6 +1,7 @@
 package ttml
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -196,5 +197,51 @@ func TestGetMintedBearer_StorefrontBinding(t *testing.T) {
 				t.Errorf("storefrontID = %q, want verbatim %q", mb.storefrontID, tt.storefrontID)
 			}
 		})
+	}
+}
+
+func TestSearchTwoLane_ThrottledMintedLaneDoesNotSpendAccount(t *testing.T) {
+	resetMintedToken()
+	defer resetMintedToken()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"storefront_id":"143478-2,31","token":"minted-tok","token_type":"Bearer","cache_ttl_seconds":120}`)
+	}))
+	defer srv.Close()
+
+	oldURL := mintTokenURL
+	mintTokenURL = srv.URL
+	defer func() { mintTokenURL = oldURL }()
+
+	now := time.Now()
+	limiter := &outboundLimiter{
+		account: newTokenBucket(2, 10, now),
+		minted:  &tokenBucket{capacity: 1, refillPerSec: 0.001, lastRefill: now},
+		scrape:  newTokenBucket(1, 5, now),
+		mint:    newTokenBucket(4, 6, now),
+		maxWait: 10 * time.Millisecond,
+	}
+	getOutbound()
+	oldLimiter := outboundInst
+	outboundInst = limiter
+	defer func() { outboundInst = oldLimiter }()
+
+	account := MusicAccount{NameID: "Billie"}
+	track, _, got, err := searchTwoLane("song artist", "us", "song", "artist", "", 0, account, false)
+
+	if !errors.Is(err, ErrThrottled) {
+		t.Fatalf("err = %v, want ErrThrottled", err)
+	}
+	if track != nil {
+		t.Errorf("track = %+v, want nil", track)
+	}
+	if got.NameID != account.NameID {
+		t.Errorf("account = %q, want %q unchanged", got.NameID, account.NameID)
+	}
+	limiter.account.mu.Lock()
+	tokens := limiter.account.tokens
+	limiter.account.mu.Unlock()
+	if tokens < 10 {
+		t.Errorf("account bucket has %.2f tokens, want 10: throttled minted search fell back to the account lane", tokens)
 	}
 }
