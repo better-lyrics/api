@@ -2,6 +2,7 @@ package ttml
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"lyrics-api-go/circuitbreaker"
@@ -516,6 +517,10 @@ func searchTrackMinted(query, songName, artistName, albumName string, durationMs
 	}
 	storefront := mb.storefront
 
+	if err := getOutbound().acquireMinted(); err != nil {
+		return nil, 0.0, false, err
+	}
+
 	conf := config.Get()
 	searchURL := conf.Configuration.TTMLBaseURL + fmt.Sprintf(
 		conf.Configuration.TTMLSearchPath,
@@ -533,10 +538,6 @@ func searchTrackMinted(query, songName, artistName, albumName string, durationMs
 	req.Header.Set("Origin", "https://music.apple.com")
 	req.Header.Set("Referer", "https://music.apple.com")
 
-	if err := getOutbound().acquireMinted(); err != nil {
-		return nil, 0.0, false, err
-	}
-
 	log.Infof("%s Querying TTML API via minted bearer (storefront %s): %s", logcolors.LogSearch, storefront, query)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
@@ -545,6 +546,9 @@ func searchTrackMinted(query, songName, artistName, albumName string, durationMs
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, 0.0, false, fmt.Errorf("minted search returned status 429: %w", ErrThrottled)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, 0.0, false, fmt.Errorf("minted search returned status %d", resp.StatusCode)
 	}
@@ -569,6 +573,7 @@ func searchTrackMinted(query, songName, artistName, albumName string, durationMs
 
 // searchTwoLane tries the minted-bearer lane first and falls back to the account
 // (media-user-token) lane only when minting or the minted request fails. A
+// throttled minted lane never falls back, because the spill quarantines every account. A
 // successful minted round-trip that finds no match is returned as-is (no
 // fallback), so a scarce account is never spent re-running the same query. The
 // returned account is the one to use for any subsequent Apple lyrics fetch; the
@@ -581,6 +586,9 @@ func searchTwoLane(query, storefront, songName, artistName, albumName string, du
 		}
 		log.Infof("%s Matched via minted bearer, no subscriber account spent", logcolors.LogSearch)
 		return track, score, account, nil
+	}
+	if errors.Is(err, ErrThrottled) {
+		return nil, 0.0, account, err
 	}
 
 	log.Warnf("%s Minted search unavailable (%v), falling back to account lane", logcolors.LogSearch, err)
