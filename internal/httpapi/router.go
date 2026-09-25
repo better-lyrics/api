@@ -14,6 +14,7 @@ import (
 	"lyrics-api-go/stats"
 
 	"github.com/gorilla/mux"
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/rs/cors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
@@ -70,7 +71,7 @@ func (s *Server) setupRoutes(router *mux.Router) {
 }
 
 // Handler builds the full middleware chain. Runtime order (outermost first):
-// rate-limit -> api-key -> CORS -> logging -> router. gorilla/mux and rs/cors
+// gzip -> rate-limit -> api-key -> CORS -> logging -> router. gorilla/mux and rs/cors
 // defaults are part of the frozen contract.
 func (s *Server) Handler() http.Handler {
 	router := mux.NewRouter()
@@ -108,8 +109,17 @@ func (s *Server) Handler() http.Handler {
 		apiKeyInvalidKey,
 	)(corsHandler)
 
-	return s.limitMiddleware(apiKeyHandler, limiter)
+	return gzipResponses(s.limitMiddleware(apiKeyHandler, limiter))
 }
+
+// Cloudflare re-encodes for clients, so gzip here only shrinks origin egress.
+var gzipResponses = func() func(http.Handler) http.HandlerFunc {
+	wrap, err := gzhttp.NewWrapper(gzhttp.EnableZstd(false))
+	if err != nil {
+		panic(err)
+	}
+	return wrap
+}()
 
 func (s *Server) limitMiddleware(next http.Handler, limiter *middleware.IPRateLimiter) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
