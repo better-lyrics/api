@@ -108,6 +108,45 @@ func (s *Store) GetLyricsExact(ctx context.Context, cacheKey string) (CachedLyri
 	return l, true, nil
 }
 
+// songLyricsQuery matches every album and duration variant of a "prefix:song artist" key. The "C" collation keeps the ' [' prefix range exact.
+const songLyricsQuery = `
+	SELECT raw_lyrics FROM lyrics
+	WHERE provider = $1 AND provider IN ('qq', 'kugou')
+	  AND ((base_key COLLATE "C") IN ($2, rtrim($2))
+	       OR ((base_key COLLATE "C") >= $2 || ' [' AND (base_key COLLATE "C") < $2 || ' \'))
+	  AND raw_lyrics <> $3
+	LIMIT 10`
+
+// HasSongLyrics reports whether a qq or kugou provider has real lyrics cached for a song and artist under any album or duration.
+func (s *Store) HasSongLyrics(ctx context.Context, provider, songArtistKey string) (bool, error) {
+	if songArtistKey == "" {
+		return false, nil
+	}
+	sentinel, err := gzipBytes(NoLyricsSentinel)
+	if err != nil {
+		return false, err
+	}
+	rows, err := s.pool.Query(ctx, songLyricsQuery, provider, songArtistKey, sentinel)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var blob []byte
+		if err := rows.Scan(&blob); err != nil {
+			return false, err
+		}
+		body, err := gunzipBytes(blob)
+		if err != nil {
+			return false, err
+		}
+		if body != NoLyricsSentinel {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 func (s *Store) GetLyricsTolerant(ctx context.Context, k Key, deltaSec int) (CachedLyrics, string, bool, error) {
 	if k.DurationSec == nil {
 		return CachedLyrics{}, "", false, nil

@@ -2,7 +2,11 @@ package httpapi
 
 import (
 	"fmt"
+	"strings"
 	"testing"
+
+	"lyrics-api-go/internal/store"
+	"lyrics-api-go/services/providers"
 )
 
 func TestBuildNormalizedCacheKey(t *testing.T) {
@@ -52,6 +56,61 @@ func TestBuildProviderCacheKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := buildProviderCacheKey(tt.prefix, tt.song, tt.artist, tt.album, tt.dur); got != tt.want {
 				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildProviderSongArtistKey(t *testing.T) {
+	tests := []struct {
+		name                 string
+		prefix, song, artist string
+		want                 string
+	}{
+		{"lowercases and trims", "qq_lyrics", " Projections ", " Night Tapes ", "qq_lyrics:projections night tapes"},
+		{"no artist keeps the separator", "qq_lyrics", "Song", "", "qq_lyrics:song "},
+		{"unicode", "kugou_lyrics", "À Peu Près", "Pomme", "kugou_lyrics:à peu près pomme"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildProviderSongArtistKey(tt.prefix, tt.song, tt.artist); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderCacheKeysExtendTheirSongArtistKey(t *testing.T) {
+	for _, artist := range []string{"Artist", ""} {
+		for _, album := range []string{"", "Album", "Album [Deluxe]"} {
+			for _, dur := range []string{"", "200"} {
+				songArtist := buildProviderSongArtistKey("qq_lyrics", "Song [Live]", artist)
+				base := store.DeriveKey(buildProviderCacheKey("qq_lyrics", "Song [Live]", artist, album, dur)).BaseKey
+				if base != songArtist && base != strings.TrimRight(songArtist, " ") && !strings.HasPrefix(base, songArtist+" [") {
+					t.Errorf("artist=%q album=%q dur=%q: base_key %q does not extend song-artist key %q", artist, album, dur, base, songArtist)
+				}
+			}
+		}
+	}
+}
+
+func TestIsEmptySearchError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"qq empty search", providers.NewProviderError("qq", "no songs found for: projections - Night Tapes", nil), true},
+		{"kugou empty search", providers.NewProviderError("kugou", "no songs found for: Rise - Skillet", nil), true},
+		{"duration filter miss", providers.NewProviderError("qq", "no songs within 2000ms of duration 260000ms", nil), false},
+		{"search request failure", providers.NewProviderError("qq", "song search failed", fmt.Errorf("request failed")), false},
+		{"empty lyrics", providers.NewProviderError("qq", "failed to fetch QRC lyrics: lyrics content is empty", nil), false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isEmptySearchError(tt.err); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
 	}

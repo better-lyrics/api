@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"lyrics-api-go/internal/store"
 	"lyrics-api-go/logcolors"
@@ -37,8 +38,12 @@ func buildLegacyCacheKey(songName, artistName, albumName, durationStr string) st
 	return fmt.Sprintf("ttml_lyrics:%s", query)
 }
 
+func buildProviderSongArtistKey(prefix, song, artist string) string {
+	return prefix + ":" + strings.ToLower(strings.TrimSpace(song)) + " " + strings.ToLower(strings.TrimSpace(artist))
+}
+
 func buildProviderCacheKey(prefix, song, artist, album, duration string) string {
-	key := prefix + ":" + strings.ToLower(strings.TrimSpace(song)) + " " + strings.ToLower(strings.TrimSpace(artist))
+	key := buildProviderSongArtistKey(prefix, song, artist)
 	if album != "" {
 		key += " [" + strings.ToLower(strings.TrimSpace(album)) + "]"
 	}
@@ -200,17 +205,24 @@ func (s *Server) getNegativeCacheNearDuration(ctx context.Context, baseKey, dura
 }
 
 func (s *Server) setNegativeCache(ctx context.Context, cacheKey, reason, releaseDate string, hasTimeSyncedLyricsKnown bool) {
-	k := store.DeriveKey(cacheKey)
-	e := store.NegativeEntry{
+	s.writeNegativeCache(ctx, cacheKey, store.NegativeEntry{
 		Reason:             reason,
 		ReleaseDate:        releaseDate,
 		HasTimeSyncedKnown: hasTimeSyncedLyricsKnown,
-	}
-	if err := s.store.SetNegative(ctx, cacheKey, k, e, s.negativeTTL()); err != nil {
+	})
+}
+
+// setTransientNegativeCache stores a short-lived miss, so a search that keeps coming back empty is not retried upstream on every request.
+func (s *Server) setTransientNegativeCache(ctx context.Context, cacheKey, reason string) {
+	s.writeNegativeCache(ctx, cacheKey, store.NegativeEntry{Reason: reason, TTL: transientEmptySearchTTL})
+}
+
+func (s *Server) writeNegativeCache(ctx context.Context, cacheKey string, e store.NegativeEntry) {
+	if err := s.store.SetNegative(ctx, cacheKey, store.DeriveKey(cacheKey), e, s.negativeTTL()); err != nil {
 		log.Errorf("%s Error setting negative cache: %v", logcolors.LogCacheNegative, err)
 		return
 	}
-	log.Infof("%s Cached 'no lyrics' for key: %s (reason: %s)", logcolors.LogCacheNegative, cacheKey, reason)
+	log.Infof("%s Cached 'no lyrics' for key: %s (reason: %s)", logcolors.LogCacheNegative, cacheKey, e.Reason)
 }
 
 func (s *Server) deleteNegativeCache(ctx context.Context, cacheKey string) {
@@ -219,6 +231,32 @@ func (s *Server) deleteNegativeCache(ctx context.Context, cacheKey string) {
 		return
 	}
 	log.Infof("%s Deleted negative cache for key: %s", logcolors.LogCacheNegative, cacheKey)
+}
+
+const (
+	transientEmptySearchTTL = 6 * time.Hour
+	// songLyricsLookupTimeout bounds the lookup so a missing or invalid lyrics_song_artist_idx falls back to a normal negative instead of a table scan.
+	songLyricsLookupTimeout = 500 * time.Millisecond
+)
+
+// isEmptySearchError reports whether a provider search returned no songs at all. The search uses only song and artist, so album and duration play no part.
+func isEmptySearchError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no songs found for: ")
+}
+
+// isTransientEmptySearch reports whether an empty provider search contradicts lyrics already cached for the same song and artist.
+func (s *Server) isTransientEmptySearch(ctx context.Context, err error, cacheKey, prefix, songName, artistName string) bool {
+	if !isEmptySearchError(err) {
+		return false
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, songLyricsLookupTimeout)
+	defer cancel()
+	ok, qerr := s.store.HasSongLyrics(lookupCtx, store.DeriveKey(cacheKey).Provider, buildProviderSongArtistKey(prefix, songName, artistName))
+	if qerr != nil {
+		log.Errorf("%s Error checking cached lyrics for empty search: %v", logcolors.LogCacheNegative, qerr)
+		return false
+	}
+	return ok
 }
 
 // shouldNegativeCache reports whether an error is a permanent "no lyrics" result
