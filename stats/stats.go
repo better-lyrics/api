@@ -1,7 +1,6 @@
 package stats
 
 import (
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,9 +54,9 @@ type Stats struct {
 	lyricsResponseTime  atomic.Int64
 	lyricsResponseCount atomic.Int64
 
-	// Request rate tracking (sliding window)
-	requestTimes   []time.Time
-	requestTimesMu sync.Mutex
+	// Request rate tracking: one counter per second over the last hour
+	requestBuckets   [requestWindowSeconds]requestBucket
+	requestBucketsMu sync.Mutex
 
 	// Account usage tracking
 	accountUsage sync.Map // map[string]*atomic.Int64
@@ -72,6 +71,13 @@ type Stats struct {
 	outboundMinted  outboundBucketStat
 	outboundScrape  outboundBucketStat
 	outboundMint    outboundBucketStat
+}
+
+const requestWindowSeconds = 3600
+
+type requestBucket struct {
+	second int64
+	count  int64
 }
 
 type outboundBucketStat struct {
@@ -126,21 +132,35 @@ func (s *Stats) RecordRequest(endpoint string) {
 		s.OtherRequests.Add(1)
 	}
 
-	// Track request time for rate calculation
-	s.requestTimesMu.Lock()
-	now := time.Now()
-	s.requestTimes = append(s.requestTimes, now)
-	// Keep only last hour of requests to limit memory
-	cutoff := now.Add(-time.Hour)
-	idx := sort.Search(len(s.requestTimes), func(i int) bool {
-		return s.requestTimes[i].After(cutoff)
-	})
-	if idx > 0 {
-		remaining := make([]time.Time, len(s.requestTimes)-idx)
-		copy(remaining, s.requestTimes[idx:])
-		s.requestTimes = remaining
+	s.recordRequestAt(time.Now())
+}
+
+func (s *Stats) recordRequestAt(now time.Time) {
+	sec := now.Unix()
+	s.requestBucketsMu.Lock()
+	b := &s.requestBuckets[sec%requestWindowSeconds]
+	if b.second != sec {
+		b.second = sec
+		b.count = 0
 	}
-	s.requestTimesMu.Unlock()
+	b.count++
+	s.requestBucketsMu.Unlock()
+}
+
+// requestsWithin counts requests in the window ending at now, at one-second granularity.
+func (s *Stats) requestsWithin(now time.Time, window time.Duration) int64 {
+	newest := now.Unix()
+	oldest := newest - int64(window/time.Second)
+	s.requestBucketsMu.Lock()
+	defer s.requestBucketsMu.Unlock()
+
+	var total int64
+	for _, b := range s.requestBuckets {
+		if b.second > oldest && b.second <= newest {
+			total += b.count
+		}
+	}
+	return total
 }
 
 // RecordAccountUsage records a successful request using a specific account
@@ -151,27 +171,12 @@ func (s *Stats) RecordAccountUsage(accountName string) {
 
 // RequestsPerMinute returns the number of requests in the last minute
 func (s *Stats) RequestsPerMinute() int64 {
-	s.requestTimesMu.Lock()
-	defer s.requestTimesMu.Unlock()
-
-	cutoff := time.Now().Add(-time.Minute)
-	count := int64(0)
-	for i := len(s.requestTimes) - 1; i >= 0; i-- {
-		if s.requestTimes[i].After(cutoff) {
-			count++
-		} else {
-			break
-		}
-	}
-	return count
+	return s.requestsWithin(time.Now(), time.Minute)
 }
 
 // RequestsPerHour returns the number of requests in the last hour
 func (s *Stats) RequestsPerHour() int64 {
-	s.requestTimesMu.Lock()
-	defer s.requestTimesMu.Unlock()
-
-	return int64(len(s.requestTimes))
+	return s.requestsWithin(time.Now(), time.Hour)
 }
 
 // AccountUsageSnapshot returns a map of account names to request counts

@@ -2,6 +2,7 @@ package stats
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -173,60 +174,91 @@ func TestRecordRequest_EndpointRouting(t *testing.T) {
 	}
 }
 
-// TestRecordRequest_PrunesOldEntries verifies the memory-fix: timestamps older
-// than 1 hour are removed and the underlying slice is reallocated.
-func TestRecordRequest_PrunesOldEntries(t *testing.T) {
+func TestRequestRate_WindowEdges(t *testing.T) {
 	s := newStats()
+	now := time.Unix(1_800_000_000, 0)
 
-	// Inject old timestamps directly
-	s.requestTimesMu.Lock()
-	old := time.Now().Add(-2 * time.Hour)
-	for i := range 100 {
-		s.requestTimes = append(s.requestTimes, old.Add(time.Duration(i)*time.Second))
+	s.recordRequestAt(now.Add(-time.Hour))
+	s.recordRequestAt(now.Add(-time.Hour + time.Second))
+	s.recordRequestAt(now.Add(-time.Minute))
+	s.recordRequestAt(now.Add(-time.Minute + time.Second))
+	s.recordRequestAt(now)
+	s.recordRequestAt(now)
+
+	if got := s.requestsWithin(now, time.Minute); got != 3 {
+		t.Fatalf("expected 3 requests in last minute, got %d", got)
 	}
-	s.requestTimesMu.Unlock()
-
-	// A new request should trigger pruning
-	s.RecordRequest("/getLyrics")
-
-	s.requestTimesMu.Lock()
-	count := len(s.requestTimes)
-	s.requestTimesMu.Unlock()
-
-	// Only the fresh request should remain (old ones pruned)
-	if count != 1 {
-		t.Fatalf("expected 1 remaining request time after prune, got %d", count)
+	if got := s.requestsWithin(now, time.Hour); got != 5 {
+		t.Fatalf("expected 5 requests in last hour, got %d", got)
 	}
 }
 
-// TestRecordRequest_SliceDoesNotRetainOldMemory checks that after pruning, the
-// underlying array capacity is proportional to the remaining length (the
-// memory-leak fix uses make+copy instead of reslice).
-func TestRecordRequest_SliceDoesNotRetainOldMemory(t *testing.T) {
+func TestRequestRate_EmptyAndIdle(t *testing.T) {
 	s := newStats()
+	now := time.Unix(1_800_000_000, 0)
 
-	// Inject a large number of old timestamps
-	s.requestTimesMu.Lock()
-	old := time.Now().Add(-2 * time.Hour)
-	for i := range 10_000 {
-		s.requestTimes = append(s.requestTimes, old.Add(time.Duration(i)*time.Millisecond))
+	if got := s.requestsWithin(now, time.Hour); got != 0 {
+		t.Fatalf("expected 0 on fresh stats, got %d", got)
 	}
-	s.requestTimesMu.Unlock()
 
-	s.RecordRequest("/health")
-
-	s.requestTimesMu.Lock()
-	length := len(s.requestTimes)
-	capacity := cap(s.requestTimes)
-	s.requestTimesMu.Unlock()
-
-	if length != 1 {
-		t.Fatalf("expected len=1, got %d", length)
+	s.recordRequestAt(now)
+	later := now.Add(2 * time.Hour)
+	if got := s.requestsWithin(later, time.Hour); got != 0 {
+		t.Fatalf("expected 0 after an idle hour, got %d", got)
 	}
-	// With the old reslice, capacity would still be ~10001. After make+copy it
-	// should be exactly equal to the length.
-	if capacity != length {
-		t.Fatalf("expected cap=len=%d (memory freed), got cap=%d", length, capacity)
+}
+
+func TestRequestRate_BucketReuseAfterWrap(t *testing.T) {
+	s := newStats()
+	now := time.Unix(1_800_000_000, 0)
+
+	for range 5 {
+		s.recordRequestAt(now)
+	}
+	// Same ring slot, one full window later: stale count must not leak in.
+	wrapped := now.Add(time.Hour)
+	s.recordRequestAt(wrapped)
+
+	if got := s.requestsWithin(wrapped, time.Hour); got != 1 {
+		t.Fatalf("expected 1 after slot reuse, got %d", got)
+	}
+}
+
+func TestRequestRate_ConcurrentRecords(t *testing.T) {
+	s := newStats()
+	now := time.Unix(1_800_000_000, 0)
+
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 1000 {
+				s.recordRequestAt(now.Add(-time.Duration((g*1000+i)%120) * time.Second))
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := s.requestsWithin(now, time.Hour); got != 8000 {
+		t.Fatalf("expected 8000, got %d", got)
+	}
+}
+
+// regression: a slice of timestamps reallocated and copied ~850k entries per
+// request at production traffic, which made GC the top CPU consumer.
+func TestRecordRequest_DoesNotAllocate(t *testing.T) {
+	s := newStats()
+	if allocs := testing.AllocsPerRun(1000, func() { s.RecordRequest("/getLyrics") }); allocs != 0 {
+		t.Fatalf("expected 0 allocations per RecordRequest, got %v", allocs)
+	}
+
+	now := time.Unix(1_800_000_000, 0)
+	if allocs := testing.AllocsPerRun(3*requestWindowSeconds, func() {
+		now = now.Add(time.Second)
+		s.recordRequestAt(now)
+	}); allocs != 0 {
+		t.Fatalf("expected 0 allocations while evicting old seconds, got %v", allocs)
 	}
 }
 
@@ -269,29 +301,6 @@ func TestRequestsPerMinuteAndHour(t *testing.T) {
 	}
 	if rph != 3 {
 		t.Fatalf("expected RequestsPerHour=3, got %d", rph)
-	}
-}
-
-func TestRequestsPerMinute_ExcludesOldEntries(t *testing.T) {
-	s := newStats()
-
-	// Inject timestamps older than 1 minute but within 1 hour
-	s.requestTimesMu.Lock()
-	twoMinAgo := time.Now().Add(-2 * time.Minute)
-	s.requestTimes = append(s.requestTimes, twoMinAgo)
-	s.requestTimesMu.Unlock()
-
-	// Add one recent request
-	s.RecordRequest("/health")
-
-	rpm := s.RequestsPerMinute()
-	rph := s.RequestsPerHour()
-
-	if rpm != 1 {
-		t.Fatalf("expected RequestsPerMinute=1 (old entry excluded), got %d", rpm)
-	}
-	if rph != 2 {
-		t.Fatalf("expected RequestsPerHour=2 (both entries), got %d", rph)
 	}
 }
 
