@@ -96,21 +96,35 @@ func (s *Server) getCachedLyricsWithDurationTolerance(ctx context.Context, songN
 		}
 	}
 
-	dsec := parseDurationSec(durationStr)
-	if dsec == nil {
-		return store.CachedLyrics{}, exactKey, false
-	}
-
 	baseKey := buildNormalizedCacheKey(songName, artistName, albumName, "")
-	l, foundKey, ok, err := s.store.GetLyricsTolerant(ctx, store.Key{BaseKey: baseKey, DurationSec: dsec}, s.durationDeltaSec())
-	if err != nil {
-		log.Errorf("%s Error in tolerant cache read: %v", logcolors.LogCacheLyrics, err)
-		return store.CachedLyrics{}, exactKey, false
-	}
-	if ok {
+	if l, foundKey, ok := s.getCachedLyricsNearDuration(ctx, baseKey, durationStr); ok {
 		return l, foundKey, true
 	}
 	return store.CachedLyrics{}, exactKey, false
+}
+
+func (s *Server) getProviderCachedLyrics(ctx context.Context, prefix, songName, artistName, albumName, durationStr string) (store.CachedLyrics, string, bool) {
+	exactKey := buildProviderCacheKey(prefix, songName, artistName, albumName, durationStr)
+	if l, ok := s.getCachedLyrics(ctx, exactKey); ok {
+		return l, exactKey, true
+	}
+	if l, foundKey, ok := s.getCachedLyricsNearDuration(ctx, store.DeriveKey(exactKey).BaseKey, durationStr); ok {
+		return l, foundKey, true
+	}
+	return store.CachedLyrics{}, exactKey, false
+}
+
+func (s *Server) getCachedLyricsNearDuration(ctx context.Context, baseKey, durationStr string) (store.CachedLyrics, string, bool) {
+	dsec := parseDurationSec(durationStr)
+	if dsec == nil {
+		return store.CachedLyrics{}, "", false
+	}
+	l, foundKey, ok, err := s.store.GetLyricsTolerant(ctx, store.Key{BaseKey: baseKey, DurationSec: dsec}, s.durationDeltaSec())
+	if err != nil {
+		log.Errorf("%s Error in tolerant cache read: %v", logcolors.LogCacheLyrics, err)
+		return store.CachedLyrics{}, "", false
+	}
+	return l, foundKey, ok
 }
 
 func (s *Server) setCachedLyrics(ctx context.Context, cacheKey, lyrics string, trackDurationMs int, score float64, language string, isRTL bool, source string) {
@@ -156,21 +170,33 @@ func (s *Server) getNegativeCacheWithDurationTolerance(ctx context.Context, song
 		}
 	}
 
-	dsec := parseDurationSec(durationStr)
-	if dsec == nil {
-		return "", exactKey, false
-	}
-
 	baseKey := buildNormalizedCacheKey(songName, artistName, albumName, "")
-	reason, foundKey, ok, err := s.store.GetNegativeTolerant(ctx, store.Key{BaseKey: baseKey, DurationSec: dsec}, s.durationDeltaSec())
-	if err != nil {
-		log.Errorf("%s Error in tolerant negative read: %v", logcolors.LogCacheNegative, err)
-		return "", exactKey, false
-	}
-	if ok {
+	if reason, foundKey, ok := s.getNegativeCacheNearDuration(ctx, baseKey, durationStr); ok {
 		return reason, foundKey, true
 	}
 	return "", exactKey, false
+}
+
+func (s *Server) getProviderNegativeCache(ctx context.Context, prefix, songName, artistName, albumName, durationStr string) (string, bool) {
+	exactKey := buildProviderCacheKey(prefix, songName, artistName, albumName, durationStr)
+	if reason, ok := s.getNegativeCache(ctx, exactKey); ok {
+		return reason, true
+	}
+	reason, _, ok := s.getNegativeCacheNearDuration(ctx, store.DeriveKey(exactKey).BaseKey, durationStr)
+	return reason, ok
+}
+
+func (s *Server) getNegativeCacheNearDuration(ctx context.Context, baseKey, durationStr string) (string, string, bool) {
+	dsec := parseDurationSec(durationStr)
+	if dsec == nil {
+		return "", "", false
+	}
+	reason, foundKey, ok, err := s.store.GetNegativeTolerant(ctx, store.Key{BaseKey: baseKey, DurationSec: dsec}, s.durationDeltaSec())
+	if err != nil {
+		log.Errorf("%s Error in tolerant negative read: %v", logcolors.LogCacheNegative, err)
+		return "", "", false
+	}
+	return reason, foundKey, ok
 }
 
 func (s *Server) setNegativeCache(ctx context.Context, cacheKey, reason, releaseDate string, hasTimeSyncedLyricsKnown bool) {
