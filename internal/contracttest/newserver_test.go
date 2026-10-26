@@ -180,6 +180,132 @@ func TestConformanceNewOverrideProvider(t *testing.T) {
 	RunSpec(t, base, overrideProviderScenarios())
 }
 
+func TestConformanceNewProviderDurationTolerance(t *testing.T) {
+	base := newServerBase(t, authProfileEnv(), seedLyricsData, seedNegativeData)
+
+	_, st := ensurePostgres(t)
+	ctx := context.Background()
+	ttlCfg := store.NegativeTTL{DefaultDays: 7, NewSongThresholdDays: 30}
+	lyrics := map[string]string{
+		"qq_lyrics:projections night tapes [projections] [261s]": "<QrcInfos>261</QrcInfos>",
+		"qq_lyrics:near song tester [near album] [300s]":         "<QrcInfos>300</QrcInfos>",
+		"qq_lyrics:near song tester [near album] [303s]":         "<QrcInfos>303</QrcInfos>",
+		"qq_lyrics:lonely song  [100s]":                          "<QrcInfos>100</QrcInfos>",
+	}
+	for key, body := range lyrics {
+		if err := st.SetLyrics(ctx, key, store.DeriveKey(key), store.CachedLyrics{TTML: body, Format: "qq"}); err != nil {
+			t.Fatalf("seed qq lyrics: %v", err)
+		}
+	}
+	negatives := map[string]string{
+		"qq_lyrics:projections night tapes [projections] [260s]": "qq: no songs found for: projections - Night Tapes",
+		"kugou_lyrics:neg song tester [neg album] [200s]":        "kugou: no songs found for: neg song - tester",
+	}
+	for key, reason := range negatives {
+		if err := st.SetNegative(ctx, key, store.DeriveKey(key), store.NegativeEntry{Reason: reason}, ttlCfg); err != nil {
+			t.Fatalf("seed negative: %v", err)
+		}
+	}
+
+	RunSpec(t, base, providerDurationToleranceScenarios())
+}
+
+func providerDurationToleranceScenarios() []Scenario {
+	miss := jbody(map[string]interface{}{
+		"error":    "API key required",
+		"message":  "Uncached queries require a valid API key via X-API-Key header",
+		"provider": "qq",
+	})
+	near := "s=Near%20Song&a=Tester&al=Near%20Album"
+	return []Scenario{
+		{
+			Name:        "regression: qq lyrics within tolerance win over an exact negative entry",
+			Path:        "/qq/getLyrics?song=projections&artist=Night%20Tapes&album=projections&duration=260",
+			WantStatus:  http.StatusOK,
+			WantHeaders: map[string]string{"X-Cache-Status": "HIT"},
+			WantBody:    jbody(map[string]interface{}{"lyrics": "<QrcInfos>261</QrcInfos>", "provider": "qq"}),
+		},
+		{
+			Name:       "qq_exact_duration_preferred_over_neighbour",
+			Path:       "/qq/getLyrics?" + near + "&d=303",
+			WantStatus: http.StatusOK,
+			WantBody:   jbody(map[string]interface{}{"lyrics": "<QrcInfos>303</QrcInfos>", "provider": "qq"}),
+		},
+		{
+			Name:       "qq_closest_duration_wins",
+			Path:       "/qq/getLyrics?" + near + "&d=302",
+			WantStatus: http.StatusOK,
+			WantBody:   jbody(map[string]interface{}{"lyrics": "<QrcInfos>303</QrcInfos>", "provider": "qq"}),
+		},
+		{
+			Name:       "qq_tie_prefers_shorter_duration",
+			Path:       "/qq/getLyrics?" + near + "&d=301",
+			WantStatus: http.StatusOK,
+			WantBody:   jbody(map[string]interface{}{"lyrics": "<QrcInfos>300</QrcInfos>", "provider": "qq"}),
+		},
+		{
+			Name:       "qq_upper_edge_of_tolerance_hits",
+			Path:       "/qq/getLyrics?" + near + "&d=305",
+			WantStatus: http.StatusOK,
+			WantBody:   jbody(map[string]interface{}{"lyrics": "<QrcInfos>303</QrcInfos>", "provider": "qq"}),
+		},
+		{
+			Name:       "regression: qq tolerance matches a song-only key with no artist or album",
+			Path:       "/qq/getLyrics?s=Lonely%20Song&d=101",
+			WantStatus: http.StatusOK,
+			WantBody:   jbody(map[string]interface{}{"lyrics": "<QrcInfos>100</QrcInfos>", "provider": "qq"}),
+		},
+		{
+			Name:       "qq_outside_tolerance_misses",
+			Path:       "/qq/getLyrics?" + near + "&d=306",
+			WantStatus: http.StatusUnauthorized,
+			WantBody:   miss,
+		},
+		{
+			Name:       "qq_without_duration_stays_exact",
+			Path:       "/qq/getLyrics?" + near,
+			WantStatus: http.StatusUnauthorized,
+			WantBody:   miss,
+		},
+		{
+			Name:       "qq_other_album_does_not_match",
+			Path:       "/qq/getLyrics?s=Near%20Song&a=Tester&al=Other%20Album&d=300",
+			WantStatus: http.StatusUnauthorized,
+			WantBody:   miss,
+		},
+		{
+			Name:       "tolerance_does_not_cross_providers",
+			Path:       "/kugou/getLyrics?" + near + "&d=300",
+			WantStatus: http.StatusUnauthorized,
+			WantBody: jbody(map[string]interface{}{
+				"error":    "API key required",
+				"message":  "Uncached queries require a valid API key via X-API-Key header",
+				"provider": "kugou",
+			}),
+		},
+		{
+			Name:        "kugou_negative_within_tolerance_hits",
+			Path:        "/kugou/getLyrics?s=Neg%20Song&a=Tester&al=Neg%20Album&d=202",
+			WantStatus:  http.StatusNotFound,
+			WantHeaders: map[string]string{"X-Cache-Status": "NEGATIVE_HIT"},
+			WantBody: jbody(map[string]interface{}{
+				"error":    "kugou: no songs found for: neg song - tester",
+				"provider": "kugou",
+			}),
+		},
+		{
+			Name:       "kugou_negative_outside_tolerance_misses",
+			Path:       "/kugou/getLyrics?s=Neg%20Song&a=Tester&al=Neg%20Album&d=203",
+			WantStatus: http.StatusUnauthorized,
+			WantBody: jbody(map[string]interface{}{
+				"error":    "API key required",
+				"message":  "Uncached queries require a valid API key via X-API-Key header",
+				"provider": "kugou",
+			}),
+		},
+	}
+}
+
 func overrideProviderScenarios() []Scenario {
 	key := map[string]string{"X-API-Key": "test-api-key"}
 	badSong := "s=Bad%20Song&a=Bad%20Artist&al=Bad%20Album"

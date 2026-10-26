@@ -153,8 +153,8 @@ paths:
       operationId: getTTMLLyrics
       summary: Get lyrics from the TTML provider
       description: |
-        Syllable-level timing. Send a song, an artist, or both. Uses exact
-        cache keys, with no duration tolerance. When the server enforces API
+        Syllable-level timing. Send a song, an artist, or both. Cache lookups
+        tolerate small duration differences. When the server enforces API
         keys, a cache miss needs a valid `X-API-Key`.
       security:
         - {}
@@ -234,9 +234,9 @@ paths:
       operationId: getKugouLyrics
       summary: Get lyrics from the Kugou provider
       description: |
-        Line-level timing. Send a song, an artist, or both. Uses exact cache
-        keys, with no duration tolerance. When the server enforces API keys, a
-        cache miss needs a valid `X-API-Key`.
+        Line-level timing. Send a song, an artist, or both. Cache lookups
+        tolerate small duration differences. When the server enforces API
+        keys, a cache miss needs a valid `X-API-Key`.
       security:
         - {}
         - apiKey: []
@@ -249,9 +249,9 @@ paths:
       operationId: getQQLyrics
       summary: Get lyrics from the QQ provider
       description: |
-        Send a song, an artist, or both. Uses exact cache keys, with no
-        duration tolerance. When the server enforces API keys, a cache miss
-        needs a valid `X-API-Key`.
+        Send a song, an artist, or both. Cache lookups tolerate small duration
+        differences. When the server enforces API keys, a cache miss needs a
+        valid `X-API-Key`.
       security:
         - {}
         - apiKey: []

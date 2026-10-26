@@ -290,7 +290,7 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 		apiKeyRequired, _ := r.Context().Value(apiKeyRequiredForFreshKey).(bool)
 		apiKeyInvalid, _ := r.Context().Value(apiKeyInvalidKey).(bool)
 
-		if cached, ok := s.getCachedLyrics(ctx, cacheKey); ok {
+		if cached, foundKey, ok := s.getProviderCachedLyrics(ctx, provider.CacheKeyPrefix(), songName, artistName, albumName, durationStr); ok {
 			if cached.TTML == store.NoLyricsSentinel {
 				stats.Get().RecordCacheHit()
 				log.Infof("%s [%s] No-lyrics marker found", logcolors.LogCacheLyrics, providerName)
@@ -300,7 +300,11 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 				return
 			}
 			stats.Get().RecordCacheHit()
-			log.Infof("%s [%s] Found cached lyrics", logcolors.LogCacheLyrics, providerName)
+			if foundKey != cacheKey {
+				log.Infof("%s [%s] Found cached lyrics via fuzzy duration match: %s", logcolors.LogCacheLyrics, providerName, foundKey)
+			} else {
+				log.Infof("%s [%s] Found cached lyrics", logcolors.LogCacheLyrics, providerName)
+			}
 			respond(w, r).SetProvider(providerName).SetCacheStatus("HIT").JSON(map[string]interface{}{
 				"lyrics":   cached.TTML,
 				"provider": providerName,
@@ -308,7 +312,7 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 			return
 		}
 
-		if reason, found := s.getNegativeCache(ctx, cacheKey); found {
+		if reason, found := s.getProviderNegativeCache(ctx, provider.CacheKeyPrefix(), songName, artistName, albumName, durationStr); found {
 			stats.Get().RecordNegativeCacheHit()
 			log.Infof("%s [%s] Returning cached 'no lyrics' response", logcolors.LogCacheNegative, providerName)
 			respond(w, r).SetProvider(providerName).SetCacheStatus("NEGATIVE_HIT").Error(http.StatusNotFound, map[string]interface{}{

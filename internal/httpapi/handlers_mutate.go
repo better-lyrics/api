@@ -301,7 +301,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 			log.Infof("%s Set no_lyrics marker on %d cache entries", logcolors.LogOverride, len(updatedKeys))
 		}
 
-		// Provider endpoints read only the exact key, so a marker on a duration variant alone would not block a fresh fetch.
+		// Mark the exact key too, so the requested track stays blocked if a duration variant is later refetched.
 		if len(updatedKeys) == 0 || (providerName != "" && !slices.Contains(updatedKeys, primaryKey)) {
 			s.setCachedLyrics(ctx, primaryKey, store.NoLyricsSentinel, 0, 0, "", false, "")
 			updatedKeys = append(updatedKeys, primaryKey)
