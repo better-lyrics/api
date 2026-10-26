@@ -413,7 +413,12 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 
 			isPermanentError := shouldNegativeCache(err)
 			if isPermanentError {
-				s.setNegativeCache(ctx, cacheKey, err.Error(), "", false)
+				if s.isTransientEmptySearch(ctx, err, cacheKey, provider.CacheKeyPrefix(), songName, artistName) {
+					log.Warnf("%s [%s] Search returned no songs but lyrics are cached for this song, caching the miss briefly: %s", logcolors.LogCacheNegative, providerName, query)
+					s.setTransientNegativeCache(ctx, cacheKey, err.Error())
+				} else {
+					s.setNegativeCache(ctx, cacheKey, err.Error(), "", false)
+				}
 			}
 
 			stats.Get().RecordCacheMiss()

@@ -12,6 +12,7 @@ type NegativeEntry struct {
 	Reason             string
 	ReleaseDate        string
 	HasTimeSyncedKnown bool
+	TTL                time.Duration // overrides the configured TTL when positive
 }
 
 type NegativeTTL struct {
@@ -24,6 +25,9 @@ func NegativeTTLSeconds(e NegativeEntry, cfg NegativeTTL, now time.Time) int64 {
 }
 
 func negativeTTLSeconds(e NegativeEntry, cfg NegativeTTL, now time.Time) int64 {
+	if e.TTL > 0 {
+		return int64(e.TTL / time.Second)
+	}
 	defaultTTL := int64(cfg.DefaultDays) * 24 * 60 * 60
 
 	if !e.HasTimeSyncedKnown {

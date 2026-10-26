@@ -26,6 +26,8 @@ func TestNegativeTTLSeconds(t *testing.T) {
 		{"released_10d_tier_24h", NegativeEntry{ReleaseDate: "2026-09-07", HasTimeSyncedKnown: true}, day},
 		{"released_20d_tier_3d", NegativeEntry{ReleaseDate: "2026-08-28", HasTimeSyncedKnown: true}, 3 * day},
 		{"released_over_threshold_default", NegativeEntry{ReleaseDate: "2026-01-01", HasTimeSyncedKnown: true}, 7 * day},
+		{"explicit_ttl_overrides_default", NegativeEntry{Reason: "x", TTL: 6 * time.Hour}, 6 * 60 * 60},
+		{"explicit_ttl_overrides_release_tier", NegativeEntry{ReleaseDate: "2026-01-01", HasTimeSyncedKnown: true, TTL: time.Hour}, 60 * 60},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
