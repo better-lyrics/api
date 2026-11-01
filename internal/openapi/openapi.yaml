@@ -554,7 +554,7 @@ paths:
         model-synced file. Call again with `next_after` until `done` is true. A failed check
         or delete stops the batch before that row, so the next call retries it; pass
         `failed_key` as `after` to skip it. Refused while `FF_LRC_RED_SKIP_AI_SYNCED` is off
-        or `LRC_RED_BASE_URL` is empty.
+        or `LRC_RED_BASE_URL` is empty, and in cache-only mode, where a deleted row could not be fetched again.
       security:
         - adminToken: []
       parameters:
@@ -595,7 +595,7 @@ paths:
                     description: Rows whose lrc.red `.song.json` was requested.
                   model_synced:
                     type: array
-                    description: ISRCs whose cached copy is lrc.red's current model-synced file. These rows are deleted unless `dry_run` is set.
+                    description: ISRCs whose cached copy was lrc.red's current model-synced file and was deleted, or with `dry_run` would be.
                     items:
                       type: string
                   kept_changed:
@@ -633,7 +633,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
-          description: FF_LRC_RED_SKIP_AI_SYNCED is off or LRC_RED_BASE_URL is empty.
+          description: FF_LRC_RED_SKIP_AI_SYNCED is off, LRC_RED_BASE_URL is empty, or FF_CACHE_ONLY_MODE is on.
           headers: *cacheHeaders
           content:
             application/json:

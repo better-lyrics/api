@@ -54,6 +54,20 @@ func (c *checkedKeys) claim(key string) bool {
 	return true
 }
 
+func (c *checkedKeys) release(key string) {
+	if _, loaded := c.m.LoadAndDelete(key); loaded {
+		c.n.Add(-1)
+	}
+}
+
+// lrcRedCheckBlocked also refuses in cache-only mode, where a deleted row could never be fetched again.
+func (s *Server) lrcRedCheckBlocked() error {
+	if s.cfg.FeatureFlags.CacheOnlyMode {
+		return fmt.Errorf("FF_CACHE_ONLY_MODE is on; a deleted row could not be fetched again")
+	}
+	return ttml.AISyncCheckReady()
+}
+
 // lrcRedCheckLimiter is shared by the sweep and the cache-hit check, so together they read lrc.red at 2/s.
 var lrcRedCheckLimiter = rate.NewLimiter(2, 1)
 
@@ -94,10 +108,14 @@ func (s *Server) dropLRCRedRow(ctx context.Context, cacheKey, isrc, aiTTML strin
 
 // checkLRCRedCopy checks each key once per process: a cached copy never changes, so a second check learns nothing.
 func (s *Server) checkLRCRedCopy(cacheKey string, cached store.CachedLyrics) {
-	if cached.Source != providers.SourceLRCRed || ttml.AISyncCheckReady() != nil || lrcRedChecked.seen(cacheKey) {
+	if cached.Source != providers.SourceLRCRed || lrcRedChecked.seen(cacheKey) || s.lrcRedCheckBlocked() != nil {
 		return
 	}
-	if !lrcRedCheckLimiter.Allow() || !lrcRedChecked.claim(cacheKey) {
+	if !lrcRedChecked.claim(cacheKey) {
+		return
+	}
+	if !lrcRedCheckLimiter.Allow() {
+		lrcRedChecked.release(cacheKey)
 		return
 	}
 	// A failed check is not retried in this process, so one hot failing key cannot take every token; the sweep covers it.
@@ -156,7 +174,7 @@ func (s *Server) lrcRedSweep(w http.ResponseWriter, r *http.Request) {
 		}
 		dryRun = b
 	}
-	if err := ttml.AISyncCheckReady(); err != nil {
+	if err := s.lrcRedCheckBlocked(); err != nil {
 		respond(w, r).Error(http.StatusConflict, map[string]interface{}{"error": err.Error()})
 		return
 	}
@@ -204,7 +222,7 @@ scan:
 			if changed {
 				keptChanged = append(keptChanged, isrc)
 			}
-			if aiTTML != "" {
+			if aiTTML != "" && dryRun {
 				modelSynced = append(modelSynced, isrc)
 			}
 			if aiTTML != "" && !dryRun {
@@ -216,6 +234,9 @@ scan:
 				}
 				if ok {
 					deleted++
+					modelSynced = append(modelSynced, isrc)
+				} else {
+					keptChanged = append(keptChanged, isrc)
 				}
 			}
 			cursor = row.CacheKey

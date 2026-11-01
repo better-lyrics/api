@@ -148,7 +148,6 @@ func TestFetchLRCRedByISRC(t *testing.T) {
 	}
 }
 
-// lrcRedStub serves .ttml and .song.json per ISRC and records which paths were requested.
 type lrcRedStub struct {
 	ttmlStatus int
 	ttmlBody   string
@@ -418,7 +417,6 @@ func TestFetchLRCRedByISRCConcurrency(t *testing.T) {
 	})
 }
 
-// holdLRCRedSlots takes n semaphore slots until the test ends, simulating concurrent lookups.
 func holdLRCRedSlots(t *testing.T, n int) {
 	t.Helper()
 	for range n {

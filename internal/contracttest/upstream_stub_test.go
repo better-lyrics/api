@@ -69,10 +69,8 @@ func upstreamStub(t *testing.T) *httptest.Server {
 				// ISRC that lrc.red DOES have -> resolved from lrc.red, Apple untouched.
 				fmt.Fprint(w, `{"results":{"songs":{"data":[{"id":"1000002","attributes":{"name":"Cached Song","artistName":"Cached Artist","albumName":"Cached Album","durationInMillis":210000,"isrc":"USLRCRED0001","releaseDate":"2019-01-01","hasTimeSyncedLyrics":true}}]}}}`)
 			case strings.Contains(term, "AI Synced"):
-				// lrc.red has a model-synced file -> skipped, resolved from Apple.
 				fmt.Fprint(w, `{"results":{"songs":{"data":[{"id":"1000003","attributes":{"name":"AI Synced","artistName":"AI Artist","albumName":"AI Album","durationInMillis":220000,"isrc":"USAISYNC0001","releaseDate":"2019-01-01","hasTimeSyncedLyrics":true}}]}}}`)
 			case strings.Contains(term, "Flaky Flag"):
-				// lrc.red .song.json fails and Apple has no lyrics -> the miss is unconfirmed.
 				fmt.Fprint(w, `{"results":{"songs":{"data":[{"id":"1000004","attributes":{"name":"Flaky Flag","artistName":"Flaky Artist","albumName":"Flaky Album","durationInMillis":230000,"isrc":"USFLAKY00001","releaseDate":"2019-01-01","hasTimeSyncedLyrics":false}}]}}}`)
 			default:
 				fmt.Fprint(w, `{"results":{"songs":{"data":[]}}}`)

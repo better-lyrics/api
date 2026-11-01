@@ -10,13 +10,28 @@ import (
 )
 
 func sweepTestServer() http.Handler {
+	return sweepTestServerWith(func(*config.Config) {})
+}
+
+func sweepTestServerWith(mutate func(*config.Config)) http.Handler {
 	var cfg config.Config
 	cfg.Configuration.CacheAccessToken = "admin"
 	cfg.Configuration.RateLimitPerSecond = 1000
 	cfg.Configuration.RateLimitBurstLimit = 1000
 	cfg.Configuration.CachedRateLimitPerSecond = 1000
 	cfg.Configuration.CachedRateLimitBurstLimit = 1000
+	mutate(&cfg)
 	return New(nil, cfg).Handler()
+}
+
+func TestLRCRedSweepRefusedInCacheOnlyMode(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/cache/lrcred-sweep", nil)
+	req.Header.Set("Authorization", "admin")
+	rec := httptest.NewRecorder()
+	sweepTestServerWith(func(c *config.Config) { c.FeatureFlags.CacheOnlyMode = true }).ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "FF_CACHE_ONLY_MODE is on") {
+		t.Fatalf("got %d %q, want 409: a deleted row could not be refetched", rec.Code, rec.Body.String())
+	}
 }
 
 func TestLRCRedSweepRefusals(t *testing.T) {
@@ -89,6 +104,23 @@ func TestCheckedKeys(t *testing.T) {
 		c.claim("b")
 		if !c.seen("a") || !c.seen("b") {
 			t.Fatal("claimed keys forgotten before the cap was passed")
+		}
+	})
+
+	t.Run("a released key can be claimed again and frees its place under the cap", func(t *testing.T) {
+		c := &checkedKeys{max: 2}
+		c.claim("a")
+		c.release("a")
+		if c.seen("a") {
+			t.Fatal("released key still seen")
+		}
+		c.claim("b")
+		c.claim("c")
+		if !c.seen("b") || !c.seen("c") {
+			t.Fatal("a released key still counted toward the cap")
+		}
+		if !c.claim("a") {
+			t.Fatal("released key could not be claimed again")
 		}
 	})
 

@@ -17,7 +17,6 @@ func KeyCacheTag(cacheKey string) string {
 	return cacheTag("k-", keyText(cacheKey))
 }
 
-// KeySongCacheTag is SongCacheTag for an album-less key, the key a stale fallback serves album requests from.
 func KeySongCacheTag(cacheKey string) string {
 	return cacheTag("s-", keyText(cacheKey))
 }

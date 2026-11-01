@@ -150,7 +150,6 @@ func AISyncCheckReady() error {
 	return nil
 }
 
-// LRCRedByModel and LRCRedTTML serve background checks, which hold no slot of their own.
 func LRCRedByModel(ctx context.Context, isrc string) (bool, error) {
 	release, err := acquireLRCRedSlot(ctx)
 	if err != nil {
