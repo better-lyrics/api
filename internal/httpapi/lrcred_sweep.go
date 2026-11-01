@@ -14,6 +14,7 @@ import (
 	"lyrics-api-go/services/cdn"
 	"lyrics-api-go/services/providers"
 	ttml "lyrics-api-go/services/providers/ttml"
+	"lyrics-api-go/services/proxy"
 	"lyrics-api-go/utils"
 
 	log "github.com/sirupsen/logrus"
@@ -100,7 +101,21 @@ func (s *Server) dropLRCRedRow(ctx context.Context, cacheKey, isrc, aiTTML strin
 	}
 	cdn.Purge(store.KeyCacheTag(cacheKey), store.KeySongCacheTag(cacheKey))
 	log.Infof("%s Deleted model-synced lrc.red lyrics for ISRC %s: %s", logcolors.LogCacheClear, isrc, cacheKey)
+	go s.revalidateProxyForKey(cacheKey)
 	return true, nil
+}
+
+func (s *Server) revalidateProxyForKey(cacheKey string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	meta, ok, err := s.store.GetSongMetadata(ctx, cacheKey)
+	if err != nil {
+		log.Warnf("%s Proxy revalidate skipped for %s: %v", logcolors.LogCacheClear, cacheKey, err)
+	}
+	if !ok {
+		return
+	}
+	proxy.RevalidateAllForSong(meta.TrackName, meta.ArtistName, meta.AlbumName, meta.DurationMs/1000, s.videoIDsFunc(ctx))
 }
 
 // checkLRCRedCopy checks each key once per process: a cached copy never changes, so a second check learns nothing.

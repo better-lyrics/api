@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -349,5 +351,51 @@ func TestConformanceNewLRCRedCheckSkipsStaleFallback(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 	if _, ok := cachedTTML(t, "AI Synced", "AI Artist"); !ok {
 		t.Fatal("a stale fallback deleted the only cached copy while Apple was down")
+	}
+}
+
+func TestConformanceNewLRCRedDeleteRevalidatesProxy(t *testing.T) {
+	var mu sync.Mutex
+	var videoIDs []string
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		videoIDs = append(videoIDs, r.URL.Query().Get("videoId"))
+		mu.Unlock()
+	}))
+	t.Cleanup(proxySrv.Close)
+	env := stubEnv(upstreamStub(t).URL)
+	env["PROXY_REVALIDATE_URL"] = proxySrv.URL + "/revalidate"
+	env["PROXY_API_KEY"] = "test-proxy-key"
+	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
+	seedSweepRows(t)
+	_, st := ensurePostgres(t)
+	for key, vid := range map[string]string{
+		normalizedCacheKey("AI Synced", "AI Artist", "", ""): "vidAISynced",
+		normalizedCacheKey("Old Human", "Tester", "", ""):    "vidOldHuman",
+	} {
+		if err := st.AddVideoID(context.Background(), key, vid); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, status := getLyricsTTML(t, base, "AI Synced", "AI Artist"); status != "HIT" {
+		t.Fatalf("status %s, want HIT", status)
+	}
+	waitUncached(t, "AI Synced", "AI Artist")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		got := append([]string(nil), videoIDs...)
+		mu.Unlock()
+		if len(got) > 0 {
+			if len(got) != 1 || got[0] != "vidAISynced" {
+				t.Fatalf("proxy revalidated %v, want only the deleted song's video", got)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the proxy was never told about the deleted row")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
