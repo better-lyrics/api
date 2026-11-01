@@ -157,7 +157,14 @@ func persistSyncUpgrade(ctx context.Context, st *store.Store, cand store.SyncUpg
 	cdn.Purge(store.KeyCacheTag(cand.CacheKey))
 	log.Infof("%s Sync-upgrade applied for %s: %s to %s", logcolors.LogSuccess, cand.CacheKey, cand.TimingType, act.NewTiming)
 
-	go bini.Contribute(cand.Name, cand.Artist, cand.ISRC, ttml.SourceApple, "", act.NewTTML)
+	go func() {
+		checkCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if ttml.LRCRedBlocksContribution(checkCtx, cand.ISRC) {
+			return
+		}
+		bini.Contribute(cand.Name, cand.Artist, cand.ISRC, ttml.SourceApple, "", act.NewTTML)
+	}()
 	videoIDs := func(song, artist string) []string {
 		v, _ := st.GetAllVideoIDsForSong(ctx, song, artist)
 		return v

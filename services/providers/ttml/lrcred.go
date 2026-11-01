@@ -173,6 +173,21 @@ func LRCRedTTML(ctx context.Context, isrc string) (string, bool, error) {
 	return fetchLRCRedTTML(ctx, isrc)
 }
 
+var errLRCRedNoSongFile = errors.New("lrc.red song.json returned status 404")
+
+// LRCRedBlocksContribution reports whether contributing an Apple result for isrc could replace a model-synced lrc.red file; an unverified file blocks it.
+func LRCRedBlocksContribution(ctx context.Context, isrc string) bool {
+	isrc = utils.NormalizeISRC(isrc)
+	if AISyncCheckReady() != nil || isrc == "" {
+		return false
+	}
+	byModel, err := LRCRedByModel(ctx, isrc)
+	if errors.Is(err, errLRCRedNoSongFile) {
+		return false
+	}
+	return err != nil || byModel
+}
+
 // acquireLRCRedSlot waits until the semaphore is under half full, so background reads never take the slots lookups need.
 func acquireLRCRedSlot(ctx context.Context) (release func(), err error) {
 	if lrcRedReadBase == "" {
@@ -205,6 +220,9 @@ func lrcRedByModel(ctx context.Context, isrc string) (bool, error) {
 		return false, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, errLRCRedNoSongFile
+	}
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("lrc.red song.json returned status %d", resp.StatusCode)
 	}

@@ -643,3 +643,68 @@ func TestOutOfLookupReadsLeaveHalfTheSlots(t *testing.T) {
 		t.Errorf("requested %v while lookups needed the slots", stub.paths)
 	}
 }
+
+func TestLRCRedBlocksContribution(t *testing.T) {
+	tests := []struct {
+		name       string
+		songStatus int
+		songBody   string
+		want       bool
+	}{
+		{"model-synced file", 200, `{"byModel":true}`, true},
+		{"human file", 200, `{"byModel":false}`, false},
+		{"no byModel field", 200, `{"name":"x"}`, false},
+		{"no file", 404, ``, false},
+		{"server error fails closed", 500, ``, true},
+		{"malformed json fails closed", 200, `{`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &lrcRedStub{songStatus: tt.songStatus, songBody: tt.songBody}
+			useLRCRedStub(t, stub, true)
+			if got := LRCRedBlocksContribution(context.Background(), "QZES72218029"); got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("flag off sends no request", func(t *testing.T) {
+		stub := &lrcRedStub{songStatus: 200, songBody: `{"byModel":true}`}
+		useLRCRedStub(t, stub, false)
+		if LRCRedBlocksContribution(context.Background(), "QZES72218029") {
+			t.Error("flag off must never block a contribution")
+		}
+		if len(stub.paths) != 0 {
+			t.Errorf("requested %v with the flag off", stub.paths)
+		}
+	})
+
+	t.Run("empty base url sends no request", func(t *testing.T) {
+		stub := &lrcRedStub{}
+		useLRCRedStub(t, stub, true)
+		lrcRedReadBase = ""
+		if LRCRedBlocksContribution(context.Background(), "QZES72218029") {
+			t.Error("no lrc.red configured must not block a contribution")
+		}
+	})
+
+	t.Run("malformed isrc sends no request", func(t *testing.T) {
+		stub := &lrcRedStub{songStatus: 200, songBody: `{"byModel":true}`}
+		useLRCRedStub(t, stub, true)
+		LRCRedBlocksContribution(context.Background(), "not an isrc")
+		if len(stub.paths) != 0 {
+			t.Errorf("requested %v for a malformed ISRC", stub.paths)
+		}
+	})
+
+	t.Run("no free slot fails closed", func(t *testing.T) {
+		stub := &lrcRedStub{songStatus: 200, songBody: `{"byModel":false}`}
+		useLRCRedStub(t, stub, true)
+		holdLRCRedSlots(t, cap(lrcRedSem))
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		if !LRCRedBlocksContribution(ctx, "QZES72218029") {
+			t.Error("an unverified file must block a contribution")
+		}
+	})
+}
