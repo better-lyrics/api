@@ -357,15 +357,23 @@ func TestConformanceNewLRCRedCheckSkipsStaleFallback(t *testing.T) {
 }
 
 func TestConformanceNewLRCRedDeleteRevalidatesProxy(t *testing.T) {
+	cf, rec := cloudflareStub(t)
+	aiTag := store.KeyCacheTag(normalizedCacheKey("AI Synced", "AI Artist", "", ""))
 	var mu sync.Mutex
 	var videoIDs []string
+	purgedFirst := true
 	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		videoIDs = append(videoIDs, r.URL.Query().Get("videoId"))
+		purgedFirst = purgedFirst && rec.has(aiTag)
 		mu.Unlock()
 	}))
 	t.Cleanup(proxySrv.Close)
 	env := stubEnv(upstreamStub(t).URL)
+	env["CLOUDFLARE_ZONE_ID"] = "test-zone"
+	env["CLOUDFLARE_API_TOKEN"] = "test-cf-token"
+	env["CLOUDFLARE_API_BASE_URL"] = cf.URL
+	env["CLOUDFLARE_PURGE_INTERVAL_SECONDS"] = "1"
 	env["PROXY_REVALIDATE_URL"] = proxySrv.URL + "/revalidate"
 	env["PROXY_API_KEY"] = "test-proxy-key"
 	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
@@ -392,6 +400,11 @@ func TestConformanceNewLRCRedDeleteRevalidatesProxy(t *testing.T) {
 		if len(got) > 0 {
 			if len(got) != 1 || got[0] != "vidAISynced" {
 				t.Fatalf("proxy revalidated %v, want only the deleted song's video", got)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if !purgedFirst {
+				t.Fatal("the proxy refetched before the edge purge, so it could re-cache the AI copy")
 			}
 			return
 		}

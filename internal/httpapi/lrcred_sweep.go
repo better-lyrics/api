@@ -115,7 +115,9 @@ func (s *Server) dropLRCRedRow(ctx context.Context, cacheKey, isrc, aiTTML strin
 	return true, nil
 }
 
+// revalidateProxyForKey waits out two purge intervals first: a proxy refetch that reaches the edge before the purge would re-cache the dropped copy.
 func (s *Server) revalidateProxyForKey(cacheKey string) {
+	time.Sleep(2 * time.Duration(max(s.cfg.Configuration.CloudflarePurgeIntervalSeconds, 1)) * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	meta, ok, err := s.store.GetSongMetadata(ctx, cacheKey)
