@@ -12,6 +12,7 @@ import (
 
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
+	"lyrics-api-go/services/bini"
 	"lyrics-api-go/stats"
 	"lyrics-api-go/utils"
 
@@ -175,8 +176,22 @@ func LRCRedTTML(ctx context.Context, isrc string) (string, bool, error) {
 
 var errLRCRedNoSongFile = errors.New("lrc.red song.json returned status 404")
 
-// LRCRedBlocksContribution reports whether contributing an Apple result for isrc could replace a model-synced lrc.red file; an unverified file blocks it.
-func LRCRedBlocksContribution(ctx context.Context, isrc string) bool {
+var lrcRedContribute = bini.Contribute
+
+// ContributeApple is the contribution path for Apple results when the lookup did not read lrc.red: it never posts over a model-synced or unverified lrc.red file.
+func ContributeApple(name, artist, isrc, rawAttributes, ttmlRaw string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if lrcRedBlocksContribution(ctx, isrc) {
+		stats.Get().RecordLRCRedContribute(false)
+		log.Infof("%s Not contributing ISRC %s: lrc.red file is model-synced or unverified", logcolors.LogLyrics, isrc)
+		return
+	}
+	lrcRedContribute(name, artist, isrc, SourceApple, rawAttributes, ttmlRaw)
+}
+
+// lrcRedBlocksContribution reports whether contributing an Apple result for isrc could replace a model-synced lrc.red file; an unverified file blocks it.
+func lrcRedBlocksContribution(ctx context.Context, isrc string) bool {
 	isrc = utils.NormalizeISRC(isrc)
 	if AISyncCheckReady() != nil || isrc == "" {
 		return false

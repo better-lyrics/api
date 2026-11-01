@@ -662,7 +662,7 @@ func TestLRCRedBlocksContribution(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := &lrcRedStub{songStatus: tt.songStatus, songBody: tt.songBody}
 			useLRCRedStub(t, stub, true)
-			if got := LRCRedBlocksContribution(context.Background(), "QZES72218029"); got != tt.want {
+			if got := lrcRedBlocksContribution(context.Background(), "QZES72218029"); got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
@@ -671,7 +671,7 @@ func TestLRCRedBlocksContribution(t *testing.T) {
 	t.Run("flag off sends no request", func(t *testing.T) {
 		stub := &lrcRedStub{songStatus: 200, songBody: `{"byModel":true}`}
 		useLRCRedStub(t, stub, false)
-		if LRCRedBlocksContribution(context.Background(), "QZES72218029") {
+		if lrcRedBlocksContribution(context.Background(), "QZES72218029") {
 			t.Error("flag off must never block a contribution")
 		}
 		if len(stub.paths) != 0 {
@@ -683,7 +683,7 @@ func TestLRCRedBlocksContribution(t *testing.T) {
 		stub := &lrcRedStub{}
 		useLRCRedStub(t, stub, true)
 		lrcRedReadBase = ""
-		if LRCRedBlocksContribution(context.Background(), "QZES72218029") {
+		if lrcRedBlocksContribution(context.Background(), "QZES72218029") {
 			t.Error("no lrc.red configured must not block a contribution")
 		}
 	})
@@ -691,7 +691,7 @@ func TestLRCRedBlocksContribution(t *testing.T) {
 	t.Run("malformed isrc sends no request", func(t *testing.T) {
 		stub := &lrcRedStub{songStatus: 200, songBody: `{"byModel":true}`}
 		useLRCRedStub(t, stub, true)
-		LRCRedBlocksContribution(context.Background(), "not an isrc")
+		lrcRedBlocksContribution(context.Background(), "not an isrc")
 		if len(stub.paths) != 0 {
 			t.Errorf("requested %v for a malformed ISRC", stub.paths)
 		}
@@ -703,8 +703,50 @@ func TestLRCRedBlocksContribution(t *testing.T) {
 		holdLRCRedSlots(t, cap(lrcRedSem))
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		if !LRCRedBlocksContribution(ctx, "QZES72218029") {
+		if !lrcRedBlocksContribution(ctx, "QZES72218029") {
 			t.Error("an unverified file must block a contribution")
 		}
 	})
+}
+
+func TestContributeApple(t *testing.T) {
+	record := func(t *testing.T) *[]string {
+		var calls []string
+		old := lrcRedContribute
+		lrcRedContribute = func(name, artist, isrc, source, raw, ttml string) {
+			calls = append(calls, isrc+" "+source)
+		}
+		t.Cleanup(func() { lrcRedContribute = old })
+		return &calls
+	}
+	tests := []struct {
+		name       string
+		flag       bool
+		songStatus int
+		songBody   string
+		want       int
+	}{
+		{"model-synced file blocks", true, 200, `{"byModel":true}`, 0},
+		{"unverified file blocks", true, 500, ``, 0},
+		{"human file contributes", true, 200, `{"byModel":false}`, 1},
+		{"no file contributes", true, 404, ``, 1},
+		{"flag off contributes", false, 200, `{"byModel":true}`, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := record(t)
+			stub := &lrcRedStub{songStatus: tt.songStatus, songBody: tt.songBody}
+			useLRCRedStub(t, stub, tt.flag)
+			ContributeApple("Revenge", "CaptainSparklez", "QZES72218029", "", lrcRedTestTTML)
+			if len(*calls) != tt.want {
+				t.Fatalf("contributed %d times, want %d", len(*calls), tt.want)
+			}
+			if tt.want == 1 && (*calls)[0] != "QZES72218029 "+SourceApple {
+				t.Errorf("contributed %q, want the ISRC with source apple", (*calls)[0])
+			}
+			if !tt.flag && len(stub.paths) != 0 {
+				t.Errorf("flag off requested %v", stub.paths)
+			}
+		})
+	}
 }
