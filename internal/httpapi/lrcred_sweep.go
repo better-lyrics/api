@@ -94,10 +94,15 @@ func (s *Server) lrcRedCopyIsModelSynced(ctx context.Context, cacheKey, isrc str
 	return current, false, nil
 }
 
+func appleBreakerNotClosed() bool {
+	state, _, _ := ttml.GetCircuitBreakerStats()
+	return state == "OPEN" || state == "HALF-OPEN"
+}
+
 var errLRCRedAppleDown = errors.New("Apple circuit breaker is not closed; keeping the cached copy until Apple can replace it")
 
 func (s *Server) dropLRCRedRow(ctx context.Context, cacheKey, isrc, aiTTML string) (bool, error) {
-	if state, _, _ := ttml.GetCircuitBreakerStats(); state == "OPEN" || state == "HALF-OPEN" {
+	if appleBreakerNotClosed() {
 		return false, errLRCRedAppleDown
 	}
 	ok, err := s.store.DeleteLyricsIfUnchanged(ctx, cacheKey, providers.SourceLRCRed, aiTTML)
@@ -125,7 +130,7 @@ func (s *Server) revalidateProxyForKey(cacheKey string) {
 
 // checkLRCRedCopy checks each key once per process: a cached copy never changes, so a second check learns nothing.
 func (s *Server) checkLRCRedCopy(cacheKey string, cached store.CachedLyrics) {
-	if cached.Source != providers.SourceLRCRed || s.lrcRedCheckBlocked() != nil || !lrcRedChecked.claim(cacheKey) {
+	if cached.Source != providers.SourceLRCRed || s.lrcRedCheckBlocked() != nil || appleBreakerNotClosed() || !lrcRedChecked.claim(cacheKey) {
 		return
 	}
 	if !lrcRedCheckLimiter.Allow() {

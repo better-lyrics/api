@@ -13,6 +13,7 @@ import (
 	"lyrics-api-go/services/cdn"
 	ttml "lyrics-api-go/services/providers/ttml"
 	"lyrics-api-go/services/proxy"
+	"lyrics-api-go/stats"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -161,6 +162,8 @@ func persistSyncUpgrade(ctx context.Context, st *store.Store, cand store.SyncUpg
 		checkCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if ttml.LRCRedBlocksContribution(checkCtx, cand.ISRC) {
+			stats.Get().RecordLRCRedContribute(false)
+			log.Infof("%s Sync-upgrade not contributed for ISRC %s: lrc.red file is model-synced or unverified", logcolors.LogLyrics, cand.ISRC)
 			return
 		}
 		bini.Contribute(cand.Name, cand.Artist, cand.ISRC, ttml.SourceApple, "", act.NewTTML)

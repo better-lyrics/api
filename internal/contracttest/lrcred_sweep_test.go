@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -415,18 +417,33 @@ func adminGet(t *testing.T, url string) {
 }
 
 func TestConformanceNewLRCRedKeepsRowsWhileAppleIsDown(t *testing.T) {
-	env := stubEnv(upstreamStub(t).URL)
+	stub := upstreamStub(t)
+	target, _ := url.Parse(stub.URL)
+	var lrcRedReads atomic.Int64
+	forward := httputil.NewSingleHostReverseProxy(target)
+	counter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lrcRedReads.Add(1)
+		forward.ServeHTTP(w, r)
+	}))
+	t.Cleanup(counter.Close)
+	env := stubEnv(stub.URL)
+	env["LRC_RED_BASE_URL"] = counter.URL
 	env["CIRCUIT_BREAKER_THRESHOLD"] = "1"
 	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
 	seedSweepRows(t)
 	adminGet(t, base+"/circuit-breaker/simulate-failure")
 
-	if _, status := getLyricsTTML(t, base, "AI Synced", "AI Artist"); status != "HIT" {
-		t.Fatalf("status %s, want HIT", status)
+	for i := 0; i < 3; i++ {
+		if _, status := getLyricsTTML(t, base, "AI Synced", "AI Artist"); status != "HIT" {
+			t.Fatalf("status %s, want HIT", status)
+		}
+		time.Sleep(600 * time.Millisecond)
 	}
-	time.Sleep(1500 * time.Millisecond)
 	if _, ok := cachedTTML(t, "AI Synced", "AI Artist"); !ok {
 		t.Fatal("deleted the cached copy while the Apple circuit breaker was open")
+	}
+	if n := lrcRedReads.Load(); n != 0 {
+		t.Fatalf("cache hits made %d lrc.red reads while Apple was down, want 0", n)
 	}
 	if res := postSweep(t, base, "limit=50"); res.Deleted != 0 || len(res.Errors) == 0 {
 		t.Fatalf("sweep while Apple is down: deleted %d, errors %v; want no deletes and an error", res.Deleted, res.Errors)
