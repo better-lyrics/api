@@ -17,6 +17,7 @@ func TestConfigDefaultValues(t *testing.T) {
 		"FF_CACHE_COMPRESSION",
 		"FF_CACHE_ONLY_MODE",
 		"FF_PRETTY_LOGS",
+		"FF_LRC_RED_SKIP_AI_SYNCED",
 		"TTML_STOREFRONT",
 	}
 
@@ -95,6 +96,11 @@ func TestConfigDefaultValues(t *testing.T) {
 			name:     "PrettyLogs default",
 			got:      cfg.FeatureFlags.PrettyLogs,
 			expected: false,
+		},
+		{
+			name:     "LRCRedSkipAISynced default",
+			got:      cfg.FeatureFlags.LRCRedSkipAISynced,
+			expected: true,
 		},
 	}
 
@@ -599,5 +605,28 @@ func TestTTMLAccount_OutOfServiceField(t *testing.T) {
 	acc.OutOfService = true
 	if !acc.OutOfService {
 		t.Error("Expected OutOfService to be true")
+	}
+}
+
+func TestFeatureFlagLRCRedSkipAISynced(t *testing.T) {
+	for _, tt := range []struct {
+		envValue string
+		expected bool
+	}{
+		{"true", true},
+		{"false", false},
+		{"1", true},
+		{"0", false},
+	} {
+		t.Run(tt.envValue, func(t *testing.T) {
+			t.Setenv("FF_LRC_RED_SKIP_AI_SYNCED", tt.envValue)
+			cfg, err := load()
+			if err != nil {
+				t.Fatalf("Failed to load config: %v", err)
+			}
+			if cfg.FeatureFlags.LRCRedSkipAISynced != tt.expected {
+				t.Errorf("Expected LRCRedSkipAISynced %v, got %v", tt.expected, cfg.FeatureFlags.LRCRedSkipAISynced)
+			}
+		})
 	}
 }

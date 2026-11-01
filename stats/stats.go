@@ -32,6 +32,8 @@ type Stats struct {
 	LRCRedFetchErrors       atomic.Int64
 	LRCRedContributeSent    atomic.Int64
 	LRCRedContributeSkipped atomic.Int64
+	LRCRedSkippedByModel    atomic.Int64
+	LRCRedFlagErrors        atomic.Int64
 
 	// Rate limiting
 	RateLimitNormal   atomic.Int64 // Requests served under normal rate limit
@@ -273,6 +275,14 @@ func (s *Stats) RecordLRCRedFetch(hit bool, err error) {
 	}
 }
 
+func (s *Stats) RecordLRCRedSkippedByModel() {
+	s.LRCRedSkippedByModel.Add(1)
+}
+
+func (s *Stats) RecordLRCRedFlagError() {
+	s.LRCRedFlagErrors.Add(1)
+}
+
 func (s *Stats) RecordLRCRedContribute(sent bool) {
 	if sent {
 		s.LRCRedContributeSent.Add(1)
@@ -459,6 +469,8 @@ func (s *Stats) Snapshot() map[string]interface{} {
 			"fetch_errors":       s.LRCRedFetchErrors.Load(),
 			"contribute_sent":    s.LRCRedContributeSent.Load(),
 			"contribute_skipped": s.LRCRedContributeSkipped.Load(),
+			"skipped_by_model":   s.LRCRedSkippedByModel.Load(),
+			"flag_errors":        s.LRCRedFlagErrors.Load(),
 		},
 		"rate_limiting": map[string]interface{}{
 			"normal_tier": s.RateLimitNormal.Load(),

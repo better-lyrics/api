@@ -25,6 +25,8 @@ func (s *Stats) Serialize() PersistedStats {
 		LRCRedFetchErrors:       s.LRCRedFetchErrors.Load(),
 		LRCRedContributeSent:    s.LRCRedContributeSent.Load(),
 		LRCRedContributeSkipped: s.LRCRedContributeSkipped.Load(),
+		LRCRedSkippedByModel:    s.LRCRedSkippedByModel.Load(),
+		LRCRedFlagErrors:        s.LRCRedFlagErrors.Load(),
 		RateLimitNormal:         s.RateLimitNormal.Load(),
 		RateLimitCached:         s.RateLimitCached.Load(),
 		RateLimitExceeded:       s.RateLimitExceeded.Load(),
@@ -65,6 +67,8 @@ func (s *Stats) Restore(p PersistedStats) {
 	s.LRCRedFetchErrors.Store(p.LRCRedFetchErrors)
 	s.LRCRedContributeSent.Store(p.LRCRedContributeSent)
 	s.LRCRedContributeSkipped.Store(p.LRCRedContributeSkipped)
+	s.LRCRedSkippedByModel.Store(p.LRCRedSkippedByModel)
+	s.LRCRedFlagErrors.Store(p.LRCRedFlagErrors)
 	s.RateLimitNormal.Store(p.RateLimitNormal)
 	s.RateLimitCached.Store(p.RateLimitCached)
 	s.RateLimitExceeded.Store(p.RateLimitExceeded)
