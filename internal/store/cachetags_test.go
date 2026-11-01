@@ -90,3 +90,19 @@ func TestKeyCacheTag(t *testing.T) {
 		}
 	})
 }
+
+func TestKeySongCacheTag(t *testing.T) {
+	want := SongCacheTag("Blinding Lights", "The Weeknd")
+	for _, key := range []string{
+		"ttml_lyrics:blinding lights the weeknd",
+		"ttml_lyrics:blinding lights the weeknd 200s",
+		"ttml_lyrics:Blinding Lights The Weeknd ",
+	} {
+		if got := KeySongCacheTag(key); got != want {
+			t.Errorf("KeySongCacheTag(%q) = %q, want the song tag %q", key, got, want)
+		}
+	}
+	if KeySongCacheTag("ttml_lyrics:blinding lights the weeknd after hours") == want {
+		t.Error("a key with an album must not map to the song tag of the song alone")
+	}
+}

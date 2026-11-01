@@ -28,9 +28,7 @@ const (
 // lrcRedSweepLimiter is shared by every call, so parallel sweeps still read lrc.red at 2/s.
 var lrcRedSweepLimiter = rate.NewLimiter(2, 1)
 
-// lrcRedSweep deletes cached rows whose lrc.red file was synced by a model, so the
-// next request resolves them from Apple. Each call checks up to limit rows starting
-// after the cache_key cursor and returns next_after to resume from.
+// lrcRedSweep deletes cached rows whose lrc.red file was synced by a model; a failed row stops the batch so resuming retries it.
 func (s *Server) lrcRedSweep(w http.ResponseWriter, r *http.Request) {
 	if !s.adminAuthorized(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -39,6 +37,12 @@ func (s *Server) lrcRedSweep(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.FeatureFlags.LRCRedSkipAISynced {
 		respond(w, r).Error(http.StatusConflict, map[string]interface{}{
 			"error": "FF_LRC_RED_SKIP_AI_SYNCED is off; the sweep only runs while model-synced lrc.red files are skipped",
+		})
+		return
+	}
+	if s.cfg.Configuration.LRCRedBaseURL == "" {
+		respond(w, r).Error(http.StatusConflict, map[string]interface{}{
+			"error": "LRC_RED_BASE_URL is not set; the sweep has nothing to check against",
 		})
 		return
 	}
@@ -89,29 +93,27 @@ scan:
 				break scan
 			}
 			checked++
-			cursor = row.CacheKey
 			byModel, err := ttml.LRCRedByModel(ctx, isrc)
 			if err != nil {
-				sweepErrors = append(sweepErrors, fmt.Sprintf("%s: %v", isrc, err))
-				continue
+				sweepErrors = append(sweepErrors, fmt.Sprintf("%s (%s): %v", isrc, row.CacheKey, err))
+				break scan
 			}
-			if !byModel {
-				continue
+			if byModel {
+				modelSynced = append(modelSynced, isrc)
 			}
-			modelSynced = append(modelSynced, isrc)
-			if dryRun {
-				continue
+			if byModel && !dryRun {
+				ok, err := s.store.DeleteLRCRedLyrics(ctx, row.CacheKey)
+				if err != nil {
+					sweepErrors = append(sweepErrors, fmt.Sprintf("%s (%s): delete failed: %v", isrc, row.CacheKey, err))
+					break scan
+				}
+				if ok {
+					deleted++
+					cdn.Purge(store.KeyCacheTag(row.CacheKey), store.KeySongCacheTag(row.CacheKey))
+					log.Infof("%s Deleted model-synced lrc.red lyrics for ISRC %s: %s", logcolors.LogCacheClear, isrc, row.CacheKey)
+				}
 			}
-			ok, err := s.store.DeleteLRCRedLyrics(ctx, row.CacheKey)
-			if err != nil {
-				sweepErrors = append(sweepErrors, fmt.Sprintf("%s: delete failed: %v", isrc, err))
-				continue
-			}
-			if ok {
-				deleted++
-				cdn.Purge(store.KeyCacheTag(row.CacheKey))
-				log.Infof("%s Deleted model-synced lrc.red lyrics for ISRC %s: %s", logcolors.LogCacheClear, isrc, row.CacheKey)
-			}
+			cursor = row.CacheKey
 		}
 		if next == "" {
 			done = true

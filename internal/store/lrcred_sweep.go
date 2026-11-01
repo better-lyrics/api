@@ -8,15 +8,11 @@ import (
 )
 
 type LRCRedRow struct {
-	CacheKey   string
-	ISRC       string
-	TrackName  string
-	ArtistName string
+	CacheKey string
+	ISRC     string
 }
 
-// ScanLRCRedLyrics reads the next pageSize lyrics rows after the cache_key cursor and
-// returns those sourced from lrc.red. source has no index, so the page walks the
-// primary key and filters, which keeps every query bounded. next is "" at the end.
+// ScanLRCRedLyrics returns the lrc.red rows among the next pageSize rows after the cursor; source has no index, so each page walks the primary key. next is "" at the end.
 func (s *Store) ScanLRCRedLyrics(ctx context.Context, after string, pageSize int) (rows []LRCRedRow, next string, err error) {
 	q, err := s.pool.Query(ctx, `
 		WITH page AS (
@@ -25,8 +21,7 @@ func (s *Store) ScanLRCRedLyrics(ctx context.Context, after string, pageSize int
 			ORDER BY cache_key
 			LIMIT $2
 		)
-		SELECT p.cache_key, p.source = 'lrc.red',
-		       coalesce(m.isrc, ''), coalesce(m.track_name, ''), coalesce(m.artist_name, '')
+		SELECT p.cache_key, p.source = 'lrc.red', coalesce(m.isrc, '')
 		FROM page p
 		LEFT JOIN song_metadata m ON m.cache_key = p.cache_key
 		ORDER BY p.cache_key`,
@@ -40,7 +35,7 @@ func (s *Store) ScanLRCRedLyrics(ctx context.Context, after string, pageSize int
 	for q.Next() {
 		var r LRCRedRow
 		var fromLRCRed bool
-		if err := q.Scan(&r.CacheKey, &fromLRCRed, &r.ISRC, &r.TrackName, &r.ArtistName); err != nil {
+		if err := q.Scan(&r.CacheKey, &fromLRCRed, &r.ISRC); err != nil {
 			return nil, "", err
 		}
 		scanned++
@@ -58,8 +53,7 @@ func (s *Store) ScanLRCRedLyrics(ctx context.Context, after string, pageSize int
 	return rows, next, nil
 }
 
-// DeleteLRCRedLyrics deletes a cached row only while it is still sourced from
-// lrc.red, so a concurrent rewrite from Apple survives.
+// DeleteLRCRedLyrics deletes a row only while it is still sourced from lrc.red, so a concurrent Apple rewrite survives.
 func (s *Store) DeleteLRCRedLyrics(ctx context.Context, cacheKey string) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

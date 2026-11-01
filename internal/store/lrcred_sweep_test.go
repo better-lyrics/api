@@ -51,8 +51,8 @@ func TestScanLRCRedLyrics(t *testing.T) {
 	seedSourcedLyrics(t, "qq_lyrics:f song artist", "", "")
 
 	want := []LRCRedRow{
-		{CacheKey: "ttml_lyrics:a song artist", ISRC: "QZES72218029", TrackName: "Track QZES72218029", ArtistName: "Artist QZES72218029"},
-		{CacheKey: "ttml_lyrics:d song artist [album] [200s]", ISRC: "USUG12004507", TrackName: "Track USUG12004507", ArtistName: "Artist USUG12004507"},
+		{CacheKey: "ttml_lyrics:a song artist", ISRC: "QZES72218029"},
+		{CacheKey: "ttml_lyrics:d song artist [album] [200s]", ISRC: "USUG12004507"},
 		{CacheKey: "ttml_lyrics:e song artist"},
 	}
 

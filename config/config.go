@@ -90,10 +90,9 @@ type Config struct {
 	}
 
 	FeatureFlags struct {
-		CacheCompression bool `envconfig:"FF_CACHE_COMPRESSION" default:"true"`
-		CacheOnlyMode    bool `envconfig:"FF_CACHE_ONLY_MODE" default:"false"`
-		PrettyLogs       bool `envconfig:"FF_PRETTY_LOGS" default:"false"`
-		// LRCRedSkipAISynced treats lrc.red files marked byModel in .song.json as misses.
+		CacheCompression   bool `envconfig:"FF_CACHE_COMPRESSION" default:"true"`
+		CacheOnlyMode      bool `envconfig:"FF_CACHE_ONLY_MODE" default:"false"`
+		PrettyLogs         bool `envconfig:"FF_PRETTY_LOGS" default:"false"`
 		LRCRedSkipAISynced bool `envconfig:"FF_LRC_RED_SKIP_AI_SYNCED" default:"true"`
 	}
 }

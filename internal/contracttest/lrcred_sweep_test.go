@@ -13,6 +13,8 @@ import (
 	"lyrics-api-go/internal/store"
 )
 
+const flakyKey = "ttml_lyrics:flaky flag flaky artist"
+
 type sweepResult struct {
 	DryRun        bool     `json:"dry_run"`
 	Checked       int      `json:"checked"`
@@ -131,10 +133,10 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 				"checked":         3,
 				"model_synced":    []string{"USAISYNC0001"},
 				"deleted":         0,
-				"skipped_no_isrc": 1,
-				"errors":          []string{"USFLAKY00001: lrc.red song.json returned status 500"},
-				"next_after":      "",
-				"done":            true,
+				"skipped_no_isrc": 0,
+				"errors":          []string{"USFLAKY00001 (" + flakyKey + "): lrc.red song.json returned status 500"},
+				"next_after":      "ttml_lyrics:cached song cached artist",
+				"done":            false,
 			}),
 		},
 		{
@@ -168,6 +170,13 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 		if calls > 10 || res.NextAfter == "" {
 			t.Fatalf("sweep did not finish: %+v", res)
 		}
+		if len(res.Errors) > 0 {
+			if res.NextAfter != after {
+				t.Fatalf("cursor moved past a failed row: %+v", res)
+			}
+			after = flakyKey
+			continue
+		}
 		after = res.NextAfter
 	}
 	if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
@@ -186,6 +195,7 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 		}
 	}
 	waitForPurge(t, rec, store.KeyCacheTag(normalizedCacheKey("AI Synced", "AI Artist", "", "")))
+	waitForPurge(t, rec, store.SongCacheTag("AI Synced", "AI Artist"))
 
 	RunSpec(t, base, []Scenario{
 		{
@@ -197,7 +207,7 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 		},
 	})
 
-	if again := postSweep(t, base, ""); again.Deleted != 0 || len(again.ModelSynced) != 0 || !again.Done {
+	if again := postSweep(t, base, ""); again.Deleted != 0 || len(again.ModelSynced) != 0 || again.NextAfter != "ttml_lyrics:cached song cached artist" {
 		t.Errorf("re-run is not idempotent: %+v", again)
 	}
 }

@@ -1,6 +1,8 @@
 package ttml
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -256,6 +258,9 @@ func TestFetchLRCRedByISRCSkipsAISynced(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
+			if tt.wantErr && !errors.Is(err, errLRCRedFlagCheck) {
+				t.Errorf("err = %v, want it marked as a flag check failure", err)
+			}
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
@@ -327,6 +332,9 @@ func TestFetchLRCRedByISRCSkipsAISynced(t *testing.T) {
 			}
 			if ok || (err != nil) != (status == 500) {
 				t.Fatalf("ok=%v err=%v for .ttml %d", ok, err, status)
+			}
+			if errors.Is(err, errLRCRedFlagCheck) {
+				t.Errorf(".ttml %d error marked as a flag check failure: %v", status, err)
 			}
 			if d := stats.Get().LRCRedFlagErrors.Load() - flagErr0; d != 0 {
 				t.Errorf("a cancelled flag lookup counted as a flag error (%d)", d)
@@ -406,6 +414,47 @@ func TestFetchLRCRedByISRCConcurrency(t *testing.T) {
 		}
 		if len(lrcRedSem) != 0 {
 			t.Errorf("%d semaphore slots still held after all callers returned", len(lrcRedSem))
+		}
+	})
+}
+
+func TestLRCRedByModel(t *testing.T) {
+	t.Run("empty base url fails without a request", func(t *testing.T) {
+		stub := &lrcRedStub{}
+		useLRCRedStub(t, stub, true)
+		lrcRedReadBase = ""
+
+		if _, err := LRCRedByModel(context.Background(), "QZES72218029"); err == nil {
+			t.Fatal("want an error when LRC_RED_BASE_URL is empty")
+		}
+		if len(stub.paths) != 0 {
+			t.Errorf("requested %v with no base url", stub.paths)
+		}
+	})
+
+	t.Run("reads byModel", func(t *testing.T) {
+		stub := &lrcRedStub{songStatus: 200, songBody: `{"byModel":true}`}
+		useLRCRedStub(t, stub, true)
+
+		byModel, err := LRCRedByModel(context.Background(), "QZES72218029")
+		if err != nil || !byModel {
+			t.Fatalf("got (%v, %v), want (true, nil)", byModel, err)
+		}
+	})
+
+	t.Run("waits for a semaphore slot", func(t *testing.T) {
+		stub := &lrcRedStub{songStatus: 200, songBody: `{}`}
+		useLRCRedStub(t, stub, true)
+		release := acquireLRCRed(cap(lrcRedSem))
+		defer release()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		if _, err := LRCRedByModel(ctx, "QZES72218029"); err == nil {
+			t.Fatal("want an error while every slot is held")
+		}
+		if len(stub.paths) != 0 {
+			t.Errorf("requested %v without a free slot", stub.paths)
 		}
 	})
 }

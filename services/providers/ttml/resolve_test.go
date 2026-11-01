@@ -190,12 +190,13 @@ func TestLRCRedConcurrencyBounded(t *testing.T) {
 	}
 }
 
-// TestResolveLyricsMissUnconfirmed: a failed lrc.red lookup cannot prove lrc.red
+// TestResolveLyricsMissUnconfirmed: a failed byModel check cannot prove lrc.red
 // has nothing, so an Apple miss reached that way must not be cached as permanent.
 func TestResolveLyricsMissUnconfirmed(t *testing.T) {
 	lrcErr := func(string) (string, bool, error) {
-		return "", false, errors.New("lrc.red byModel check failed: status 500")
+		return "", false, fmt.Errorf("%w: lrc.red song.json returned status 500", errLRCRedFlagCheck)
 	}
+	ttmlErr := func(string) (string, bool, error) { return "", false, errors.New("lrc.red returned status 500") }
 	lrcMiss := func(string) (string, bool, error) { return "", false, nil }
 	appleMiss := func() (string, error) { return "", errors.New("TTML content is empty") }
 	appleHit := func() (string, error) { return "APPLE", nil }
@@ -214,6 +215,8 @@ func TestResolveLyricsMissUnconfirmed(t *testing.T) {
 		{name: "appleFirst Apple miss then lrc.red error", appleFirst: true, hts: htsPtr(true), lrc: lrcErr, apple: appleMiss, wantErr: "TTML content is empty", wantMarked: true},
 		{name: "appleFirst hasTimeSyncedLyrics=false then lrc.red error", appleFirst: true, hts: htsPtr(false), lrc: lrcErr, apple: appleHit, wantErr: "no lyrics data found (hasTimeSyncedLyrics=false)", wantMarked: true},
 		{name: "lrc.red clean miss then Apple miss stays permanent", hts: htsPtr(true), lrc: lrcMiss, apple: appleMiss, wantErr: "TTML content is empty"},
+		{name: "regression: lrc.red .ttml error then Apple miss stays permanent as on master", hts: htsPtr(true), lrc: ttmlErr, apple: appleMiss, wantErr: "TTML content is empty"},
+		{name: "regression: appleFirst Apple miss then lrc.red .ttml error stays permanent", appleFirst: true, hts: htsPtr(false), lrc: ttmlErr, apple: appleHit, wantErr: "no lyrics data found (hasTimeSyncedLyrics=false)"},
 		{name: "appleFirst both clean misses stay permanent", appleFirst: true, hts: htsPtr(false), lrc: lrcMiss, apple: appleHit, wantErr: "no lyrics data found (hasTimeSyncedLyrics=false)"},
 	}
 	for _, tt := range tests {
