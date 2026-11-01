@@ -41,7 +41,7 @@ var lrcRedClient = &http.Client{Timeout: 10 * time.Second}
 var lrcRedSem = make(chan struct{}, 8)
 
 // fetchLRCRedByISRC fetches TTML from lrc.red by ISRC: (ttml,true,nil) on 200,
-// ("",false,nil) on 404 or empty ISRC, ("",false,errLRCRedModelSynced) for a skipped file, ("",false,err) otherwise.
+// ("",false,nil) on 404 or empty ISRC (a clean miss), ("",false,err) otherwise.
 func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 	if lrcRedReadBase == "" {
 		return "", false, nil

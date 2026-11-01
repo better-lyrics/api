@@ -168,6 +168,7 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 			if cached, ok := s.getCachedLyrics(ctx, fallbackKey); ok {
 				stats.Get().RecordStaleCacheHit()
 				log.Warnf("%s Backend failed, serving stale cache from key: %s", logcolors.LogCacheLyrics, fallbackKey)
+				s.checkLRCRedCopy(fallbackKey, cached)
 				respond(w, r).SetCacheStatus("STALE").JSON(map[string]interface{}{
 					"ttml": cached.TTML,
 				})

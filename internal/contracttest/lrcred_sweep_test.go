@@ -291,6 +291,8 @@ func TestConformanceNewLRCRedCheckOnCacheHit(t *testing.T) {
 	if _, status := getLyricsTTML(t, base, "No Meta", "Tester"); status != "HIT" {
 		t.Fatalf("No Meta: status %s, want HIT", status)
 	}
+	// A key with no ISRC spends one limiter token, once per process; wait for the refill.
+	time.Sleep(600 * time.Millisecond)
 	if ttml, status := getLyricsTTML(t, base, "AI Synced", "AI Artist"); status != "HIT" || ttml != "<tt>LRCRED</tt>" {
 		t.Fatalf("first request got (%q, %s), want the cached copy served without delay", ttml, status)
 	}

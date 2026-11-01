@@ -108,21 +108,21 @@ func (s *Server) checkLRCRedCopy(cacheKey string, cached store.CachedLyrics) {
 	if cached.Source != providers.SourceLRCRed || s.lrcRedCheckBlocked() != nil || !lrcRedChecked.claim(cacheKey) {
 		return
 	}
+	if !lrcRedCheckLimiter.Allow() {
+		lrcRedChecked.release(cacheKey)
+		return
+	}
 	// A failed check is not retried in this process, so one hot failing key cannot take every token; the sweep covers it.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		meta, ok, err := s.store.GetSongMetadata(ctx, cacheKey)
+		stored, err := s.store.SongISRC(ctx, cacheKey)
 		if err != nil {
-			log.Warnf("%s lrc.red check could not read metadata for %s: %v", logcolors.LogCacheClear, cacheKey, err)
+			log.Warnf("%s lrc.red check could not read the ISRC for %s: %v", logcolors.LogCacheClear, cacheKey, err)
 			return
 		}
-		if !ok || utils.NormalizeISRC(meta.ISRC) == "" {
-			return
-		}
-		isrc := utils.NormalizeISRC(meta.ISRC)
-		if !lrcRedCheckLimiter.Allow() {
-			lrcRedChecked.release(cacheKey)
+		isrc := utils.NormalizeISRC(stored)
+		if isrc == "" {
 			return
 		}
 		aiTTML, _, err := s.lrcRedCopyIsModelSynced(ctx, cacheKey, isrc)

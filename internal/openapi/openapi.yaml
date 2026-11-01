@@ -641,8 +641,6 @@ paths:
                 $ref: '#/components/schemas/Error'
         '429':
           $ref: '#/components/responses/RateLimited'
-        '500':
-          $ref: '#/components/responses/InternalError'
 
   /cache/clear:
     get:

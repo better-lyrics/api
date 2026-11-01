@@ -85,3 +85,13 @@ func (s *Store) DeleteLyricsIfUnchanged(ctx context.Context, cacheKey, source, t
 	}
 	return true, tx.Commit(ctx)
 }
+
+// SongISRC reads only the ISRC, so the cache-hit check never loads the full Apple attributes.
+func (s *Store) SongISRC(ctx context.Context, cacheKey string) (string, error) {
+	var isrc string
+	err := s.pool.QueryRow(ctx, `SELECT isrc FROM song_metadata WHERE cache_key = $1`, cacheKey).Scan(&isrc)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return isrc, err
+}

@@ -139,3 +139,17 @@ func TestDeleteLyricsIfUnchanged(t *testing.T) {
 		}
 	})
 }
+
+func TestSongISRC(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+	seedSourcedLyrics(t, "ttml_lyrics:with isrc tester", "lrc.red", "QZES72218029")
+	seedSourcedLyrics(t, "ttml_lyrics:no metadata tester", "lrc.red", "")
+
+	if got, err := testStore.SongISRC(ctx, "ttml_lyrics:with isrc tester"); err != nil || got != "QZES72218029" {
+		t.Fatalf("got (%q, %v), want the stored ISRC", got, err)
+	}
+	if got, err := testStore.SongISRC(ctx, "ttml_lyrics:no metadata tester"); err != nil || got != "" {
+		t.Fatalf("got (%q, %v), want an empty ISRC without an error", got, err)
+	}
+}
