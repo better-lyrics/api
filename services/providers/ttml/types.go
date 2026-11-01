@@ -34,6 +34,7 @@ type TrackMeta struct {
 	HasTimeSyncedLyrics *bool  // nil = field absent from API, false = no synced lyrics, true = has synced lyrics
 	RawAttributes       string // JSON string of full Apple Music attributes
 	Source              string // provenance of the returned lyrics: SourceApple or SourceLRCRed
+	LRCRedHasFile       bool   // lrc.red holds a file for this ISRC that was not served; never contribute over it
 }
 
 // =============================================================================

@@ -227,7 +227,7 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setCachedLyrics(ctx, cacheKey, ttmlString, trackDurationMs, score, language, isRTL, source)
 
-	if trackMeta != nil {
+	if trackMeta != nil && !trackMeta.LRCRedHasFile {
 		go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.Source, trackMeta.RawAttributes, ttmlString)
 	}
 

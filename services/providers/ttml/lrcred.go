@@ -27,33 +27,23 @@ var lrcRedSkipAISynced = config.Get().FeatureFlags.LRCRedSkipAISynced
 // errLRCRedFlagCheck marks a failed byModel lookup, the only lrc.red error that leaves an Apple miss unconfirmed.
 var errLRCRedFlagCheck = errors.New("lrc.red byModel check failed")
 
+// errLRCRedModelSynced reports a skipped model-synced file: a miss for serving, but lrc.red still holds the file.
+var errLRCRedModelSynced = errors.New("lrc.red file is model-synced")
+
+// lrcRedHasUnservedFile reports whether lrc.red holds a file for the ISRC that was not served, so nothing may be contributed over it.
+func lrcRedHasUnservedFile(err error) bool {
+	return errors.Is(err, errLRCRedModelSynced) || errors.Is(err, errLRCRedFlagCheck)
+}
+
 var lrcRedClient = &http.Client{Timeout: 10 * time.Second}
 
 // lrcRedSem caps concurrent outbound lrc.red reads at 8: a safety bound against a
 // runaway (a retry loop or cache-write failure defeating "fetch once ever"), not
 // rate limiting. The minted-token search lane removed the old MUT-throughput ceiling.
-// The cap counts requests, so a .ttml read and its .song.json flag lookup take two slots.
 var lrcRedSem = make(chan struct{}, 8)
 
-// lrcRedAcquireMu makes a multi-slot acquire atomic so holders of one slot cannot deadlock waiting for a second.
-var lrcRedAcquireMu sync.Mutex
-
-func acquireLRCRed(slots int) (release func()) {
-	lrcRedAcquireMu.Lock()
-	for range slots {
-		lrcRedSem <- struct{}{}
-	}
-	lrcRedAcquireMu.Unlock()
-	return func() {
-		for range slots {
-			<-lrcRedSem
-		}
-	}
-}
-
 // fetchLRCRedByISRC fetches TTML from lrc.red by ISRC: (ttml,true,nil) on 200,
-// ("",false,nil) on 404, empty ISRC, or a model-synced file when
-// FF_LRC_RED_SKIP_AI_SYNCED is on (a clean miss), ("",false,err) otherwise.
+// ("",false,nil) on 404 or empty ISRC, ("",false,errLRCRedModelSynced) for a skipped file, ("",false,err) otherwise.
 func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 	if lrcRedReadBase == "" {
 		return "", false, nil
@@ -63,14 +53,20 @@ func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 		return "", false, nil
 	}
 
-	defer func() { stats.Get().RecordLRCRedFetch(ok, err) }()
+	defer func() {
+		if errors.Is(err, errLRCRedModelSynced) {
+			stats.Get().RecordLRCRedFetch(false, nil)
+			return
+		}
+		stats.Get().RecordLRCRedFetch(ok, err)
+	}()
 
-	checkByModel := lrcRedSkipAISynced
-	slots := 1
-	if checkByModel {
-		slots = 2
+	lrcRedSem <- struct{}{}
+	defer func() { <-lrcRedSem }()
+
+	if !lrcRedSkipAISynced {
+		return fetchLRCRedTTML(context.Background(), isrc)
 	}
-	defer acquireLRCRed(slots)()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
@@ -81,23 +77,32 @@ func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 		byModel bool
 		err     error
 	}
+	// Check byModel in parallel only when a second slot is free, so lookups never wait on it.
 	var flag chan flagResult
-	if checkByModel {
+	select {
+	case lrcRedSem <- struct{}{}:
 		flag = make(chan flagResult, 1)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() { <-lrcRedSem }()
 			byModel, err := lrcRedByModel(ctx, isrc)
 			flag <- flagResult{byModel, err}
 		}()
+	default:
 	}
 
 	ttml, ok, err = fetchLRCRedTTML(ctx, isrc)
-	if err != nil || !ok || flag == nil {
+	if err != nil || !ok {
 		return ttml, ok, err
 	}
 
-	f := <-flag
+	var f flagResult
+	if flag != nil {
+		f = <-flag
+	} else {
+		f.byModel, f.err = lrcRedByModel(ctx, isrc)
+	}
 	if f.err != nil {
 		stats.Get().RecordLRCRedFlagError()
 		return "", false, fmt.Errorf("%w: %w", errLRCRedFlagCheck, f.err)
@@ -105,7 +110,7 @@ func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 	if f.byModel {
 		stats.Get().RecordLRCRedSkippedByModel()
 		log.Infof("%s lrc.red file for ISRC %s is model-synced, skipping", logcolors.LogLyrics, isrc)
-		return "", false, nil
+		return "", false, errLRCRedModelSynced
 	}
 	return ttml, true, nil
 }
@@ -135,6 +140,17 @@ func fetchLRCRedTTML(ctx context.Context, isrc string) (string, bool, error) {
 	}
 }
 
+// AISyncCheckReady reports why model-synced lrc.red files cannot be checked, or nil when they can.
+func AISyncCheckReady() error {
+	if !lrcRedSkipAISynced {
+		return errors.New("FF_LRC_RED_SKIP_AI_SYNCED is off; the sweep only runs while model-synced lrc.red files are skipped")
+	}
+	if lrcRedReadBase == "" {
+		return errors.New("LRC_RED_BASE_URL is not set; the sweep has nothing to check against")
+	}
+	return nil
+}
+
 // LRCRedByModel reports whether lrc.red's file for a normalized ISRC was synced by a model, taking one lrcRedSem slot.
 func LRCRedByModel(ctx context.Context, isrc string) (bool, error) {
 	if lrcRedReadBase == "" {
@@ -149,7 +165,7 @@ func LRCRedByModel(ctx context.Context, isrc string) (bool, error) {
 	return lrcRedByModel(ctx, isrc)
 }
 
-// lrcRedByModel is the single owner of the byModel lookup; swap the source here if lrc.red exposes it more cheaply.
+// lrcRedByModel is the only reader of lrc.red's byModel flag.
 func lrcRedByModel(ctx context.Context, isrc string) (bool, error) {
 	resp, err := lrcRedGet(ctx, isrc+".song.json", "application/json")
 	if err != nil {

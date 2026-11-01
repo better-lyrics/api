@@ -173,7 +173,12 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, pri
 		return ttml, nil
 	}
 
-	lyricsTTML, source, err := resolveLyrics(track, appleFirst, fetchLRCRedByISRC, appleFetch)
+	lrcRedFetch := func(isrc string) (string, bool, error) {
+		ttml, ok, err := fetchLRCRedByISRC(isrc)
+		trackMeta.LRCRedHasFile = lrcRedHasUnservedFile(err)
+		return ttml, ok, err
+	}
+	lyricsTTML, source, err := resolveLyrics(track, appleFirst, lrcRedFetch, appleFetch)
 	trackMeta.Source = source
 	if err != nil {
 		return "", trackDurationMs, score, trackMeta, err
@@ -184,7 +189,9 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, pri
 func resolveLyrics(track *Track, appleFirst bool, lrcRedFetch func(string) (string, bool, error), appleFetch func() (string, error)) (string, string, error) {
 	flagCheckFailed := false
 	tryLRCRed := func() (string, bool) {
-		if lrcTTML, ok, lrcErr := lrcRedFetch(track.Attributes.ISRC); lrcErr != nil {
+		if lrcTTML, ok, lrcErr := lrcRedFetch(track.Attributes.ISRC); errors.Is(lrcErr, errLRCRedModelSynced) {
+			return "", false
+		} else if lrcErr != nil {
 			flagCheckFailed = errors.Is(lrcErr, errLRCRedFlagCheck)
 			log.Warnf("%s lrc.red lookup failed for ISRC %q: %v", logcolors.LogLyrics, track.Attributes.ISRC, lrcErr)
 		} else if ok {

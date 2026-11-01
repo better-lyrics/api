@@ -20,7 +20,7 @@ type sweepResult struct {
 	Checked       int      `json:"checked"`
 	ModelSynced   []string `json:"model_synced"`
 	Deleted       int      `json:"deleted"`
-	SkippedNoISRC int      `json:"skipped_no_isrc"`
+	SkippedNoISRC []string `json:"skipped_no_isrc"`
 	Errors        []string `json:"errors"`
 	NextAfter     string   `json:"next_after"`
 	Done          bool     `json:"done"`
@@ -109,6 +109,29 @@ func TestConformanceNewLRCRedSweepRefusedWhenFlagOff(t *testing.T) {
 	}
 }
 
+func TestConformanceNewLRCRedSweepRefusedWithoutBaseURL(t *testing.T) {
+	env := stubEnv(upstreamStub(t).URL)
+	env["LRC_RED_BASE_URL"] = ""
+	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
+	seedSweepRows(t)
+
+	RunSpec(t, base, []Scenario{
+		{
+			Name:       "lrcred_sweep_no_base_url_409",
+			Method:     http.MethodPost,
+			Path:       "/cache/lrcred-sweep",
+			Headers:    map[string]string{"Authorization": "test-admin-token"},
+			WantStatus: http.StatusConflict,
+			WantBody: jbody(map[string]interface{}{
+				"error": "LRC_RED_BASE_URL is not set; the sweep has nothing to check against",
+			}),
+		},
+	})
+	if _, ok := cachedTTML(t, "AI Synced", "AI Artist"); !ok {
+		t.Fatal("refused sweep deleted a row")
+	}
+}
+
 func TestConformanceNewLRCRedSweep(t *testing.T) {
 	upstream := upstreamStub(t)
 	cf, rec := cloudflareStub(t)
@@ -124,7 +147,7 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 		{
 			Name:        "lrcred_sweep_dry_run_reports_without_deleting",
 			Method:      http.MethodPost,
-			Path:        "/cache/lrcred-sweep?dry_run=true",
+			Path:        "/cache/lrcred-sweep?dry_run=1",
 			Headers:     map[string]string{"Authorization": "test-admin-token"},
 			WantStatus:  http.StatusOK,
 			WantHeaders: map[string]string{"Content-Type": "application/json"},
@@ -133,7 +156,7 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 				"checked":         3,
 				"model_synced":    []string{"USAISYNC0001"},
 				"deleted":         0,
-				"skipped_no_isrc": 0,
+				"skipped_no_isrc": []string{},
 				"errors":          []string{"USFLAKY00001 (" + flakyKey + "): lrc.red song.json returned status 500"},
 				"next_after":      "ttml_lyrics:cached song cached artist",
 				"done":            false,
@@ -153,7 +176,7 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 		t.Fatal("dry run changed the cache")
 	}
 
-	var modelSynced []string
+	var modelSynced, skippedNoISRC []string
 	deleted, calls, after := 0, 0, ""
 	start := time.Now()
 	for {
@@ -163,6 +186,7 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 			t.Fatalf("call %d: %+v exceeded limit=1 or ran dry", calls, res)
 		}
 		modelSynced = append(modelSynced, res.ModelSynced...)
+		skippedNoISRC = append(skippedNoISRC, res.SkippedNoISRC...)
 		deleted += res.Deleted
 		if res.Done {
 			break
@@ -188,6 +212,9 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 
 	if _, ok := cachedTTML(t, "AI Synced", "AI Artist"); ok {
 		t.Error("model-synced row survived the sweep")
+	}
+	if want := normalizedCacheKey("No Meta", "Tester", "", ""); len(skippedNoISRC) != 1 || skippedNoISRC[0] != want {
+		t.Errorf("skipped_no_isrc = %v, want [%s]", skippedNoISRC, want)
 	}
 	for _, kept := range [][2]string{{"Apple Song", "Tester"}, {"Cached Song", "Cached Artist"}, {"Flaky Flag", "Flaky Artist"}, {"No Meta", "Tester"}} {
 		if _, ok := cachedTTML(t, kept[0], kept[1]); !ok {

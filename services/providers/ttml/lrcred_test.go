@@ -235,31 +235,29 @@ func TestFetchLRCRedByISRCSkipsAISynced(t *testing.T) {
 		songStatus  int
 		songBody    string
 		wantOK      bool
-		wantErr     bool
+		wantErr     error
 		wantSkipped int64
 		wantFlagErr int64
 	}{
-		{name: "byModel true is a clean miss", songStatus: 200, songBody: `{"name":"Revenge","byModel":true,"lines":[{"t":"x"}]}`, wantSkipped: 1},
+		{name: "byModel true is a miss marked model-synced", songStatus: 200, songBody: `{"name":"Revenge","byModel":true,"lines":[{"t":"x"}]}`, wantErr: errLRCRedModelSynced, wantSkipped: 1},
 		{name: "byModel false is a hit", songStatus: 200, songBody: `{"name":"Espresso","byModel":false}`, wantOK: true},
 		{name: "byModel absent is a hit", songStatus: 200, songBody: `{"name":"Espresso","lines":[]}`, wantOK: true},
-		{name: "song.json 404 fails closed", songStatus: 404, wantErr: true, wantFlagErr: 1},
-		{name: "song.json 500 fails closed", songStatus: 500, wantErr: true, wantFlagErr: 1},
-		{name: "malformed song.json fails closed", songStatus: 200, songBody: `{"byModel":`, wantErr: true, wantFlagErr: 1},
-		{name: "non-bool byModel fails closed", songStatus: 200, songBody: `{"byModel":"yes"}`, wantErr: true, wantFlagErr: 1},
+		{name: "song.json 404 fails closed", songStatus: 404, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
+		{name: "song.json 500 fails closed", songStatus: 500, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
+		{name: "malformed song.json fails closed", songStatus: 200, songBody: `{"byModel":`, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
+		{name: "non-bool byModel fails closed", songStatus: 200, songBody: `{"byModel":"yes"}`, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stub := &lrcRedStub{ttmlStatus: 200, ttmlBody: lrcRedTestTTML, songStatus: tt.songStatus, songBody: tt.songBody}
 			useLRCRedStub(t, stub, true)
 			skipped0, flagErr0 := stats.Get().LRCRedSkippedByModel.Load(), stats.Get().LRCRedFlagErrors.Load()
+			fetchErr0 := stats.Get().LRCRedFetchErrors.Load()
 
 			got, ok, err := fetchLRCRedByISRC("QZES72218029")
 
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr && !errors.Is(err, errLRCRedFlagCheck) {
-				t.Errorf("err = %v, want it marked as a flag check failure", err)
+			if (err != nil) != (tt.wantErr != nil) || (tt.wantErr != nil && !errors.Is(err, tt.wantErr)) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
 			}
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
@@ -278,6 +276,9 @@ func TestFetchLRCRedByISRCSkipsAISynced(t *testing.T) {
 			}
 			if d := stats.Get().LRCRedFlagErrors.Load() - flagErr0; d != tt.wantFlagErr {
 				t.Errorf("LRCRedFlagErrors delta = %d, want %d", d, tt.wantFlagErr)
+			}
+			if d := stats.Get().LRCRedFetchErrors.Load() - fetchErr0; d != tt.wantFlagErr {
+				t.Errorf("LRCRedFetchErrors delta = %d, want %d (a model-synced skip is a miss)", d, tt.wantFlagErr)
 			}
 		})
 	}
@@ -374,7 +375,7 @@ func TestFetchLRCRedByISRCConcurrency(t *testing.T) {
 		}
 	})
 
-	t.Run("pairs take two semaphore slots without deadlock", func(t *testing.T) {
+	t.Run("load keeps 8 ISRCs in flight within 8 requests without deadlock", func(t *testing.T) {
 		stub := &lrcRedStub{ttmlStatus: 200, ttmlBody: lrcRedTestTTML, ttmlDelay: 30 * time.Millisecond, songStatus: 200, songBody: `{}`, songDelay: 30 * time.Millisecond}
 		useLRCRedStub(t, stub, true)
 
@@ -406,14 +407,92 @@ func TestFetchLRCRedByISRCConcurrency(t *testing.T) {
 		if stub.maxRequests > cap(lrcRedSem) {
 			t.Errorf("%d requests in flight at once, cap is %d", stub.maxRequests, cap(lrcRedSem))
 		}
-		if stub.maxISRCs > cap(lrcRedSem)/2 {
-			t.Errorf("%d ISRCs in flight at once, want at most %d", stub.maxISRCs, cap(lrcRedSem)/2)
-		}
-		if stub.maxRequests <= stub.maxISRCs {
-			t.Errorf("max %d requests for %d ISRCs in flight, pairs did not overlap their legs", stub.maxRequests, stub.maxISRCs)
+		if stub.maxISRCs <= cap(lrcRedSem)/2 {
+			t.Errorf("max %d ISRCs in flight, the flag check halved lookup concurrency", stub.maxISRCs)
 		}
 		if len(lrcRedSem) != 0 {
 			t.Errorf("%d semaphore slots still held after all callers returned", len(lrcRedSem))
+		}
+	})
+}
+
+// holdLRCRedSlots takes n semaphore slots until the test ends, simulating concurrent lookups.
+func holdLRCRedSlots(t *testing.T, n int) {
+	t.Helper()
+	for range n {
+		lrcRedSem <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for range n {
+			<-lrcRedSem
+		}
+	})
+}
+
+func TestFetchLRCRedByISRCSaturated(t *testing.T) {
+	t.Run("checks byModel after the ttml hit when no second slot is free", func(t *testing.T) {
+		const delay = 100 * time.Millisecond
+		stub := &lrcRedStub{ttmlStatus: 200, ttmlBody: lrcRedTestTTML, ttmlDelay: delay, songStatus: 200, songBody: `{"byModel":true}`, songDelay: delay}
+		useLRCRedStub(t, stub, true)
+		holdLRCRedSlots(t, cap(lrcRedSem)-1)
+
+		start := time.Now()
+		_, ok, err := fetchLRCRedByISRC("QZES72218029")
+		if ok || !errors.Is(err, errLRCRedModelSynced) {
+			t.Fatalf("ok=%v err=%v, want the model-synced file skipped", ok, err)
+		}
+		if elapsed := time.Since(start); elapsed < 2*delay {
+			t.Errorf("took %v, the pair ran in parallel without a free slot", elapsed)
+		}
+		if stub.maxRequests > 1 {
+			t.Errorf("%d requests in flight with one free slot", stub.maxRequests)
+		}
+	})
+
+	t.Run("ttml 404 sends no song.json when no second slot is free", func(t *testing.T) {
+		stub := &lrcRedStub{ttmlStatus: 404, songStatus: 200, songBody: `{}`}
+		useLRCRedStub(t, stub, true)
+		holdLRCRedSlots(t, cap(lrcRedSem)-1)
+
+		if _, ok, err := fetchLRCRedByISRC("USUG12004507"); ok || err != nil {
+			t.Fatalf("ok=%v err=%v, want a clean miss", ok, err)
+		}
+		if stub.requested(".song.json") {
+			t.Error("requested .song.json after a .ttml 404")
+		}
+	})
+
+	t.Run("sequential song.json failure still fails closed", func(t *testing.T) {
+		stub := &lrcRedStub{ttmlStatus: 200, ttmlBody: lrcRedTestTTML, songStatus: 500}
+		useLRCRedStub(t, stub, true)
+		holdLRCRedSlots(t, cap(lrcRedSem)-1)
+
+		_, ok, err := fetchLRCRedByISRC("QZES72218029")
+		if ok || !errors.Is(err, errLRCRedFlagCheck) {
+			t.Fatalf("ok=%v err=%v, want a flag check failure", ok, err)
+		}
+	})
+
+	t.Run("every slot is released", func(t *testing.T) {
+		stub := &lrcRedStub{ttmlStatus: 200, ttmlBody: lrcRedTestTTML, songStatus: 200, songBody: `{}`}
+		useLRCRedStub(t, stub, true)
+		for _, held := range []int{0, cap(lrcRedSem) - 1} {
+			func() {
+				for range held {
+					lrcRedSem <- struct{}{}
+				}
+				defer func() {
+					for range held {
+						<-lrcRedSem
+					}
+				}()
+				if _, ok, err := fetchLRCRedByISRC("USUM72403305"); !ok || err != nil {
+					t.Fatalf("held=%d: ok=%v err=%v", held, ok, err)
+				}
+				if len(lrcRedSem) != held {
+					t.Errorf("held=%d: %d slots held after return", held, len(lrcRedSem))
+				}
+			}()
 		}
 	})
 }
@@ -445,8 +524,7 @@ func TestLRCRedByModel(t *testing.T) {
 	t.Run("waits for a semaphore slot", func(t *testing.T) {
 		stub := &lrcRedStub{songStatus: 200, songBody: `{}`}
 		useLRCRedStub(t, stub, true)
-		release := acquireLRCRed(cap(lrcRedSem))
-		defer release()
+		holdLRCRedSlots(t, cap(lrcRedSem))
 
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
@@ -457,4 +535,35 @@ func TestLRCRedByModel(t *testing.T) {
 			t.Errorf("requested %v without a free slot", stub.paths)
 		}
 	})
+}
+
+func TestAISyncCheckReady(t *testing.T) {
+	tests := []struct {
+		name    string
+		flag    bool
+		base    string
+		wantErr string
+	}{
+		{"flag on with a base url", true, "https://lrc.red", ""},
+		{"flag off", false, "https://lrc.red", "FF_LRC_RED_SKIP_AI_SYNCED is off"},
+		{"no base url", true, "", "LRC_RED_BASE_URL is not set"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldBase, oldFlag := lrcRedReadBase, lrcRedSkipAISynced
+			lrcRedReadBase, lrcRedSkipAISynced = tt.base, tt.flag
+			defer func() { lrcRedReadBase, lrcRedSkipAISynced = oldBase, oldFlag }()
+
+			err := AISyncCheckReady()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want it to mention %q", err, tt.wantErr)
+			}
+		})
+	}
 }

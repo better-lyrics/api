@@ -171,7 +171,7 @@ func (s *Server) revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		s.setCachedLyrics(ctx, usedKey, ttmlString, trackDurationMs, score, language, isRTL, source)
 		cdn.Purge(store.SongCacheTag(songName, artistName))
-		if trackMeta != nil {
+		if trackMeta != nil && !trackMeta.LRCRedHasFile {
 			go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.Source, trackMeta.RawAttributes, ttmlString)
 		}
 		go func() {

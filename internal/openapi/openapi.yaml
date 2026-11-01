@@ -599,8 +599,10 @@ paths:
                   deleted:
                     type: integer
                   skipped_no_isrc:
-                    type: integer
-                    description: lrc.red rows with no valid ISRC in their song metadata.
+                    type: array
+                    description: Cache keys of lrc.red rows with no valid ISRC in their song metadata. They cannot be checked.
+                    items:
+                      type: string
                   errors:
                     type: array
                     description: "At most one entry, `ISRC (cache key): reason`, for the row the batch stopped at."
@@ -612,7 +614,7 @@ paths:
                   done:
                     type: boolean
         '400':
-          description: Invalid limit.
+          description: Invalid limit or dry_run.
           headers: *cacheHeaders
           content:
             application/json:

@@ -21,8 +21,8 @@ const (
 	lrcRedSweepPageSize     = 1000
 	lrcRedSweepDefaultLimit = 20
 	lrcRedSweepMaxLimit     = 50
-	// lrcRedSweepBudget plus one 10s lrc.red timeout stays under the server's 60s WriteTimeout.
-	lrcRedSweepBudget = 40 * time.Second
+	// lrcRedSweepBudget plus the 20s grace in lrcRedSweep stays under the server's 60s WriteTimeout.
+	lrcRedSweepBudget = 30 * time.Second
 )
 
 // lrcRedSweepLimiter is shared by every call, so parallel sweeps still read lrc.red at 2/s.
@@ -32,18 +32,6 @@ var lrcRedSweepLimiter = rate.NewLimiter(2, 1)
 func (s *Server) lrcRedSweep(w http.ResponseWriter, r *http.Request) {
 	if !s.adminAuthorized(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if !s.cfg.FeatureFlags.LRCRedSkipAISynced {
-		respond(w, r).Error(http.StatusConflict, map[string]interface{}{
-			"error": "FF_LRC_RED_SKIP_AI_SYNCED is off; the sweep only runs while model-synced lrc.red files are skipped",
-		})
-		return
-	}
-	if s.cfg.Configuration.LRCRedBaseURL == "" {
-		respond(w, r).Error(http.StatusConflict, map[string]interface{}{
-			"error": "LRC_RED_BASE_URL is not set; the sweep has nothing to check against",
-		})
 		return
 	}
 
@@ -59,15 +47,29 @@ func (s *Server) lrcRedSweep(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	dryRun := q.Get("dry_run") == "true"
+	dryRun := false
+	if v, set := q["dry_run"]; set {
+		b, err := strconv.ParseBool(v[0])
+		if err != nil {
+			respond(w, r).Error(http.StatusBadRequest, map[string]interface{}{
+				"error": "dry_run must be true or false",
+			})
+			return
+		}
+		dryRun = b
+	}
+	if err := ttml.AISyncCheckReady(); err != nil {
+		respond(w, r).Error(http.StatusConflict, map[string]interface{}{"error": err.Error()})
+		return
+	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), lrcRedSweepBudget+15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), lrcRedSweepBudget+20*time.Second)
 	defer cancel()
 	start := time.Now()
 
 	cursor := q.Get("after")
-	checked, deleted, skippedNoISRC, done := 0, 0, 0, false
-	modelSynced, sweepErrors := []string{}, []string{}
+	checked, deleted, done := 0, 0, false
+	modelSynced, skippedNoISRC, sweepErrors := []string{}, []string{}, []string{}
 
 scan:
 	for time.Since(start) < lrcRedSweepBudget {
@@ -85,7 +87,7 @@ scan:
 			}
 			isrc := utils.NormalizeISRC(row.ISRC)
 			if isrc == "" {
-				skippedNoISRC++
+				skippedNoISRC = append(skippedNoISRC, row.CacheKey)
 				cursor = row.CacheKey
 				continue
 			}

@@ -190,8 +190,7 @@ func TestLRCRedConcurrencyBounded(t *testing.T) {
 	}
 }
 
-// TestResolveLyricsMissUnconfirmed: a failed byModel check cannot prove lrc.red
-// has nothing, so an Apple miss reached that way must not be cached as permanent.
+// TestResolveLyricsMissUnconfirmed: an Apple miss after a failed byModel check must not be cached as permanent.
 func TestResolveLyricsMissUnconfirmed(t *testing.T) {
 	lrcErr := func(string) (string, bool, error) {
 		return "", false, fmt.Errorf("%w: lrc.red song.json returned status 500", errLRCRedFlagCheck)
@@ -246,4 +245,42 @@ func TestResolveLyricsMissUnconfirmed(t *testing.T) {
 			t.Fatal("only resolveLyrics marks a miss unconfirmed")
 		}
 	})
+}
+
+func TestResolveLyricsModelSyncedSkip(t *testing.T) {
+	skipped := func(string) (string, bool, error) { return "", false, errLRCRedModelSynced }
+
+	t.Run("falls through to Apple", func(t *testing.T) {
+		ttml, source, err := resolveLyrics(trackWithISRC("QZES72218029", htsPtr(true)), false, skipped, func() (string, error) { return "APPLE", nil })
+		if err != nil || ttml != "APPLE" || source != SourceApple {
+			t.Fatalf("got (%q, %q, %v), want (APPLE, apple, nil)", ttml, source, err)
+		}
+	})
+
+	t.Run("an Apple miss after it is a confirmed miss", func(t *testing.T) {
+		_, _, err := resolveLyrics(trackWithISRC("QZES72218029", htsPtr(false)), false, skipped, func() (string, error) { return "APPLE", nil })
+		if err == nil || MissUnconfirmed(err) {
+			t.Fatalf("err = %v, want a permanent miss", err)
+		}
+	})
+}
+
+func TestLRCRedHasUnservedFile(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"model-synced skip", errLRCRedModelSynced, true},
+		{"failed byModel check after a ttml hit", fmt.Errorf("%w: status 500", errLRCRedFlagCheck), true},
+		{"clean miss", nil, false},
+		{"ttml error as on master", errors.New("lrc.red returned status 500"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lrcRedHasUnservedFile(tt.err); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
