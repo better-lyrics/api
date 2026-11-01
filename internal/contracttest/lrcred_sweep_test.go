@@ -399,3 +399,43 @@ func TestConformanceNewLRCRedDeleteRevalidatesProxy(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+func adminGet(t *testing.T, url string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Authorization", "test-admin-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s: status %d", url, resp.StatusCode)
+	}
+}
+
+func TestConformanceNewLRCRedKeepsRowsWhileAppleIsDown(t *testing.T) {
+	env := stubEnv(upstreamStub(t).URL)
+	env["CIRCUIT_BREAKER_THRESHOLD"] = "1"
+	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
+	seedSweepRows(t)
+	adminGet(t, base+"/circuit-breaker/simulate-failure")
+
+	if _, status := getLyricsTTML(t, base, "AI Synced", "AI Artist"); status != "HIT" {
+		t.Fatalf("status %s, want HIT", status)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if _, ok := cachedTTML(t, "AI Synced", "AI Artist"); !ok {
+		t.Fatal("deleted the cached copy while the Apple circuit breaker was open")
+	}
+	if res := postSweep(t, base, "limit=50"); res.Deleted != 0 || len(res.Errors) == 0 {
+		t.Fatalf("sweep while Apple is down: deleted %d, errors %v; want no deletes and an error", res.Deleted, res.Errors)
+	}
+
+	adminGet(t, base+"/circuit-breaker/reset")
+	time.Sleep(600 * time.Millisecond)
+	if _, status := getLyricsTTML(t, base, "AI Synced", "AI Artist"); status != "HIT" {
+		t.Fatalf("status %s, want HIT", status)
+	}
+	waitUncached(t, "AI Synced", "AI Artist")
+}

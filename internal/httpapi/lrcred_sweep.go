@@ -94,7 +94,12 @@ func (s *Server) lrcRedCopyIsModelSynced(ctx context.Context, cacheKey, isrc str
 	return current, false, nil
 }
 
+var errLRCRedAppleDown = errors.New("Apple circuit breaker is not closed; keeping the cached copy until Apple can replace it")
+
 func (s *Server) dropLRCRedRow(ctx context.Context, cacheKey, isrc, aiTTML string) (bool, error) {
+	if state, _, _ := ttml.GetCircuitBreakerStats(); state == "OPEN" || state == "HALF-OPEN" {
+		return false, errLRCRedAppleDown
+	}
 	ok, err := s.store.DeleteLyricsIfUnchanged(ctx, cacheKey, providers.SourceLRCRed, aiTTML)
 	if err != nil || !ok {
 		return false, err
@@ -149,6 +154,9 @@ func (s *Server) checkLRCRedCopy(cacheKey string, cached store.CachedLyrics) {
 			return
 		}
 		if _, err := s.dropLRCRedRow(ctx, cacheKey, isrc, aiTTML); err != nil {
+			if errors.Is(err, errLRCRedAppleDown) {
+				lrcRedChecked.release(cacheKey)
+			}
 			log.Warnf("%s lrc.red check could not delete %s: %v", logcolors.LogCacheClear, cacheKey, err)
 		}
 	}()
