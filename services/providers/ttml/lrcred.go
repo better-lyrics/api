@@ -140,12 +140,17 @@ func fetchLRCRedTTML(ctx context.Context, isrc string) (string, bool, error) {
 	}
 }
 
+var (
+	errAISyncFlagOff = errors.New("FF_LRC_RED_SKIP_AI_SYNCED is off; the sweep only runs while model-synced lrc.red files are skipped")
+	errAISyncNoBase  = errors.New("LRC_RED_BASE_URL is not set; the sweep has nothing to check against")
+)
+
 func AISyncCheckReady() error {
 	if !lrcRedSkipAISynced {
-		return errors.New("FF_LRC_RED_SKIP_AI_SYNCED is off; the sweep only runs while model-synced lrc.red files are skipped")
+		return errAISyncFlagOff
 	}
 	if lrcRedReadBase == "" {
-		return errors.New("LRC_RED_BASE_URL is not set; the sweep has nothing to check against")
+		return errAISyncNoBase
 	}
 	return nil
 }

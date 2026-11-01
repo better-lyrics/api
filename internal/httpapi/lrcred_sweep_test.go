@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"lyrics-api-go/config"
+	"lyrics-api-go/internal/store"
+	"lyrics-api-go/services/providers"
 )
 
 func sweepTestServer() http.Handler {
@@ -98,13 +100,13 @@ func TestCheckedKeys(t *testing.T) {
 	t.Run("regression: looking without claiming does not use up the cap", func(t *testing.T) {
 		c := &checkedKeys{max: 2}
 		for range 100 {
-			if c.seen("a") {
+			if isClaimed(c, "a") {
 				t.Fatal("unclaimed key reported as seen")
 			}
 		}
 		c.claim("a")
 		c.claim("b")
-		if !c.seen("a") || !c.seen("b") {
+		if !isClaimed(c, "a") || !isClaimed(c, "b") {
 			t.Fatal("claimed keys forgotten before the cap was passed")
 		}
 	})
@@ -113,12 +115,12 @@ func TestCheckedKeys(t *testing.T) {
 		c := &checkedKeys{max: 2}
 		c.claim("a")
 		c.release("a")
-		if c.seen("a") {
+		if isClaimed(c, "a") {
 			t.Fatal("released key still seen")
 		}
 		c.claim("b")
 		c.claim("c")
-		if !c.seen("b") || !c.seen("c") {
+		if !isClaimed(c, "b") || !isClaimed(c, "c") {
 			t.Fatal("a released key still counted toward the cap")
 		}
 		if !c.claim("a") {
@@ -143,7 +145,7 @@ func TestCheckedKeys(t *testing.T) {
 		wg.Wait()
 		held := 0
 		for i := range 500 {
-			if c.seen(fmt.Sprintf("k%d", i)) {
+			if isClaimed(c, fmt.Sprintf("k%d", i)) {
 				held++
 			}
 		}
@@ -157,8 +159,27 @@ func TestCheckedKeys(t *testing.T) {
 		c.claim("a")
 		c.claim("b")
 		c.claim("c")
-		if c.seen("a") || c.seen("b") {
+		if isClaimed(c, "a") || isClaimed(c, "b") {
 			t.Fatal("keys survived passing the cap")
 		}
 	})
+}
+
+func TestCheckLRCRedCopyIsFreeWhenBlocked(t *testing.T) {
+	s := New(nil, config.Config{})
+	cached := store.CachedLyrics{Source: providers.SourceLRCRed}
+	allocs := testing.AllocsPerRun(100, func() { s.checkLRCRedCopy("ttml_lyrics:blocked song tester", cached) })
+	if allocs != 0 {
+		t.Errorf("blocked check allocated %.0f times per hit, want 0", allocs)
+	}
+	if isClaimed(lrcRedChecked, "ttml_lyrics:blocked song tester") {
+		t.Error("blocked check claimed the key")
+	}
+}
+
+func isClaimed(c *checkedKeys, key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.m[key]
+	return ok
 }

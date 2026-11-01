@@ -23,7 +23,7 @@ func (s *Store) ScanLyricsBySource(ctx context.Context, source, after string, pa
 		)
 		SELECT p.cache_key, p.source = $3, coalesce(m.isrc, '')
 		FROM page p
-		LEFT JOIN song_metadata m ON m.cache_key = p.cache_key
+		LEFT JOIN song_metadata m ON m.cache_key = p.cache_key AND p.source = $3
 		ORDER BY p.cache_key`,
 		after, pageSize, source)
 	if err != nil {

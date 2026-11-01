@@ -615,7 +615,7 @@ paths:
                       type: string
                   errors:
                     type: array
-                    description: "At most one entry, `ISRC (cache key): reason`, for the row the batch stopped at."
+                    description: "At most one entry, for why the batch stopped early: `ISRC (cache key): reason` for a failed row (also in `failed_key`), `scan after \"<cursor>\" failed: reason`, or `stopped before <cache key>: reason` when the time budget or client ran out."
                     items:
                       type: string
                   next_after:

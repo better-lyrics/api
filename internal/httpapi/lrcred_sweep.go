@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -35,13 +36,6 @@ type checkedKeys struct {
 	max int
 }
 
-func (c *checkedKeys) seen(key string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.m[key]
-	return ok
-}
-
 func (c *checkedKeys) claim(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -61,10 +55,12 @@ func (c *checkedKeys) release(key string) {
 	delete(c.m, key)
 }
 
+var errLRCRedCheckCacheOnly = errors.New("FF_CACHE_ONLY_MODE is on; a deleted row could not be fetched again")
+
 // lrcRedCheckBlocked also refuses in cache-only mode, where a deleted row could never be fetched again.
 func (s *Server) lrcRedCheckBlocked() error {
 	if s.cfg.FeatureFlags.CacheOnlyMode {
-		return fmt.Errorf("FF_CACHE_ONLY_MODE is on; a deleted row could not be fetched again")
+		return errLRCRedCheckCacheOnly
 	}
 	return ttml.AISyncCheckReady()
 }
@@ -109,14 +105,7 @@ func (s *Server) dropLRCRedRow(ctx context.Context, cacheKey, isrc, aiTTML strin
 
 // checkLRCRedCopy checks each key once per process: a cached copy never changes, so a second check learns nothing.
 func (s *Server) checkLRCRedCopy(cacheKey string, cached store.CachedLyrics) {
-	if cached.Source != providers.SourceLRCRed || lrcRedChecked.seen(cacheKey) || s.lrcRedCheckBlocked() != nil {
-		return
-	}
-	if !lrcRedChecked.claim(cacheKey) {
-		return
-	}
-	if !lrcRedCheckLimiter.Allow() {
-		lrcRedChecked.release(cacheKey)
+	if cached.Source != providers.SourceLRCRed || s.lrcRedCheckBlocked() != nil || !lrcRedChecked.claim(cacheKey) {
 		return
 	}
 	// A failed check is not retried in this process, so one hot failing key cannot take every token; the sweep covers it.
@@ -132,6 +121,10 @@ func (s *Server) checkLRCRedCopy(cacheKey string, cached store.CachedLyrics) {
 			return
 		}
 		isrc := utils.NormalizeISRC(meta.ISRC)
+		if !lrcRedCheckLimiter.Allow() {
+			lrcRedChecked.release(cacheKey)
+			return
+		}
 		aiTTML, _, err := s.lrcRedCopyIsModelSynced(ctx, cacheKey, isrc)
 		if err != nil {
 			log.Warnf("%s lrc.red check failed for ISRC %s: %v", logcolors.LogCacheClear, isrc, err)
@@ -236,8 +229,6 @@ scan:
 				if ok {
 					deleted++
 					modelSynced = append(modelSynced, isrc)
-				} else {
-					keptChanged = append(keptChanged, isrc)
 				}
 			}
 			cursor = row.CacheKey

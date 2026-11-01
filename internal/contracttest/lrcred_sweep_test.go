@@ -288,6 +288,9 @@ func TestConformanceNewLRCRedCheckOnCacheHit(t *testing.T) {
 	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
 	seedSweepRows(t)
 
+	if _, status := getLyricsTTML(t, base, "No Meta", "Tester"); status != "HIT" {
+		t.Fatalf("No Meta: status %s, want HIT", status)
+	}
 	if ttml, status := getLyricsTTML(t, base, "AI Synced", "AI Artist"); status != "HIT" || ttml != "<tt>LRCRED</tt>" {
 		t.Fatalf("first request got (%q, %s), want the cached copy served without delay", ttml, status)
 	}
