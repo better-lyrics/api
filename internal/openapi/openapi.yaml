@@ -548,7 +548,8 @@ paths:
       description: >-
         Checks the `.song.json` of each cached row sourced from lrc.red and deletes the
         rows marked `byModel`, so the next request resolves them from Apple. Each call
-        handles up to `limit` rows after the `after` cursor at 2 lrc.red reads per second.
+        handles up to `limit` rows after the `after` cursor, checking at most 2 rows per second
+        (up to 4 lrc.red reads, shared with the check that runs on cache hits).
         A row is deleted only when its cached copy is byte-identical to lrc.red's current
         model-synced file. Call again with `next_after` until `done` is true. A failed check
         or delete stops the batch before that row, so the next call retries it; pass

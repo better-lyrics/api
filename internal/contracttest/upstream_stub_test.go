@@ -178,7 +178,6 @@ func missScenarios() []Scenario {
 	}
 }
 
-// TestConformanceNewUnconfirmedMissIsTransient: a .song.json failure plus an Apple miss keeps the 404 but caches it for hours, not days.
 func TestConformanceNewUnconfirmedMissIsTransient(t *testing.T) {
 	stub := upstreamStub(t)
 	base := newServerBase(t, stubEnv(stub.URL), seedLyricsData, seedNegativeData)

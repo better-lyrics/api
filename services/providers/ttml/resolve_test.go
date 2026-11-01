@@ -190,7 +190,6 @@ func TestLRCRedConcurrencyBounded(t *testing.T) {
 	}
 }
 
-// TestResolveLyricsMissUnconfirmed: an Apple miss after a failed byModel check must not be cached as permanent.
 func TestResolveLyricsMissUnconfirmed(t *testing.T) {
 	lrcErr := func(string) (string, bool, error) {
 		return "", false, fmt.Errorf("%w: lrc.red song.json returned status 500", errLRCRedFlagCheck)

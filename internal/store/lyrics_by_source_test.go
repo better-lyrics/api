@@ -20,12 +20,12 @@ func seedSourcedLyrics(t *testing.T, cacheKey, source, isrc string) {
 	}
 }
 
-func scanAllLRCRed(t *testing.T, pageSize int) ([]LRCRedRow, int) {
+func scanAllBySource(t *testing.T, pageSize int) ([]SourcedRow, int) {
 	t.Helper()
-	var all []LRCRedRow
+	var all []SourcedRow
 	after, pages := "", 0
 	for {
-		rows, next, err := testStore.ScanLRCRedLyrics(context.Background(), after, pageSize)
+		rows, next, err := testStore.ScanLyricsBySource(context.Background(), "lrc.red", after, pageSize)
 		if err != nil {
 			t.Fatalf("scan after %q: %v", after, err)
 		}
@@ -41,7 +41,7 @@ func scanAllLRCRed(t *testing.T, pageSize int) ([]LRCRedRow, int) {
 	}
 }
 
-func TestScanLRCRedLyrics(t *testing.T) {
+func TestScanLyricsBySource(t *testing.T) {
 	resetTables(t)
 	seedSourcedLyrics(t, "ttml_lyrics:a song artist", "lrc.red", "QZES72218029")
 	seedSourcedLyrics(t, "ttml_lyrics:b song artist", "apple", "USUM72403305")
@@ -50,14 +50,14 @@ func TestScanLRCRedLyrics(t *testing.T) {
 	seedSourcedLyrics(t, "ttml_lyrics:e song artist", "lrc.red", "")
 	seedSourcedLyrics(t, "qq_lyrics:f song artist", "", "")
 
-	want := []LRCRedRow{
+	want := []SourcedRow{
 		{CacheKey: "ttml_lyrics:a song artist", ISRC: "QZES72218029"},
 		{CacheKey: "ttml_lyrics:d song artist [album] [200s]", ISRC: "USUG12004507"},
 		{CacheKey: "ttml_lyrics:e song artist"},
 	}
 
 	for _, pageSize := range []int{1, 2, 4, 100} {
-		got, pages := scanAllLRCRed(t, pageSize)
+		got, pages := scanAllBySource(t, pageSize)
 		if len(got) != len(want) {
 			t.Fatalf("page size %d: got %d rows %+v, want %d", pageSize, len(got), got, len(want))
 		}
@@ -72,7 +72,7 @@ func TestScanLRCRedLyrics(t *testing.T) {
 	}
 
 	t.Run("resumes from a cursor", func(t *testing.T) {
-		rows, _, err := testStore.ScanLRCRedLyrics(context.Background(), "ttml_lyrics:b song artist", 100)
+		rows, _, err := testStore.ScanLyricsBySource(context.Background(), "lrc.red", "ttml_lyrics:b song artist", 100)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,21 +83,31 @@ func TestScanLRCRedLyrics(t *testing.T) {
 
 	t.Run("empty table ends immediately", func(t *testing.T) {
 		resetTables(t)
-		rows, next, err := testStore.ScanLRCRedLyrics(context.Background(), "", 10)
+		rows, next, err := testStore.ScanLyricsBySource(context.Background(), "lrc.red", "", 10)
 		if err != nil || len(rows) != 0 || next != "" {
 			t.Fatalf("got (%v, %q, %v), want no rows and an empty cursor", rows, next, err)
 		}
 	})
 }
 
-func TestDeleteLRCRedLyrics(t *testing.T) {
+func TestDeleteLyricsIfUnchanged(t *testing.T) {
 	resetTables(t)
 	ctx := context.Background()
 	seedSourcedLyrics(t, "ttml_lyrics:ai song artist", "lrc.red", "QZES72218029")
 	seedSourcedLyrics(t, "ttml_lyrics:apple song artist", "apple", "USUM72403305")
 	before := counterValue(t, "ttml")
 
-	deleted, err := testStore.DeleteLRCRedLyrics(ctx, "ttml_lyrics:ai song artist")
+	t.Run("keeps a row whose content changed since it was compared", func(t *testing.T) {
+		deleted, err := testStore.DeleteLyricsIfUnchanged(ctx, "ttml_lyrics:ai song artist", "lrc.red", "<tt>newer</tt>")
+		if err != nil || deleted {
+			t.Fatalf("deleted=%v err=%v, want the changed row kept", deleted, err)
+		}
+		if _, ok, _ := testStore.GetLyricsExact(ctx, "ttml_lyrics:ai song artist"); !ok {
+			t.Fatal("changed row was deleted")
+		}
+	})
+
+	deleted, err := testStore.DeleteLyricsIfUnchanged(ctx, "ttml_lyrics:ai song artist", "lrc.red", "<tt/>")
 	if err != nil || !deleted {
 		t.Fatalf("delete lrc.red row: deleted=%v err=%v", deleted, err)
 	}
@@ -109,7 +119,7 @@ func TestDeleteLRCRedLyrics(t *testing.T) {
 	}
 
 	t.Run("refuses a row rewritten from another source", func(t *testing.T) {
-		deleted, err := testStore.DeleteLRCRedLyrics(ctx, "ttml_lyrics:apple song artist")
+		deleted, err := testStore.DeleteLyricsIfUnchanged(ctx, "ttml_lyrics:apple song artist", "lrc.red", "<tt/>")
 		if err != nil || deleted {
 			t.Fatalf("deleted=%v err=%v, want the apple row kept", deleted, err)
 		}
@@ -120,7 +130,7 @@ func TestDeleteLRCRedLyrics(t *testing.T) {
 
 	t.Run("is idempotent", func(t *testing.T) {
 		n := counterValue(t, "ttml")
-		deleted, err := testStore.DeleteLRCRedLyrics(ctx, "ttml_lyrics:ai song artist")
+		deleted, err := testStore.DeleteLyricsIfUnchanged(ctx, "ttml_lyrics:ai song artist", "lrc.red", "<tt/>")
 		if err != nil || deleted {
 			t.Fatalf("second delete: deleted=%v err=%v", deleted, err)
 		}

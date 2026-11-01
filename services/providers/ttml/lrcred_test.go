@@ -627,3 +627,21 @@ func TestLRCRedTTML(t *testing.T) {
 		}
 	})
 }
+
+func TestOutOfLookupReadsLeaveHalfTheSlots(t *testing.T) {
+	stub := &lrcRedStub{ttmlStatus: 200, ttmlBody: lrcRedTestTTML, songStatus: 200, songBody: `{}`}
+	useLRCRedStub(t, stub, true)
+	holdLRCRedSlots(t, cap(lrcRedSem)/2)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := LRCRedByModel(ctx, "QZES72218029"); err == nil {
+		t.Fatal("LRCRedByModel took a slot with half the semaphore in use")
+	}
+	if _, _, err := LRCRedTTML(ctx, "QZES72218029"); err == nil {
+		t.Fatal("LRCRedTTML took a slot with half the semaphore in use")
+	}
+	if len(stub.paths) != 0 {
+		t.Errorf("requested %v while lookups needed the slots", stub.paths)
+	}
+}

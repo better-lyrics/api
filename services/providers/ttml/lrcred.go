@@ -150,7 +150,7 @@ func AISyncCheckReady() error {
 	return nil
 }
 
-// LRCRedByModel and LRCRedTTML take their own lrcRedSem slot because their callers hold none.
+// LRCRedByModel and LRCRedTTML serve background checks, which hold no slot of their own.
 func LRCRedByModel(ctx context.Context, isrc string) (bool, error) {
 	release, err := acquireLRCRedSlot(ctx)
 	if err != nil {
@@ -169,15 +169,26 @@ func LRCRedTTML(ctx context.Context, isrc string) (string, bool, error) {
 	return fetchLRCRedTTML(ctx, isrc)
 }
 
+// acquireLRCRedSlot waits until the semaphore is under half full, so background reads never take the slots lookups need.
 func acquireLRCRedSlot(ctx context.Context) (release func(), err error) {
 	if lrcRedReadBase == "" {
 		return nil, errors.New("LRC_RED_BASE_URL is not set")
 	}
-	select {
-	case lrcRedSem <- struct{}{}:
-		return func() { <-lrcRedSem }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if len(lrcRedSem) < cap(lrcRedSem)/2 {
+			select {
+			case lrcRedSem <- struct{}{}:
+				return func() { <-lrcRedSem }, nil
+			default:
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-tick.C:
+		}
 	}
 }
 

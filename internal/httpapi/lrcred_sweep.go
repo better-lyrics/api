@@ -30,39 +30,60 @@ const (
 	lrcRedCheckedMax = 200_000
 )
 
+type checkedKeys struct {
+	m   sync.Map
+	n   atomic.Int64
+	max int64
+}
+
+func (c *checkedKeys) seen(key string) bool {
+	_, ok := c.m.Load(key)
+	return ok
+}
+
+func (c *checkedKeys) claim(key string) bool {
+	if _, loaded := c.m.LoadOrStore(key, struct{}{}); loaded {
+		return false
+	}
+	if c.n.Add(1) > c.max {
+		c.m.Clear()
+		c.n.Store(0)
+		c.m.Store(key, struct{}{})
+		c.n.Store(1)
+	}
+	return true
+}
+
 // lrcRedCheckLimiter is shared by the sweep and the cache-hit check, so together they read lrc.red at 2/s.
 var lrcRedCheckLimiter = rate.NewLimiter(2, 1)
 
-var (
-	lrcRedCheckedKeys  sync.Map
-	lrcRedCheckedCount atomic.Int64
-)
+var lrcRedChecked = &checkedKeys{max: lrcRedCheckedMax}
 
 // lrcRedCopyIsModelSynced compares bytes because byModel describes lrc.red's file today, not a copy cached before an AI sync.
-func (s *Server) lrcRedCopyIsModelSynced(ctx context.Context, cacheKey, isrc string) (synced, changed bool, err error) {
+func (s *Server) lrcRedCopyIsModelSynced(ctx context.Context, cacheKey, isrc string) (aiTTML string, changed bool, err error) {
 	byModel, err := ttml.LRCRedByModel(ctx, isrc)
 	if err != nil || !byModel {
-		return false, false, err
+		return "", false, err
 	}
 	cached, ok, err := s.store.GetLyricsExact(ctx, cacheKey)
 	if err != nil || !ok {
-		return false, false, err
+		return "", false, err
 	}
 	current, found, err := ttml.LRCRedTTML(ctx, isrc)
 	if err != nil {
-		return false, false, err
+		return "", false, err
 	}
 	if !found {
-		return false, false, fmt.Errorf("lrc.red flags %s as model-synced but has no .ttml", isrc)
+		return "", false, fmt.Errorf("lrc.red flags %s as model-synced but has no .ttml", isrc)
 	}
 	if current != cached.TTML {
-		return false, true, nil
+		return "", true, nil
 	}
-	return true, false, nil
+	return current, false, nil
 }
 
-func (s *Server) dropLRCRedRow(ctx context.Context, cacheKey, isrc string) (bool, error) {
-	ok, err := s.store.DeleteLRCRedLyrics(ctx, cacheKey)
+func (s *Server) dropLRCRedRow(ctx context.Context, cacheKey, isrc, aiTTML string) (bool, error) {
+	ok, err := s.store.DeleteLyricsIfUnchanged(ctx, cacheKey, providers.SourceLRCRed, aiTTML)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -73,26 +94,18 @@ func (s *Server) dropLRCRedRow(ctx context.Context, cacheKey, isrc string) (bool
 
 // checkLRCRedCopy checks each key once per process: a cached copy never changes, so a second check learns nothing.
 func (s *Server) checkLRCRedCopy(cacheKey string, cached store.CachedLyrics) {
-	if cached.Source != providers.SourceLRCRed || ttml.AISyncCheckReady() != nil {
+	if cached.Source != providers.SourceLRCRed || ttml.AISyncCheckReady() != nil || lrcRedChecked.seen(cacheKey) {
 		return
 	}
-	if _, seen := lrcRedCheckedKeys.LoadOrStore(cacheKey, struct{}{}); seen {
+	if !lrcRedCheckLimiter.Allow() || !lrcRedChecked.claim(cacheKey) {
 		return
 	}
-	if lrcRedCheckedCount.Add(1) > lrcRedCheckedMax {
-		lrcRedCheckedKeys.Clear()
-		lrcRedCheckedCount.Store(0)
-	}
-	if !lrcRedCheckLimiter.Allow() {
-		lrcRedCheckedKeys.Delete(cacheKey)
-		return
-	}
+	// A failed check is not retried in this process, so one hot failing key cannot take every token; the sweep covers it.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		meta, ok, err := s.store.GetSongMetadata(ctx, cacheKey)
 		if err != nil {
-			lrcRedCheckedKeys.Delete(cacheKey)
 			log.Warnf("%s lrc.red check could not read metadata for %s: %v", logcolors.LogCacheClear, cacheKey, err)
 			return
 		}
@@ -100,17 +113,15 @@ func (s *Server) checkLRCRedCopy(cacheKey string, cached store.CachedLyrics) {
 			return
 		}
 		isrc := utils.NormalizeISRC(meta.ISRC)
-		synced, _, err := s.lrcRedCopyIsModelSynced(ctx, cacheKey, isrc)
+		aiTTML, _, err := s.lrcRedCopyIsModelSynced(ctx, cacheKey, isrc)
 		if err != nil {
-			lrcRedCheckedKeys.Delete(cacheKey)
 			log.Warnf("%s lrc.red check failed for ISRC %s: %v", logcolors.LogCacheClear, isrc, err)
 			return
 		}
-		if !synced {
+		if aiTTML == "" {
 			return
 		}
-		if _, err := s.dropLRCRedRow(ctx, cacheKey, isrc); err != nil {
-			lrcRedCheckedKeys.Delete(cacheKey)
+		if _, err := s.dropLRCRedRow(ctx, cacheKey, isrc, aiTTML); err != nil {
 			log.Warnf("%s lrc.red check could not delete %s: %v", logcolors.LogCacheClear, cacheKey, err)
 		}
 	}()
@@ -163,7 +174,7 @@ func (s *Server) lrcRedSweep(w http.ResponseWriter, r *http.Request) {
 
 scan:
 	for handled() < limit && time.Since(start) < lrcRedSweepBudget {
-		rows, next, err := s.store.ScanLRCRedLyrics(ctx, cursor, lrcRedSweepPageSize)
+		rows, next, err := s.store.ScanLyricsBySource(ctx, providers.SourceLRCRed, cursor, lrcRedSweepPageSize)
 		if err != nil {
 			log.Errorf("%s lrc.red sweep scan after %q failed: %v", logcolors.LogCacheClear, cursor, err)
 			sweepErrors = append(sweepErrors, fmt.Sprintf("scan after %q failed: %v", cursor, err))
@@ -184,7 +195,7 @@ scan:
 				break scan
 			}
 			checked++
-			synced, changed, err := s.lrcRedCopyIsModelSynced(ctx, row.CacheKey, isrc)
+			aiTTML, changed, err := s.lrcRedCopyIsModelSynced(ctx, row.CacheKey, isrc)
 			if err != nil {
 				failedKey = row.CacheKey
 				sweepErrors = append(sweepErrors, fmt.Sprintf("%s (%s): %v", isrc, row.CacheKey, err))
@@ -193,11 +204,11 @@ scan:
 			if changed {
 				keptChanged = append(keptChanged, isrc)
 			}
-			if synced {
+			if aiTTML != "" {
 				modelSynced = append(modelSynced, isrc)
 			}
-			if synced && !dryRun {
-				ok, err := s.dropLRCRedRow(ctx, row.CacheKey, isrc)
+			if aiTTML != "" && !dryRun {
+				ok, err := s.dropLRCRedRow(ctx, row.CacheKey, isrc, aiTTML)
 				if err != nil {
 					failedKey = row.CacheKey
 					sweepErrors = append(sweepErrors, fmt.Sprintf("%s (%s): delete failed: %v", isrc, row.CacheKey, err))

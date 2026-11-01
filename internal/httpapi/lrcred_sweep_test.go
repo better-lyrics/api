@@ -63,3 +63,42 @@ func TestLRCRedSweepRefusals(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckedKeys(t *testing.T) {
+	t.Run("a key is claimed once", func(t *testing.T) {
+		c := &checkedKeys{max: 10}
+		if !c.claim("a") {
+			t.Fatal("first claim refused")
+		}
+		if c.claim("a") {
+			t.Fatal("second claim of the same key allowed")
+		}
+		if !c.claim("b") {
+			t.Fatal("another key refused")
+		}
+	})
+
+	t.Run("regression: looking without claiming does not use up the cap", func(t *testing.T) {
+		c := &checkedKeys{max: 2}
+		for range 100 {
+			if c.seen("a") {
+				t.Fatal("unclaimed key reported as seen")
+			}
+		}
+		c.claim("a")
+		c.claim("b")
+		if !c.seen("a") || !c.seen("b") {
+			t.Fatal("claimed keys forgotten before the cap was passed")
+		}
+	})
+
+	t.Run("passing the cap forgets every key", func(t *testing.T) {
+		c := &checkedKeys{max: 2}
+		c.claim("a")
+		c.claim("b")
+		c.claim("c")
+		if c.seen("a") || c.seen("b") {
+			t.Fatal("keys survived passing the cap")
+		}
+	})
+}
