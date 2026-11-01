@@ -540,6 +540,95 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /cache/lrcred-sweep:
+    post:
+      tags: [Cache]
+      operationId: lrcRedSweep
+      summary: Delete cached lyrics that lrc.red synced with a model
+      description: >-
+        Checks the `.song.json` of each cached row sourced from lrc.red and deletes the
+        rows marked `byModel`, so the next request resolves them from Apple. Each call
+        checks up to `limit` rows after the `after` cursor at 2 lrc.red reads per second.
+        Call again with `next_after` until `done` is true. Rows whose check fails are
+        listed in `errors` and kept. Refused while `FF_LRC_RED_SKIP_AI_SYNCED` is off.
+      security:
+        - adminToken: []
+      parameters:
+        - name: after
+          in: query
+          description: Cache key cursor from the previous call's `next_after`. Empty starts from the beginning.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum rows to check against lrc.red in this call.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: dry_run
+          in: query
+          description: Report model-synced ISRCs without deleting anything.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: One batch of the sweep.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [dry_run, checked, model_synced, deleted, skipped_no_isrc, errors, next_after, done]
+                properties:
+                  dry_run:
+                    type: boolean
+                  checked:
+                    type: integer
+                    description: Rows whose lrc.red `.song.json` was requested.
+                  model_synced:
+                    type: array
+                    description: ISRCs whose lrc.red file was synced by a model.
+                    items:
+                      type: string
+                  deleted:
+                    type: integer
+                  skipped_no_isrc:
+                    type: integer
+                    description: lrc.red rows with no valid ISRC in their song metadata.
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                  next_after:
+                    type: string
+                    description: Cursor for the next call. Empty when `done` is true.
+                  done:
+                    type: boolean
+        '400':
+          description: Invalid limit.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: FF_LRC_RED_SKIP_AI_SYNCED is off.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /cache/clear:
     get:
       tags: [Cache]

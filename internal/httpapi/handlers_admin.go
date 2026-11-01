@@ -324,6 +324,7 @@ func (s *Server) cacheHelp(w http.ResponseWriter, r *http.Request) {
 			{"path": "/cache/keys", "method": "GET", "auth": "Authorization header required", "description": "List and search cache keys"},
 			{"path": "/cache/clear", "method": "GET", "auth": "Authorization header required", "description": "Clear all cached lyrics and negative entries"},
 			{"path": "/cache/clear/{provider}", "method": "GET", "auth": "Authorization header required", "description": "Clear cached entries for one provider"},
+			{"path": "/cache/lrcred-sweep", "method": "POST", "auth": "Authorization header required", "description": "Delete cached lyrics that lrc.red synced with a model. Params: after, limit, dry_run"},
 		},
 		"cache_key_format": map[string]string{
 			"lyrics":   "ttml_lyrics:{song} {artist} [{album}] [{duration}s]",

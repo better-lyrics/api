@@ -47,6 +47,7 @@ func (s *Server) setupRoutes(router *mux.Router) {
 	router.HandleFunc("/cache/lookup", s.cacheLookup)
 	router.HandleFunc("/cache/debug", s.cacheDebug)
 	router.HandleFunc("/cache/keys", s.cacheKeys)
+	router.HandleFunc("/cache/lrcred-sweep", s.lrcRedSweep).Methods("POST")
 	router.HandleFunc("/cache/dump", s.retiredEndpoint)
 
 	router.HandleFunc("/health", s.getHealthStatus)
