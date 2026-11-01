@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"lyrics-api-go/config"
@@ -121,6 +123,32 @@ func TestCheckedKeys(t *testing.T) {
 		}
 		if !c.claim("a") {
 			t.Fatal("released key could not be claimed again")
+		}
+	})
+
+	t.Run("regression: concurrent claims never hold more than the cap", func(t *testing.T) {
+		c := &checkedKeys{max: 10}
+		var wg sync.WaitGroup
+		for i := range 500 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				key := fmt.Sprintf("k%d", i)
+				c.claim(key)
+				if i%3 == 0 {
+					c.release(key)
+				}
+			}()
+		}
+		wg.Wait()
+		held := 0
+		for i := range 500 {
+			if c.seen(fmt.Sprintf("k%d", i)) {
+				held++
+			}
+		}
+		if held > c.max {
+			t.Fatalf("%d keys held, cap is %d", held, c.max)
 		}
 	})
 

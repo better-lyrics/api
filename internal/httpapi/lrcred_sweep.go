@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"lyrics-api-go/internal/store"
@@ -31,33 +30,35 @@ const (
 )
 
 type checkedKeys struct {
-	m   sync.Map
-	n   atomic.Int64
-	max int64
+	mu  sync.Mutex
+	m   map[string]struct{}
+	max int
 }
 
 func (c *checkedKeys) seen(key string) bool {
-	_, ok := c.m.Load(key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.m[key]
 	return ok
 }
 
 func (c *checkedKeys) claim(key string) bool {
-	if _, loaded := c.m.LoadOrStore(key, struct{}{}); loaded {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.m[key]; ok {
 		return false
 	}
-	if c.n.Add(1) > c.max {
-		c.m.Clear()
-		c.n.Store(0)
-		c.m.Store(key, struct{}{})
-		c.n.Store(1)
+	if c.m == nil || len(c.m) >= c.max {
+		c.m = make(map[string]struct{})
 	}
+	c.m[key] = struct{}{}
 	return true
 }
 
 func (c *checkedKeys) release(key string) {
-	if _, loaded := c.m.LoadAndDelete(key); loaded {
-		c.n.Add(-1)
-	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.m, key)
 }
 
 // lrcRedCheckBlocked also refuses in cache-only mode, where a deleted row could never be fetched again.
