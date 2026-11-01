@@ -12,7 +12,7 @@ type LRCRedRow struct {
 	ISRC     string
 }
 
-// ScanLRCRedLyrics returns the lrc.red rows among the next pageSize rows after the cursor; source has no index, so each page walks the primary key. next is "" at the end.
+// source has no index, so each page walks the primary key and filters to keep every query bounded.
 func (s *Store) ScanLRCRedLyrics(ctx context.Context, after string, pageSize int) (rows []LRCRedRow, next string, err error) {
 	q, err := s.pool.Query(ctx, `
 		WITH page AS (

@@ -27,10 +27,8 @@ var lrcRedSkipAISynced = config.Get().FeatureFlags.LRCRedSkipAISynced
 // errLRCRedFlagCheck marks a failed byModel lookup, the only lrc.red error that leaves an Apple miss unconfirmed.
 var errLRCRedFlagCheck = errors.New("lrc.red byModel check failed")
 
-// errLRCRedModelSynced reports a skipped model-synced file: a miss for serving, but lrc.red still holds the file.
 var errLRCRedModelSynced = errors.New("lrc.red file is model-synced")
 
-// lrcRedHasUnservedFile reports whether lrc.red holds a file for the ISRC that was not served, so nothing may be contributed over it.
 func lrcRedHasUnservedFile(err error) bool {
 	return errors.Is(err, errLRCRedModelSynced) || errors.Is(err, errLRCRedFlagCheck)
 }
@@ -54,7 +52,7 @@ func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 	}
 
 	defer func() {
-		if errors.Is(err, errLRCRedModelSynced) {
+		if lrcRedHasUnservedFile(err) {
 			stats.Get().RecordLRCRedFetch(false, nil)
 			return
 		}
@@ -140,7 +138,6 @@ func fetchLRCRedTTML(ctx context.Context, isrc string) (string, bool, error) {
 	}
 }
 
-// AISyncCheckReady reports why model-synced lrc.red files cannot be checked, or nil when they can.
 func AISyncCheckReady() error {
 	if !lrcRedSkipAISynced {
 		return errors.New("FF_LRC_RED_SKIP_AI_SYNCED is off; the sweep only runs while model-synced lrc.red files are skipped")
@@ -151,7 +148,7 @@ func AISyncCheckReady() error {
 	return nil
 }
 
-// LRCRedByModel reports whether lrc.red's file for a normalized ISRC was synced by a model, taking one lrcRedSem slot.
+// LRCRedByModel takes its own lrcRedSem slot because its callers hold none.
 func LRCRedByModel(ctx context.Context, isrc string) (bool, error) {
 	if lrcRedReadBase == "" {
 		return false, errors.New("LRC_RED_BASE_URL is not set")

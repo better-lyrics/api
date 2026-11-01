@@ -277,8 +277,8 @@ func TestFetchLRCRedByISRCSkipsAISynced(t *testing.T) {
 			if d := stats.Get().LRCRedFlagErrors.Load() - flagErr0; d != tt.wantFlagErr {
 				t.Errorf("LRCRedFlagErrors delta = %d, want %d", d, tt.wantFlagErr)
 			}
-			if d := stats.Get().LRCRedFetchErrors.Load() - fetchErr0; d != tt.wantFlagErr {
-				t.Errorf("LRCRedFetchErrors delta = %d, want %d (a model-synced skip is a miss)", d, tt.wantFlagErr)
+			if d := stats.Get().LRCRedFetchErrors.Load() - fetchErr0; d != 0 {
+				t.Errorf("LRCRedFetchErrors delta = %d, want 0: the .ttml read succeeded, flag outcomes have their own counters", d)
 			}
 		})
 	}

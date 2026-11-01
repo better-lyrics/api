@@ -36,6 +36,7 @@ func seedSweepRows(t *testing.T) {
 		{"Cached Song", "Cached Artist", "lrc.red", "USLRCRED0001"},
 		{"Flaky Flag", "Flaky Artist", "lrc.red", "USFLAKY00001"},
 		{"No Meta", "Tester", "lrc.red", ""},
+		{"No Meta Two", "Tester", "lrc.red", ""},
 	} {
 		key := normalizedCacheKey(r.song, r.artist, "", "")
 		if err := st.SetLyrics(ctx, key, store.DeriveKey(key), store.CachedLyrics{TTML: "<tt>SEEDED</tt>", Format: "ttml", Source: r.source}); err != nil {
@@ -182,7 +183,7 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 	for {
 		res := postSweep(t, base, "limit=1&after="+url.QueryEscape(after))
 		calls++
-		if res.DryRun || res.Checked > 1 {
+		if res.DryRun || res.Checked+len(res.SkippedNoISRC) > 1 {
 			t.Fatalf("call %d: %+v exceeded limit=1 or ran dry", calls, res)
 		}
 		modelSynced = append(modelSynced, res.ModelSynced...)
@@ -191,7 +192,7 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 		if res.Done {
 			break
 		}
-		if calls > 10 || res.NextAfter == "" {
+		if calls > 12 || res.NextAfter == "" {
 			t.Fatalf("sweep did not finish: %+v", res)
 		}
 		if len(res.Errors) > 0 {
@@ -213,8 +214,8 @@ func TestConformanceNewLRCRedSweep(t *testing.T) {
 	if _, ok := cachedTTML(t, "AI Synced", "AI Artist"); ok {
 		t.Error("model-synced row survived the sweep")
 	}
-	if want := normalizedCacheKey("No Meta", "Tester", "", ""); len(skippedNoISRC) != 1 || skippedNoISRC[0] != want {
-		t.Errorf("skipped_no_isrc = %v, want [%s]", skippedNoISRC, want)
+	if want := []string{normalizedCacheKey("No Meta", "Tester", "", ""), normalizedCacheKey("No Meta Two", "Tester", "", "")}; len(skippedNoISRC) != 2 || skippedNoISRC[0] != want[0] || skippedNoISRC[1] != want[1] {
+		t.Errorf("skipped_no_isrc = %v, want %v", skippedNoISRC, want)
 	}
 	for _, kept := range [][2]string{{"Apple Song", "Tester"}, {"Cached Song", "Cached Artist"}, {"Flaky Flag", "Flaky Artist"}, {"No Meta", "Tester"}} {
 		if _, ok := cachedTTML(t, kept[0], kept[1]); !ok {

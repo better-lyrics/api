@@ -28,7 +28,6 @@ const (
 // lrcRedSweepLimiter is shared by every call, so parallel sweeps still read lrc.red at 2/s.
 var lrcRedSweepLimiter = rate.NewLimiter(2, 1)
 
-// lrcRedSweep deletes cached rows whose lrc.red file was synced by a model; a failed row stops the batch so resuming retries it.
 func (s *Server) lrcRedSweep(w http.ResponseWriter, r *http.Request) {
 	if !s.adminAuthorized(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -71,18 +70,18 @@ func (s *Server) lrcRedSweep(w http.ResponseWriter, r *http.Request) {
 	checked, deleted, done := 0, 0, false
 	modelSynced, skippedNoISRC, sweepErrors := []string{}, []string{}, []string{}
 
+	handled := func() int { return checked + len(skippedNoISRC) }
+
 scan:
-	for time.Since(start) < lrcRedSweepBudget {
+	for handled() < limit && time.Since(start) < lrcRedSweepBudget {
 		rows, next, err := s.store.ScanLRCRedLyrics(ctx, cursor, lrcRedSweepPageSize)
 		if err != nil {
 			log.Errorf("%s lrc.red sweep scan after %q failed: %v", logcolors.LogCacheClear, cursor, err)
-			respond(w, r).Error(http.StatusInternalServerError, map[string]interface{}{
-				"error": fmt.Sprintf("scan failed: %v", err),
-			})
-			return
+			sweepErrors = append(sweepErrors, fmt.Sprintf("scan after %q failed: %v", cursor, err))
+			break
 		}
 		for _, row := range rows {
-			if checked == limit || time.Since(start) >= lrcRedSweepBudget {
+			if handled() == limit || time.Since(start) >= lrcRedSweepBudget {
 				break scan
 			}
 			isrc := utils.NormalizeISRC(row.ISRC)
@@ -92,6 +91,7 @@ scan:
 				continue
 			}
 			if err := lrcRedSweepLimiter.Wait(ctx); err != nil {
+				sweepErrors = append(sweepErrors, fmt.Sprintf("stopped before %s: %v", row.CacheKey, err))
 				break scan
 			}
 			checked++
