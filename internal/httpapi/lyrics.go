@@ -61,6 +61,7 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 		if videoID != "" {
 			go s.addVideoID(context.Background(), foundKey, videoID)
 		}
+		s.checkLRCRedCopy(foundKey, cached)
 		respond(w, r).SetCacheStatus("HIT").JSON(map[string]interface{}{
 			"ttml": cached.TTML,
 		})
@@ -309,6 +310,7 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 			} else {
 				log.Infof("%s [%s] Found cached lyrics", logcolors.LogCacheLyrics, providerName)
 			}
+			s.checkLRCRedCopy(foundKey, cached)
 			respond(w, r).SetProvider(providerName).SetCacheStatus("HIT").JSON(map[string]interface{}{
 				"lyrics":   cached.TTML,
 				"provider": providerName,

@@ -549,9 +549,10 @@ paths:
         Checks the `.song.json` of each cached row sourced from lrc.red and deletes the
         rows marked `byModel`, so the next request resolves them from Apple. Each call
         handles up to `limit` rows after the `after` cursor at 2 lrc.red reads per second.
-        Call again with `next_after` until `done` is true. A failed check or delete stops
-        the batch before that row, so the next call retries it; pass the cache key from
-        `errors` as `after` to skip it. Refused while `FF_LRC_RED_SKIP_AI_SYNCED` is off
+        A row is deleted only when its cached copy is byte-identical to lrc.red's current
+        model-synced file. Call again with `next_after` until `done` is true. A failed check
+        or delete stops the batch before that row, so the next call retries it; pass
+        `failed_key` as `after` to skip it. Refused while `FF_LRC_RED_SKIP_AI_SYNCED` is off
         or `LRC_RED_BASE_URL` is empty.
       security:
         - adminToken: []
@@ -584,7 +585,7 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [dry_run, checked, model_synced, deleted, skipped_no_isrc, errors, next_after, done]
+                required: [dry_run, checked, model_synced, kept_changed, failed_key, deleted, skipped_no_isrc, errors, next_after, done]
                 properties:
                   dry_run:
                     type: boolean
@@ -593,9 +594,17 @@ paths:
                     description: Rows whose lrc.red `.song.json` was requested.
                   model_synced:
                     type: array
-                    description: ISRCs whose lrc.red file was synced by a model.
+                    description: ISRCs whose cached copy is lrc.red's current model-synced file. These rows are deleted unless `dry_run` is set.
                     items:
                       type: string
+                  kept_changed:
+                    type: array
+                    description: ISRCs that lrc.red now flags as model-synced but whose cached copy differs from lrc.red's current file, so it predates the AI sync and is kept.
+                    items:
+                      type: string
+                  failed_key:
+                    type: string
+                    description: Cache key of the row the batch stopped at, or empty. Pass it as `after` to skip that row.
                   deleted:
                     type: integer
                   skipped_no_isrc:

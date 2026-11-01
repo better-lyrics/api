@@ -75,19 +75,21 @@ func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 		byModel bool
 		err     error
 	}
-	// Check byModel in parallel only when a second slot is free, so lookups never wait on it.
+	// A parallel byModel read takes a second slot only while the semaphore is under half full, so bursts of lookups keep most slots.
 	var flag chan flagResult
-	select {
-	case lrcRedSem <- struct{}{}:
-		flag = make(chan flagResult, 1)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-lrcRedSem }()
-			byModel, err := lrcRedByModel(ctx, isrc)
-			flag <- flagResult{byModel, err}
-		}()
-	default:
+	if len(lrcRedSem) <= cap(lrcRedSem)/2 {
+		select {
+		case lrcRedSem <- struct{}{}:
+			flag = make(chan flagResult, 1)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-lrcRedSem }()
+				byModel, err := lrcRedByModel(ctx, isrc)
+				flag <- flagResult{byModel, err}
+			}()
+		default:
+		}
 	}
 
 	ttml, ok, err = fetchLRCRedTTML(ctx, isrc)
@@ -148,21 +150,40 @@ func AISyncCheckReady() error {
 	return nil
 }
 
-// LRCRedByModel takes its own lrcRedSem slot because its callers hold none.
+// LRCRedByModel and LRCRedTTML take their own lrcRedSem slot because their callers hold none.
 func LRCRedByModel(ctx context.Context, isrc string) (bool, error) {
-	if lrcRedReadBase == "" {
-		return false, errors.New("LRC_RED_BASE_URL is not set")
+	release, err := acquireLRCRedSlot(ctx)
+	if err != nil {
+		return false, err
 	}
-	select {
-	case lrcRedSem <- struct{}{}:
-	case <-ctx.Done():
-		return false, ctx.Err()
-	}
-	defer func() { <-lrcRedSem }()
+	defer release()
 	return lrcRedByModel(ctx, isrc)
 }
 
-// lrcRedByModel is the only reader of lrc.red's byModel flag.
+func LRCRedTTML(ctx context.Context, isrc string) (string, bool, error) {
+	release, err := acquireLRCRedSlot(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer release()
+	return fetchLRCRedTTML(ctx, isrc)
+}
+
+func acquireLRCRedSlot(ctx context.Context) (release func(), err error) {
+	if lrcRedReadBase == "" {
+		return nil, errors.New("LRC_RED_BASE_URL is not set")
+	}
+	select {
+	case lrcRedSem <- struct{}{}:
+		return func() { <-lrcRedSem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// lrcRedSongJSONMaxBytes bounds the decode; .song.json carries the full lyrics, so a runaway body must not exhaust memory.
+const lrcRedSongJSONMaxBytes = 4 << 20
+
 func lrcRedByModel(ctx context.Context, isrc string) (bool, error) {
 	resp, err := lrcRedGet(ctx, isrc+".song.json", "application/json")
 	if err != nil {
@@ -172,12 +193,17 @@ func lrcRedByModel(ctx context.Context, isrc string) (bool, error) {
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("lrc.red song.json returned status %d", resp.StatusCode)
 	}
-	var song struct {
+	body := io.LimitReader(resp.Body, lrcRedSongJSONMaxBytes)
+	var song *struct {
 		ByModel bool `json:"byModel"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&song); err != nil {
+	if err := json.NewDecoder(body).Decode(&song); err != nil {
 		return false, fmt.Errorf("decode lrc.red song.json: %w", err)
 	}
+	if song == nil {
+		return false, errors.New("lrc.red song.json is null")
+	}
+	_, _ = io.Copy(io.Discard, body)
 	return song.ByModel, nil
 }
 

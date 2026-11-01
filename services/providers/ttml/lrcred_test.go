@@ -245,6 +245,8 @@ func TestFetchLRCRedByISRCSkipsAISynced(t *testing.T) {
 		{name: "song.json 404 fails closed", songStatus: 404, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
 		{name: "song.json 500 fails closed", songStatus: 500, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
 		{name: "malformed song.json fails closed", songStatus: 200, songBody: `{"byModel":`, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
+		{name: "null song.json fails closed", songStatus: 200, songBody: `null`, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
+		{name: "oversized song.json fails closed", songStatus: 200, songBody: `{"byModel":false,"lines":"` + strings.Repeat("x", 5<<20) + `"}`, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
 		{name: "non-bool byModel fails closed", songStatus: 200, songBody: `{"byModel":"yes"}`, wantErr: errLRCRedFlagCheck, wantFlagErr: 1},
 	}
 	for _, tt := range tests {
@@ -449,6 +451,21 @@ func TestFetchLRCRedByISRCSaturated(t *testing.T) {
 		}
 	})
 
+	t.Run("runs sequentially once half the slots are in use", func(t *testing.T) {
+		const delay = 100 * time.Millisecond
+		stub := &lrcRedStub{ttmlStatus: 200, ttmlBody: lrcRedTestTTML, ttmlDelay: delay, songStatus: 200, songBody: `{}`, songDelay: delay}
+		useLRCRedStub(t, stub, true)
+		holdLRCRedSlots(t, cap(lrcRedSem)/2)
+
+		start := time.Now()
+		if _, ok, err := fetchLRCRedByISRC("USUM72403305"); !ok || err != nil {
+			t.Fatalf("ok=%v err=%v", ok, err)
+		}
+		if elapsed := time.Since(start); elapsed < 2*delay {
+			t.Errorf("took %v, took a second slot with half the semaphore in use", elapsed)
+		}
+	})
+
 	t.Run("ttml 404 sends no song.json when no second slot is free", func(t *testing.T) {
 		stub := &lrcRedStub{ttmlStatus: 404, songStatus: 200, songBody: `{}`}
 		useLRCRedStub(t, stub, true)
@@ -566,4 +583,47 @@ func TestAISyncCheckReady(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLRCRedTTML(t *testing.T) {
+	t.Run("returns the current file", func(t *testing.T) {
+		useLRCRedStub(t, &lrcRedStub{ttmlStatus: 200, ttmlBody: lrcRedTestTTML}, true)
+		got, ok, err := LRCRedTTML(context.Background(), "QZES72218029")
+		if err != nil || !ok || got != lrcRedTestTTML {
+			t.Fatalf("got (%q, %v, %v)", got, ok, err)
+		}
+	})
+
+	t.Run("404 is not found", func(t *testing.T) {
+		useLRCRedStub(t, &lrcRedStub{ttmlStatus: 404}, true)
+		if _, ok, err := LRCRedTTML(context.Background(), "QZES72218029"); ok || err != nil {
+			t.Fatalf("ok=%v err=%v, want a clean miss", ok, err)
+		}
+	})
+
+	t.Run("empty base url fails without a request", func(t *testing.T) {
+		stub := &lrcRedStub{}
+		useLRCRedStub(t, stub, true)
+		lrcRedReadBase = ""
+		if _, _, err := LRCRedTTML(context.Background(), "QZES72218029"); err == nil {
+			t.Fatal("want an error when LRC_RED_BASE_URL is empty")
+		}
+		if len(stub.paths) != 0 {
+			t.Errorf("requested %v with no base url", stub.paths)
+		}
+	})
+
+	t.Run("waits for a semaphore slot", func(t *testing.T) {
+		stub := &lrcRedStub{ttmlStatus: 200, ttmlBody: lrcRedTestTTML}
+		useLRCRedStub(t, stub, true)
+		holdLRCRedSlots(t, cap(lrcRedSem))
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		if _, _, err := LRCRedTTML(ctx, "QZES72218029"); err == nil {
+			t.Fatal("want an error while every slot is held")
+		}
+		if len(stub.paths) != 0 {
+			t.Errorf("requested %v without a free slot", stub.paths)
+		}
+	})
 }
