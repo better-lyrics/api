@@ -330,3 +330,24 @@ func TestConformanceNewLRCRedCheckOnCacheHitFlagOff(t *testing.T) {
 		t.Fatal("flag off deleted a cached row")
 	}
 }
+
+func TestConformanceNewLRCRedCheckSkipsStaleFallback(t *testing.T) {
+	stub := upstreamStub(t)
+	env := stubEnv(stub.URL)
+	env["TTML_BASE_URL"] = "http://127.0.0.1:1"
+	base := newServerBase(t, env, seedLyricsData, seedNegativeData)
+	seedSweepRows(t)
+
+	resp, err := http.Get(base + "/getLyrics?s=" + url.QueryEscape("AI Synced") + "&a=" + url.QueryEscape("AI Artist") + "&al=Other%20Album")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if status := resp.Header.Get("X-Cache-Status"); status != "STALE" {
+		t.Fatalf("status %s, want STALE while Apple is down", status)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if _, ok := cachedTTML(t, "AI Synced", "AI Artist"); !ok {
+		t.Fatal("a stale fallback deleted the only cached copy while Apple was down")
+	}
+}
