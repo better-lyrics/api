@@ -2,6 +2,7 @@ package ttml
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"lyrics-api-go/logcolors"
 
@@ -181,8 +182,10 @@ func FetchTTMLLyrics(songName, artistName, albumName string, durationMs int, pri
 }
 
 func resolveLyrics(track *Track, appleFirst bool, lrcRedFetch func(string) (string, bool, error), appleFetch func() (string, error)) (string, string, error) {
+	lrcRedFailed := false
 	tryLRCRed := func() (string, bool) {
 		if lrcTTML, ok, lrcErr := lrcRedFetch(track.Attributes.ISRC); lrcErr != nil {
+			lrcRedFailed = true
 			log.Warnf("%s lrc.red lookup failed for ISRC %q: %v", logcolors.LogLyrics, track.Attributes.ISRC, lrcErr)
 		} else if ok {
 			log.Infof("%s Fetched lyrics from lrc.red for: %s - %s (%d bytes)",
@@ -190,6 +193,12 @@ func resolveLyrics(track *Track, appleFirst bool, lrcRedFetch func(string) (stri
 			return lrcTTML, true
 		}
 		return "", false
+	}
+	unconfirmed := func(err error) error {
+		if err != nil && lrcRedFailed {
+			return missUnconfirmedError{err}
+		}
+		return err
 	}
 
 	tryApple := func() (string, error) {
@@ -212,14 +221,14 @@ func resolveLyrics(track *Track, appleFirst bool, lrcRedFetch func(string) (stri
 		if lrcTTML, ok := tryLRCRed(); ok {
 			return lrcTTML, SourceLRCRed, nil
 		}
-		return appleTTML, SourceApple, appleErr
+		return appleTTML, SourceApple, unconfirmed(appleErr)
 	}
 
 	if lrcTTML, ok := tryLRCRed(); ok {
 		return lrcTTML, SourceLRCRed, nil
 	}
 	ttml, err := tryApple()
-	return ttml, SourceApple, err
+	return ttml, SourceApple, unconfirmed(err)
 }
 
 func trackMetaFrom(track *Track) *TrackMeta {
@@ -239,4 +248,16 @@ func trackMetaFrom(track *Track) *TrackMeta {
 		RawAttributes:       rawAttrs,
 		Source:              SourceApple,
 	}
+}
+
+// missUnconfirmedError wraps an Apple miss reached after the lrc.red lookup failed:
+// lrc.red may still have lyrics, so the miss must not be cached as permanent.
+type missUnconfirmedError struct{ error }
+
+func (e missUnconfirmedError) Unwrap() error { return e.error }
+
+// MissUnconfirmed reports whether err is a miss that a failed lrc.red lookup left unconfirmed.
+func MissUnconfirmed(err error) bool {
+	var e missUnconfirmedError
+	return errors.As(err, &e)
 }

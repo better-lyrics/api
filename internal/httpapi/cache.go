@@ -212,9 +212,9 @@ func (s *Server) setNegativeCache(ctx context.Context, cacheKey, reason, release
 	})
 }
 
-// setTransientNegativeCache stores a short-lived miss, so a search that keeps coming back empty is not retried upstream on every request.
+// setTransientNegativeCache stores a short-lived miss for a result that may be wrong, so it is retried in hours instead of on every request.
 func (s *Server) setTransientNegativeCache(ctx context.Context, cacheKey, reason string) {
-	s.writeNegativeCache(ctx, cacheKey, store.NegativeEntry{Reason: reason, TTL: transientEmptySearchTTL})
+	s.writeNegativeCache(ctx, cacheKey, store.NegativeEntry{Reason: reason, TTL: transientNegativeTTL})
 }
 
 func (s *Server) writeNegativeCache(ctx context.Context, cacheKey string, e store.NegativeEntry) {
@@ -234,7 +234,7 @@ func (s *Server) deleteNegativeCache(ctx context.Context, cacheKey string) {
 }
 
 const (
-	transientEmptySearchTTL = 6 * time.Hour
+	transientNegativeTTL = 6 * time.Hour
 	// songLyricsLookupTimeout bounds the lookup so a missing or invalid lyrics_song_artist_idx falls back to a normal negative instead of a table scan.
 	songLyricsLookupTimeout = 500 * time.Millisecond
 )

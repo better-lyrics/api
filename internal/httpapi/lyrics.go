@@ -182,7 +182,11 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 				releaseDate = trackMeta.ReleaseDate
 				hasTimeSyncedLyricsKnown = trackMeta.HasTimeSyncedLyrics != nil
 			}
-			s.setNegativeCache(ctx, cacheKey, err.Error(), releaseDate, hasTimeSyncedLyricsKnown)
+			if ttml.MissUnconfirmed(err) {
+				s.setTransientNegativeCache(ctx, cacheKey, err.Error())
+			} else {
+				s.setNegativeCache(ctx, cacheKey, err.Error(), releaseDate, hasTimeSyncedLyricsKnown)
+			}
 		}
 
 		stats.Get().RecordCacheMiss()
@@ -413,7 +417,9 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 
 			isPermanentError := shouldNegativeCache(err)
 			if isPermanentError {
-				if s.isTransientEmptySearch(ctx, err, cacheKey, provider.CacheKeyPrefix(), songName, artistName) {
+				if ttml.MissUnconfirmed(err) {
+					s.setTransientNegativeCache(ctx, cacheKey, err.Error())
+				} else if s.isTransientEmptySearch(ctx, err, cacheKey, provider.CacheKeyPrefix(), songName, artistName) {
 					log.Warnf("%s [%s] Search returned no songs but lyrics are cached for this song, caching the miss briefly: %s", logcolors.LogCacheNegative, providerName, query)
 					s.setTransientNegativeCache(ctx, cacheKey, err.Error())
 				} else {
