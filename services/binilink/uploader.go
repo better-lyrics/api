@@ -18,7 +18,6 @@ import (
 const (
 	batchSize       = 50
 	maxAttempts     = 10
-	idleSleep       = 30 * time.Second
 	unresolvedRetry = 7 * 24 * time.Hour
 	statusFailed    = "failed"
 )
@@ -80,39 +79,58 @@ func normalizeBaseURL(raw string) (string, error) {
 	return strings.TrimRight(raw, "/"), nil
 }
 
-var lockRetryInterval = idleSleep
+var (
+	idleSleep         = 30 * time.Second
+	lockRetryInterval = 30 * time.Second
+)
 
 func (u *uploader) run(ctx context.Context) {
-	release, ok := u.waitForLock(ctx)
-	if !ok {
-		return
-	}
-	defer release()
-
 	for {
+		lock, ok := u.waitForLock(ctx)
+		if !ok {
+			return
+		}
+		finished := u.runLocked(ctx, lock)
+		lock.Release()
+		if finished {
+			return
+		}
+	}
+}
+
+// runLocked drains while the lock is held. It returns false when the lock was lost and must be retaken.
+func (u *uploader) runLocked(ctx context.Context, lock *store.BiniLinkWorkerLock) (finished bool) {
+	for {
+		if !lock.Held(ctx) {
+			if ctx.Err() != nil {
+				return true
+			}
+			log.Warnf("%s BiniLink worker lock lost; waiting to retake it", logcolors.LogBini)
+			return false
+		}
 		stop, pause, err := u.drain(ctx)
 		if stop {
 			log.Errorf("%s BiniLink ingress key rejected; uploader stopped", logcolors.LogBini)
-			return
+			return true
 		}
 		if err != nil {
 			log.Warnf("%s BiniLink drain failed: %v", logcolors.LogBini, err)
 		}
 		select {
 		case <-ctx.Done():
-			return
+			return true
 		case <-time.After(runWait(pause)):
 		}
 	}
 }
 
-func (u *uploader) waitForLock(ctx context.Context) (release func(), ok bool) {
+func (u *uploader) waitForLock(ctx context.Context) (*store.BiniLinkWorkerLock, bool) {
 	for {
-		release, ok, err := u.store.TryBiniLinkWorkerLock(ctx)
+		lock, ok, err := u.store.TryBiniLinkWorkerLock(ctx)
 		if err != nil {
 			log.Warnf("%s BiniLink worker lock failed: %v", logcolors.LogBini, err)
 		} else if ok {
-			return release, true
+			return lock, true
 		}
 		select {
 		case <-ctx.Done():
@@ -147,6 +165,7 @@ func (u *uploader) drain(ctx context.Context) (stop bool, pause time.Duration, e
 			outcome, retryAfter := Post(u.client, u.baseURL, u.key, u.userAgent, row.VideoID, row.AppleTrackID)
 			posted = true
 			if outcome == OutcomeUnauthorized {
+				stats.Get().RecordBiniLink(string(outcome))
 				return true, 0, nil
 			}
 			if err := u.record(ctx, row, outcome, retryAfter); err != nil {
@@ -197,9 +216,6 @@ func (u *uploader) record(ctx context.Context, row store.BiniLinkPending, outcom
 }
 
 func backoff(attempts int, retryAfter time.Duration) time.Duration {
-	if retryAfter > 0 {
-		return retryAfter
-	}
 	i := min(max(attempts-1, 0), len(backoffSchedule)-1)
-	return backoffSchedule[i]
+	return min(max(backoffSchedule[i], retryAfter), maxRetryAfter)
 }

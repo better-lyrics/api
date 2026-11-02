@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"lyrics-api-go/internal/store"
+	"lyrics-api-go/stats"
 )
 
 func newTestUploader(baseURL string, interval time.Duration) *uploader {
@@ -82,6 +85,10 @@ func TestBackoff(t *testing.T) {
 		{5, 0, 24 * time.Hour},
 		{9, 0, 24 * time.Hour},
 		{1, 90 * time.Second, 90 * time.Second},
+		{1, time.Second, time.Minute},
+		{3, time.Hour, time.Hour},
+		{4, time.Second, 2 * time.Hour},
+		{2, 48 * time.Hour, 24 * time.Hour},
 	}
 	for _, c := range cases {
 		if got := backoff(c.attempts, c.retryAfter); got != c.want {
@@ -426,7 +433,7 @@ func TestRunWaitsForWorkerLock(t *testing.T) {
 	released := false
 	defer func() {
 		if !released {
-			held()
+			held.Release()
 		}
 	}()
 
@@ -450,7 +457,7 @@ func TestRunWaitsForWorkerLock(t *testing.T) {
 		t.Fatalf("http calls while another worker holds the lock = %d, want 0", n)
 	}
 
-	held()
+	held.Release()
 	released = true
 	deadline := time.Now().Add(3 * time.Second)
 	for srv.calls.Load() == 0 {
@@ -469,7 +476,7 @@ func TestRunStopsWhileWaitingForLock(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("hold lock: ok=%v err=%v", ok, err)
 	}
-	defer held()
+	defer held.Release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -482,5 +489,108 @@ func TestRunStopsWhileWaitingForLock(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not return after cancel while waiting for the lock")
+	}
+}
+
+func TestShortRetryAfterDoesNotBurnAttempts(t *testing.T) {
+	resetBiniLink(t)
+	enqueue(t, "shortRetry_", "1")
+	srv := newIngressServer(t, func(w http.ResponseWriter, _ string) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	u := newTestUploader(srv.URL, 0)
+
+	if _, _, err := u.drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertNear(t, nextAttemptOf(t, "shortRetry_"), time.Now().Add(time.Minute), 5*time.Second)
+	if _, _, err := u.drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := srv.calls.Load(); n != 1 {
+		t.Fatalf("http calls = %d, want 1: the row must not be due again within a minute", n)
+	}
+}
+
+func TestDrainCountsUnauthorized(t *testing.T) {
+	resetBiniLink(t)
+	enqueue(t, "unauthCount", "1")
+	srv := newIngressServer(t, statusResponder(http.StatusUnauthorized))
+	before := stats.Get().BiniLinkErrors.Load()
+
+	if stop, _, _ := newTestUploader(srv.URL, 0).drain(context.Background()); !stop {
+		t.Fatal("401 must stop the worker")
+	}
+	if got := stats.Get().BiniLinkErrors.Load() - before; got != 1 {
+		t.Fatalf("errors counted = %d, want 1", got)
+	}
+}
+
+func TestRunStopsSendingWhenItLosesTheLock(t *testing.T) {
+	resetBiniLink(t)
+	enqueue(t, "beforeLoss_", "1")
+	srv := newIngressServer(t, statusResponder(http.StatusCreated))
+
+	previousLock, previousIdle := lockRetryInterval, idleSleep
+	lockRetryInterval, idleSleep = 20*time.Millisecond, 50*time.Millisecond
+	defer func() { lockRetryInterval, idleSleep = previousLock, previousIdle }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		newTestUploader(srv.URL, 0).run(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitFor(t, func() bool { return srv.calls.Load() == 1 })
+
+	if _, err := testStore.Pool().Exec(context.Background(), `
+		SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND classid::bigint = $1 AND objid::bigint = $2`,
+		workerLockClassID, workerLockObjID); err != nil {
+		t.Fatal(err)
+	}
+	var thief *store.BiniLinkWorkerLock
+	waitFor(t, func() bool {
+		lock, ok, err := testStore.TryBiniLinkWorkerLock(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		thief = lock
+		return ok
+	})
+
+	enqueue(t, "afterLoss__", "1")
+	time.Sleep(300 * time.Millisecond)
+	if n := srv.calls.Load(); n != 1 {
+		thief.Release()
+		t.Fatalf("http calls = %d while another worker holds the lock, want 1", n)
+	}
+
+	thief.Release()
+	waitFor(t, func() bool { return srv.calls.Load() == 2 })
+	if got := statusOf(t, "afterLoss__"); got != "linked" {
+		t.Fatalf("status = %q, want linked once the lock is regained", got)
+	}
+}
+
+const (
+	workerLockClassID int64 = 0x62696e69
+	workerLockObjID   int64 = 0x6c696e6b
+)
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met within 5s")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

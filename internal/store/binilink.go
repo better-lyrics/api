@@ -4,6 +4,8 @@ import (
 	"context"
 	"regexp"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // BiniLink's ingress rejects any other ID shape with a 400.
@@ -138,23 +140,37 @@ func (s *Store) SeedBiniLinkBackfill(ctx context.Context, after string, pageSize
 // Session advisory lock: keeps one uploader running while an old and a new deploy overlap.
 const biniLinkWorkerLockID int64 = 0x62696e696c696e6b
 
-func (s *Store) TryBiniLinkWorkerLock(ctx context.Context) (release func(), ok bool, err error) {
-	conn, err := s.pool.Acquire(ctx)
+// BiniLinkWorkerLock holds the lock on its own connection, so it uses no pool slot and its loss shows in Held.
+type BiniLinkWorkerLock struct {
+	conn *pgx.Conn
+}
+
+func (s *Store) TryBiniLinkWorkerLock(ctx context.Context) (*BiniLinkWorkerLock, bool, error) {
+	conn, err := pgx.ConnectConfig(ctx, s.pool.Config().ConnConfig.Copy())
 	if err != nil {
 		return nil, false, err
 	}
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, biniLinkWorkerLockID).Scan(&ok); err != nil {
-		conn.Release()
+	var ok bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, biniLinkWorkerLockID).Scan(&ok); err != nil || !ok {
+		conn.Close(context.Background())
 		return nil, false, err
 	}
-	if !ok {
-		conn.Release()
-		return nil, false, nil
-	}
-	return func() {
-		if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, biniLinkWorkerLockID); err != nil {
-			conn.Conn().Close(context.Background())
-		}
-		conn.Release()
-	}, true, nil
+	return &BiniLinkWorkerLock{conn: conn}, true, nil
+}
+
+func (l *BiniLinkWorkerLock) Held(ctx context.Context) bool {
+	var held bool
+	err := l.conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_locks
+			WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid()
+			  AND classid::bigint = $1 AND objid::bigint = $2 AND objsubid = 1
+		)`,
+		biniLinkWorkerLockID>>32, biniLinkWorkerLockID&0xffffffff).Scan(&held)
+	return err == nil && held
+}
+
+// Release ends the session, which frees the lock even if the unlock round trip would fail.
+func (l *BiniLinkWorkerLock) Release() {
+	l.conn.Close(context.Background())
 }

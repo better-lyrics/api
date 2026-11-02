@@ -341,26 +341,66 @@ func TestMarkBiniLinkUnresolvedRetry(t *testing.T) {
 func TestTryBiniLinkWorkerLock(t *testing.T) {
 	ctx := context.Background()
 
-	release, ok, err := testStore.TryBiniLinkWorkerLock(ctx)
+	first, ok, err := testStore.TryBiniLinkWorkerLock(ctx)
 	if err != nil || !ok {
 		t.Fatalf("first lock: ok=%v err=%v", ok, err)
 	}
-
-	other, err := New(ctx, testDSN)
-	if err != nil {
-		t.Fatal(err)
+	if !first.Held(ctx) {
+		t.Fatal("first lock must report held")
 	}
-	defer other.Close()
 
-	if _, ok, err := other.TryBiniLinkWorkerLock(ctx); err != nil || ok {
+	if _, ok, err := testStore.TryBiniLinkWorkerLock(ctx); err != nil || ok {
 		t.Fatalf("second worker must not get the lock: ok=%v err=%v", ok, err)
 	}
 
-	release()
+	first.Release()
 
-	releaseOther, ok, err := other.TryBiniLinkWorkerLock(ctx)
+	second, ok, err := testStore.TryBiniLinkWorkerLock(ctx)
 	if err != nil || !ok {
 		t.Fatalf("lock after release: ok=%v err=%v", ok, err)
 	}
-	releaseOther()
+	second.Release()
+}
+
+func TestBiniLinkWorkerLockDoesNotUsePoolConnections(t *testing.T) {
+	ctx := context.Background()
+	before := testStore.pool.Stat().AcquiredConns()
+
+	lock, ok, err := testStore.TryBiniLinkWorkerLock(ctx)
+	if err != nil || !ok {
+		t.Fatalf("lock: ok=%v err=%v", ok, err)
+	}
+	defer lock.Release()
+
+	if after := testStore.pool.Stat().AcquiredConns(); after != before {
+		t.Fatalf("pool acquired conns %d -> %d: the lock must hold its own connection", before, after)
+	}
+}
+
+func TestBiniLinkWorkerLockDetectsLostSession(t *testing.T) {
+	ctx := context.Background()
+
+	lock, ok, err := testStore.TryBiniLinkWorkerLock(ctx)
+	if err != nil || !ok {
+		t.Fatalf("lock: ok=%v err=%v", ok, err)
+	}
+	defer lock.Release()
+
+	if _, err := testStore.pool.Exec(ctx, `SELECT pg_terminate_backend($1)`, lock.conn.PgConn().PID()); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for lock.Held(ctx) {
+		if time.Now().After(deadline) {
+			t.Fatal("Held kept reporting true after the session was terminated")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	other, ok, err := testStore.TryBiniLinkWorkerLock(ctx)
+	if err != nil || !ok {
+		t.Fatalf("lock must be free once its session is gone: ok=%v err=%v", ok, err)
+	}
+	other.Release()
 }
