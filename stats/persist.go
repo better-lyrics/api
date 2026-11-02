@@ -27,6 +27,12 @@ func (s *Stats) Serialize() PersistedStats {
 		LRCRedContributeSkipped: s.LRCRedContributeSkipped.Load(),
 		LRCRedSkippedByModel:    s.LRCRedSkippedByModel.Load(),
 		LRCRedFlagErrors:        s.LRCRedFlagErrors.Load(),
+		BiniLinkSent:            s.BiniLinkSent.Load(),
+		BiniLinkLinked:          s.BiniLinkLinked.Load(),
+		BiniLinkExists:          s.BiniLinkExists.Load(),
+		BiniLinkConflict:        s.BiniLinkConflict.Load(),
+		BiniLinkUnresolved:      s.BiniLinkUnresolved.Load(),
+		BiniLinkErrors:          s.BiniLinkErrors.Load(),
 		RateLimitNormal:         s.RateLimitNormal.Load(),
 		RateLimitCached:         s.RateLimitCached.Load(),
 		RateLimitExceeded:       s.RateLimitExceeded.Load(),
@@ -69,6 +75,12 @@ func (s *Stats) Restore(p PersistedStats) {
 	s.LRCRedContributeSkipped.Store(p.LRCRedContributeSkipped)
 	s.LRCRedSkippedByModel.Store(p.LRCRedSkippedByModel)
 	s.LRCRedFlagErrors.Store(p.LRCRedFlagErrors)
+	s.BiniLinkSent.Store(p.BiniLinkSent)
+	s.BiniLinkLinked.Store(p.BiniLinkLinked)
+	s.BiniLinkExists.Store(p.BiniLinkExists)
+	s.BiniLinkConflict.Store(p.BiniLinkConflict)
+	s.BiniLinkUnresolved.Store(p.BiniLinkUnresolved)
+	s.BiniLinkErrors.Store(p.BiniLinkErrors)
 	s.RateLimitNormal.Store(p.RateLimitNormal)
 	s.RateLimitCached.Store(p.RateLimitCached)
 	s.RateLimitExceeded.Store(p.RateLimitExceeded)

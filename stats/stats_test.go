@@ -43,6 +43,45 @@ func TestLRCRedCounters_PersistRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRecordBiniLink(t *testing.T) {
+	s := newStats()
+	for _, outcome := range []string{"linked", "linked", "exists", "conflict", "unresolved", "no_isrc", "invalid", "retry"} {
+		s.RecordBiniLink(outcome)
+	}
+	got := []int64{
+		s.BiniLinkSent.Load(), s.BiniLinkLinked.Load(), s.BiniLinkExists.Load(),
+		s.BiniLinkConflict.Load(), s.BiniLinkUnresolved.Load(), s.BiniLinkErrors.Load(),
+	}
+	want := []int64{8, 2, 1, 1, 2, 2}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sent/linked/exists/conflict/unresolved/errors = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestBiniLinkCounters_PersistRoundTrip(t *testing.T) {
+	s := newStats()
+	for _, outcome := range []string{"linked", "exists", "conflict", "unresolved", "retry"} {
+		s.RecordBiniLink(outcome)
+	}
+	restored := newStats()
+	restored.Restore(s.Serialize())
+	if restored.BiniLinkSent.Load() != 5 || restored.BiniLinkLinked.Load() != 1 || restored.BiniLinkExists.Load() != 1 ||
+		restored.BiniLinkConflict.Load() != 1 || restored.BiniLinkUnresolved.Load() != 1 || restored.BiniLinkErrors.Load() != 1 {
+		t.Fatal("round-trip lost binilink counters")
+	}
+}
+
+func TestSnapshotIncludesBiniLink(t *testing.T) {
+	s := newStats()
+	s.RecordBiniLink("linked")
+	block, ok := s.Snapshot()["binilink"].(map[string]interface{})
+	if !ok || block["linked"] != int64(1) || block["sent"] != int64(1) {
+		t.Fatalf("binilink block = %#v", s.Snapshot()["binilink"])
+	}
+}
+
 // newStats returns a fresh Stats instance for testing (avoids global state).
 func newStats() *Stats {
 	s := &Stats{StartTime: time.Now()}
