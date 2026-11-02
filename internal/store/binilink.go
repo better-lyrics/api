@@ -138,7 +138,10 @@ func (s *Store) SeedBiniLinkBackfill(ctx context.Context, after string, pageSize
 }
 
 // Session advisory lock: keeps one uploader running while an old and a new deploy overlap.
-const biniLinkWorkerLockID int64 = 0x62696e696c696e6b
+const (
+	biniLinkWorkerLockID     int64 = 0x62696e696c696e6b
+	biniLinkLockQueryTimeout       = 5 * time.Second
+)
 
 // BiniLinkWorkerLock holds the lock on its own connection, so it uses no pool slot and its loss shows in Held.
 type BiniLinkWorkerLock struct {
@@ -159,6 +162,8 @@ func (s *Store) TryBiniLinkWorkerLock(ctx context.Context) (*BiniLinkWorkerLock,
 }
 
 func (l *BiniLinkWorkerLock) Held(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, biniLinkLockQueryTimeout)
+	defer cancel()
 	var held bool
 	err := l.conn.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -172,5 +177,7 @@ func (l *BiniLinkWorkerLock) Held(ctx context.Context) bool {
 
 // Release ends the session, which frees the lock even if the unlock round trip would fail.
 func (l *BiniLinkWorkerLock) Release() {
-	l.conn.Close(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), biniLinkLockQueryTimeout)
+	defer cancel()
+	l.conn.Close(ctx)
 }

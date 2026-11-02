@@ -403,6 +403,8 @@ func TestNormalizeBaseURL(t *testing.T) {
 		"https://link.binimum.org/":  "https://link.binimum.org",
 		"https://link.binimum.org//": "https://link.binimum.org",
 		"http://127.0.0.1:8080":      "http://127.0.0.1:8080",
+		"http://localhost:9000/":     "http://localhost:9000",
+		"http://[::1]:9000":          "http://[::1]:9000",
 		"https://example.com/proxy/": "https://example.com/proxy",
 	}
 	for in, want := range ok {
@@ -411,7 +413,7 @@ func TestNormalizeBaseURL(t *testing.T) {
 			t.Errorf("normalizeBaseURL(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"", "link.binimum.org", "ftp://link.binimum.org", "https://", "://bad", "https://link.binimum.org?x=1", "https://link.binimum.org#frag", "https://link.binimum.org?", "https://link.binimum.org#", "https://user:pass@link.binimum.org"} {
+	for _, in := range []string{"", "link.binimum.org", "ftp://link.binimum.org", "https://", "://bad", "https://link.binimum.org?x=1", "https://link.binimum.org#frag", "https://link.binimum.org?", "https://link.binimum.org#", "https://user:pass@link.binimum.org", "http://link.binimum.org", "http://10.0.0.5:8080"} {
 		if got, err := normalizeBaseURL(in); err == nil {
 			t.Errorf("normalizeBaseURL(%q) = %q, want error", in, got)
 		}
@@ -669,7 +671,7 @@ func TestRunWaitsBeforeFirstPostAfterTakingTheLock(t *testing.T) {
 	}()
 
 	waitFor(t, func() bool { return srv.calls.Load() == 1 })
-	if elapsed := time.Since(start); elapsed < u.client.Timeout {
-		t.Fatalf("first post after %v, want at least the client timeout %v", elapsed, u.client.Timeout)
+	if elapsed := time.Since(start); elapsed < u.lockSettle() {
+		t.Fatalf("first post after %v, want at least the settle wait %v", elapsed, u.lockSettle())
 	}
 }

@@ -3,6 +3,7 @@ package binilink
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -77,9 +78,9 @@ func Start(ctx context.Context, st *store.Store, s Settings) bool {
 
 func normalizeBaseURL(raw string) (string, error) {
 	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" ||
-		parsed.User != nil || strings.ContainsAny(raw, "?#") {
-		return "", errors.New("BINILINK_BASE_URL must be an http(s) origin with an optional path, without credentials, query or fragment")
+	if err != nil || parsed.Host == "" || parsed.User != nil || strings.ContainsAny(raw, "?#") ||
+		(parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopback(parsed.Hostname()))) {
+		return "", errors.New("BINILINK_BASE_URL must be an https origin (http only for loopback) with an optional path, without credentials, query or fragment")
 	}
 	return strings.TrimRight(raw, "/"), nil
 }
@@ -88,6 +89,14 @@ var (
 	idleSleep         = 30 * time.Second
 	lockRetryInterval = 30 * time.Second
 )
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 func (u *uploader) run(ctx context.Context) {
 	for {
