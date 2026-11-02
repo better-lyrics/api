@@ -4,6 +4,7 @@ CREATE TABLE binilink_links (
     apple_track_id TEXT NOT NULL,
     status         TEXT NOT NULL DEFAULT 'pending',
     attempts       INTEGER NOT NULL DEFAULT 0,
+    unresolved_retried BOOLEAN NOT NULL DEFAULT FALSE,
     next_attempt   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );

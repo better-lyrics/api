@@ -105,13 +105,13 @@ func TestDrainEmptyQueue(t *testing.T) {
 
 func TestDrainRecordsOutcomes(t *testing.T) {
 	resetBiniLink(t)
-	enqueue(t, "vidLinked", "1")
+	enqueue(t, "vidLinked__", "1")
 	enqueue(t, "vidConflict", "2")
-	enqueue(t, "vidRetry", "3")
+	enqueue(t, "vidRetry___", "3")
 	codes := map[string]int{
-		"vidLinked":   http.StatusCreated,
+		"vidLinked__": http.StatusCreated,
 		"vidConflict": http.StatusConflict,
-		"vidRetry":    http.StatusServiceUnavailable,
+		"vidRetry___": http.StatusServiceUnavailable,
 	}
 	srv := newIngressServer(t, func(w http.ResponseWriter, videoID string) {
 		w.WriteHeader(codes[videoID])
@@ -121,7 +121,7 @@ func TestDrainRecordsOutcomes(t *testing.T) {
 	if stop || err != nil {
 		t.Fatalf("drain = (%v, %v), want (false, nil)", stop, err)
 	}
-	want := map[string]string{"vidLinked": "linked", "vidConflict": "conflict", "vidRetry": "pending"}
+	want := map[string]string{"vidLinked__": "linked", "vidConflict": "conflict", "vidRetry___": "pending"}
 	for videoID, status := range want {
 		if got := statusOf(t, videoID); got != status {
 			t.Errorf("status of %s = %q, want %q", videoID, got, status)
@@ -144,8 +144,8 @@ func TestDrainRecordsOutcomes(t *testing.T) {
 
 func TestDrainStopsOnUnauthorized(t *testing.T) {
 	resetBiniLink(t)
-	enqueue(t, "vidA", "1")
-	enqueue(t, "vidB", "2")
+	enqueue(t, "vidA_______", "1")
+	enqueue(t, "vidB_______", "2")
 	srv := newIngressServer(t, statusResponder(http.StatusUnauthorized))
 
 	stop, err := newTestUploader(srv.URL, 0).drain(context.Background())
@@ -155,7 +155,7 @@ func TestDrainStopsOnUnauthorized(t *testing.T) {
 	if n := srv.calls.Load(); n != 1 {
 		t.Fatalf("http calls = %d, want 1", n)
 	}
-	for _, videoID := range []string{"vidA", "vidB"} {
+	for _, videoID := range []string{"vidA_______", "vidB_______"} {
 		if got := statusOf(t, videoID); got != "pending" {
 			t.Errorf("status of %s = %q, want pending", videoID, got)
 		}
@@ -167,50 +167,50 @@ func TestDrainStopsOnUnauthorized(t *testing.T) {
 
 func TestDrainUnresolvedRetriesOnce(t *testing.T) {
 	resetBiniLink(t)
-	enqueue(t, "vid404", "1")
+	enqueue(t, "vid404_____", "1")
 	srv := newIngressServer(t, statusResponder(http.StatusNotFound))
 	u := newTestUploader(srv.URL, 0)
 
 	if _, err := u.drain(context.Background()); err != nil {
 		t.Fatalf("first drain: %v", err)
 	}
-	if got := statusOf(t, "vid404"); got != "pending" {
+	if got := statusOf(t, "vid404_____"); got != "pending" {
 		t.Fatalf("status after first 404 = %q, want pending", got)
 	}
-	assertNear(t, nextAttemptOf(t, "vid404"), time.Now().Add(7*24*time.Hour), time.Minute)
+	assertNear(t, nextAttemptOf(t, "vid404_____"), time.Now().Add(7*24*time.Hour), time.Minute)
 
-	makeDue(t, "vid404", 1)
+	makeDue(t, "vid404_____", 1)
 	if _, err := u.drain(context.Background()); err != nil {
 		t.Fatalf("second drain: %v", err)
 	}
-	if got := statusOf(t, "vid404"); got != "unresolved" {
+	if got := statusOf(t, "vid404_____"); got != "unresolved" {
 		t.Fatalf("status after second 404 = %q, want unresolved", got)
 	}
-	if got := attemptsOf(t, "vid404"); got != 2 {
+	if got := attemptsOf(t, "vid404_____"); got != 2 {
 		t.Fatalf("attempts = %d, want 2", got)
 	}
 }
 
 func TestDrainRetryGivesUpAfterMaxAttempts(t *testing.T) {
 	resetBiniLink(t)
-	enqueue(t, "vidTired", "1")
-	makeDue(t, "vidTired", 9)
+	enqueue(t, "vidTired___", "1")
+	makeDue(t, "vidTired___", 9)
 	srv := newIngressServer(t, statusResponder(http.StatusServiceUnavailable))
 
 	if _, err := newTestUploader(srv.URL, 0).drain(context.Background()); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
-	if got := statusOf(t, "vidTired"); got != "unresolved" {
-		t.Fatalf("status = %q, want unresolved", got)
+	if got := statusOf(t, "vidTired___"); got != "failed" {
+		t.Fatalf("status = %q, want failed", got)
 	}
-	if got := attemptsOf(t, "vidTired"); got != 10 {
+	if got := attemptsOf(t, "vidTired___"); got != 10 {
 		t.Fatalf("attempts = %d, want 10", got)
 	}
 }
 
 func TestDrainHonoursRetryAfter(t *testing.T) {
 	resetBiniLink(t)
-	enqueue(t, "vidBusy", "1")
+	enqueue(t, "vidBusy____", "1")
 	srv := newIngressServer(t, func(w http.ResponseWriter, _ string) {
 		w.Header().Set("Retry-After", "120")
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -219,15 +219,15 @@ func TestDrainHonoursRetryAfter(t *testing.T) {
 	if _, err := newTestUploader(srv.URL, 0).drain(context.Background()); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
-	if got := statusOf(t, "vidBusy"); got != "pending" {
+	if got := statusOf(t, "vidBusy____"); got != "pending" {
 		t.Fatalf("status = %q, want pending", got)
 	}
-	assertNear(t, nextAttemptOf(t, "vidBusy"), time.Now().Add(120*time.Second), 5*time.Second)
+	assertNear(t, nextAttemptOf(t, "vidBusy____"), time.Now().Add(120*time.Second), 5*time.Second)
 }
 
 func TestDrainStopsOnContextCancel(t *testing.T) {
 	resetBiniLink(t)
-	for _, videoID := range []string{"vid1", "vid2", "vid3"} {
+	for _, videoID := range []string{"vid1_______", "vid2_______", "vid3_______"} {
 		enqueue(t, videoID, "1")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -249,7 +249,7 @@ func TestDrainStopsOnContextCancel(t *testing.T) {
 		t.Fatalf("http calls = %d, want 1", n)
 	}
 	pending := 0
-	for _, videoID := range []string{"vid1", "vid2", "vid3"} {
+	for _, videoID := range []string{"vid1_______", "vid2_______", "vid3_______"} {
 		if statusOf(t, videoID) == "pending" {
 			pending++
 		}
@@ -268,5 +268,48 @@ func TestStartDisabled(t *testing.T) {
 		if Start(context.Background(), testStore, s) {
 			t.Errorf("Start(%+v) = true, want false", s)
 		}
+	}
+}
+
+func TestDrainUnresolvedRetriesOnceAfterTransientErrors(t *testing.T) {
+	resetBiniLink(t)
+	enqueue(t, "vidFlaky___", "1")
+	code := http.StatusServiceUnavailable
+	srv := newIngressServer(t, func(w http.ResponseWriter, _ string) { w.WriteHeader(code) })
+	u := newTestUploader(srv.URL, 0)
+
+	if _, err := u.drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	makeDue(t, "vidFlaky___", 1)
+	code = http.StatusNotFound
+	if _, err := u.drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := statusOf(t, "vidFlaky___"); got != "pending" {
+		t.Fatalf("first 404 after a 503: status %q, want pending", got)
+	}
+	assertNear(t, nextAttemptOf(t, "vidFlaky___"), time.Now().Add(7*24*time.Hour), time.Minute)
+
+	makeDue(t, "vidFlaky___", 2)
+	if _, err := u.drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := statusOf(t, "vidFlaky___"); got != "unresolved" {
+		t.Fatalf("second 404: status %q, want unresolved", got)
+	}
+}
+
+func TestDrainUnresolvedRetryDoesNotOutliveMaxAttempts(t *testing.T) {
+	resetBiniLink(t)
+	enqueue(t, "vidLate404_", "1")
+	makeDue(t, "vidLate404_", 9)
+	srv := newIngressServer(t, statusResponder(http.StatusNotFound))
+
+	if _, err := newTestUploader(srv.URL, 0).drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := statusOf(t, "vidLate404_"); got != "pending" {
+		t.Fatalf("status %q, want pending: a first 404 still earns its 7-day retry", got)
 	}
 }

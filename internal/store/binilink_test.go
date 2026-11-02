@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -198,5 +199,119 @@ func TestSeedBiniLinkBackfillPagesAndIsIdempotent(t *testing.T) {
 	}
 	if total := seedAll(); total != 0 {
 		t.Fatalf("second pass must seed nothing, got %d", total)
+	}
+}
+
+func TestEnqueueBiniLinkRejectsMalformedIDs(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+
+	bad := []struct{ video, apple string }{
+		{"qrO4YZeyl0IqrO4YZeyl0I", "1"},
+		{"short", "1"},
+		{"qrO4YZeyl0!", "1"},
+		{"qrO4YZeyl0I", "12a"},
+		{"qrO4YZeyl0I", "-1"},
+		{"qrO4YZeyl0I", strings.Repeat("9", 129)},
+	}
+	for _, b := range bad {
+		if err := testStore.EnqueueBiniLink(ctx, b.video, b.apple); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := testStore.EnqueueBiniLink(ctx, "a-_Z09bcdeF", "0001440815557"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := testStore.ClaimBiniLinkPending(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].VideoID != "a-_Z09bcdeF" || rows[0].AppleTrackID != "0001440815557" {
+		t.Fatalf("want only the well-formed pair, got %+v", rows)
+	}
+}
+
+func TestEnqueueBiniLinkForCacheKey(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+
+	for _, m := range []SongMetadata{
+		{CacheKey: "k-apple", AppleTrackID: "1440815557", ISRC: "USAAA0000001"},
+		{CacheKey: "k-no-apple", ISRC: "USAAA0000002"},
+		{CacheKey: "k-bad-apple", AppleTrackID: "abc", ISRC: "USAAA0000003"},
+	} {
+		if err := testStore.SetSongMetadata(ctx, &m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct{ video, key string }{
+		{"aaaaaaaaaaa", "k-apple"},
+		{"bbbbbbbbbbb", "k-no-apple"},
+		{"ccccccccccc", "k-bad-apple"},
+		{"ddddddddddd", "k-missing"},
+		{"not-a-video-id", "k-apple"},
+	}
+	for _, c := range cases {
+		if err := testStore.EnqueueBiniLinkForCacheKey(ctx, c.video, c.key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := testStore.EnqueueBiniLinkForCacheKey(ctx, "aaaaaaaaaaa", "k-apple"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := testStore.ClaimBiniLinkPending(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].VideoID != "aaaaaaaaaaa" || rows[0].AppleTrackID != "1440815557" {
+		t.Fatalf("want only the pair with a valid Apple ID, got %+v", rows)
+	}
+}
+
+func TestSeedBiniLinkBackfillSkipsMalformedIDs(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+
+	for _, m := range []SongMetadata{
+		{CacheKey: "k1", AppleTrackID: "100", ISRC: "USAAA0000001", VideoIDs: []string{"good0000001"}},
+		{CacheKey: "k2", AppleTrackID: "200", ISRC: "USAAA0000002", VideoIDs: []string{"good0000001good0000001"}},
+		{CacheKey: "k3", AppleTrackID: "x300", ISRC: "USAAA0000003", VideoIDs: []string{"good0000003"}},
+	} {
+		if err := testStore.SetSongMetadata(ctx, &m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	seeded, _, err := testStore.SeedBiniLinkBackfill(ctx, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := testStore.ClaimBiniLinkPending(ctx, 10)
+	if seeded != 1 || len(rows) != 1 || rows[0].VideoID != "good0000001" {
+		t.Fatalf("seeded %d, rows %+v", seeded, rows)
+	}
+}
+
+func TestMarkBiniLinkUnresolvedRetry(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+
+	if err := testStore.EnqueueBiniLink(ctx, "aaaaaaaaaaa", "1"); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := testStore.ClaimBiniLinkPending(ctx, 10)
+	if len(rows) != 1 || rows[0].UnresolvedRetried {
+		t.Fatalf("fresh row must not be marked, got %+v", rows)
+	}
+
+	if err := testStore.MarkBiniLinkUnresolvedRetry(ctx, "aaaaaaaaaaa", 2, time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = testStore.ClaimBiniLinkPending(ctx, 10)
+	if len(rows) != 1 || !rows[0].UnresolvedRetried || rows[0].Attempts != 2 {
+		t.Fatalf("want pending, marked, attempts 2, got %+v", rows)
 	}
 }

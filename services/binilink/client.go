@@ -22,7 +22,21 @@ const (
 	OutcomeRetry        Outcome = "retry"
 )
 
-const ingressPath = "/api/v1/ingress/youtube"
+const (
+	ingressPath   = "/api/v1/ingress/youtube"
+	maxRetryAfter = 24 * time.Hour
+)
+
+// newHTTPClient never follows redirects, because Go forwards custom headers such as
+// X-Ingress-Key to the redirect target.
+func newHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
 
 // Post submits one video to Apple track association. The returned duration is the
 // server's Retry-After, only meaningful with OutcomeRetry.
@@ -66,9 +80,12 @@ func Post(client *http.Client, baseURL, key, userAgent, videoID, appleTrackID st
 }
 
 func retryAfter(header string) time.Duration {
-	secs, err := strconv.Atoi(header)
+	secs, err := strconv.ParseInt(header, 10, 64)
 	if err != nil || secs <= 0 {
 		return 0
+	}
+	if secs >= int64(maxRetryAfter/time.Second) {
+		return maxRetryAfter
 	}
 	return time.Duration(secs) * time.Second
 }

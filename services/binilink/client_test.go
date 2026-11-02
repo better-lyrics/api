@@ -72,6 +72,9 @@ func TestPostRetryAfter(t *testing.T) {
 		{"", 0},
 		{"soon", 0},
 		{"-5", 0},
+		{"86400", 24 * time.Hour},
+		{"604800", 24 * time.Hour},
+		{"99999999999999999", 24 * time.Hour},
 	}
 	for _, c := range cases {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -111,5 +114,34 @@ func TestPostTimeoutRetries(t *testing.T) {
 	got, _ := Post(client, srv.URL, "k", "ua", "qrO4YZeyl0I", "1")
 	if got != OutcomeRetry {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestNewHTTPClientDoesNotFollowRedirects(t *testing.T) {
+	leaked := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked <- r.Header.Get("X-Ingress-Key")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	got, _ := Post(newHTTPClient(), origin.URL, "secret", "ua", "qrO4YZeyl0I", "1")
+	if got != OutcomeRetry {
+		t.Fatalf("redirect must not count as success, got %v", got)
+	}
+	select {
+	case key := <-leaked:
+		t.Fatalf("redirect target received the request (key %q)", key)
+	default:
+	}
+}
+
+func TestNewHTTPClientHasTimeout(t *testing.T) {
+	if newHTTPClient().Timeout <= 0 {
+		t.Fatal("client must time out")
 	}
 }

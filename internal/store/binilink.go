@@ -2,17 +2,30 @@ package store
 
 import (
 	"context"
+	"regexp"
 	"time"
 )
 
+// BiniLink's ingress rejects any other ID shape with a 400.
+const (
+	biniLinkVideoIDPattern      = `^[A-Za-z0-9_-]{11}$`
+	biniLinkAppleTrackIDPattern = `^[0-9]{1,128}$`
+)
+
+var (
+	biniLinkVideoID      = regexp.MustCompile(biniLinkVideoIDPattern)
+	biniLinkAppleTrackID = regexp.MustCompile(biniLinkAppleTrackIDPattern)
+)
+
 type BiniLinkPending struct {
-	VideoID      string
-	AppleTrackID string
-	Attempts     int
+	VideoID           string
+	AppleTrackID      string
+	Attempts          int
+	UnresolvedRetried bool
 }
 
 func (s *Store) EnqueueBiniLink(ctx context.Context, videoID, appleTrackID string) error {
-	if videoID == "" || appleTrackID == "" {
+	if !biniLinkVideoID.MatchString(videoID) || !biniLinkAppleTrackID.MatchString(appleTrackID) {
 		return nil
 	}
 	_, err := s.pool.Exec(ctx,
@@ -21,9 +34,23 @@ func (s *Store) EnqueueBiniLink(ctx context.Context, videoID, appleTrackID strin
 	return err
 }
 
+// EnqueueBiniLinkForCacheKey queues the video against the Apple track stored for cacheKey, in one statement.
+func (s *Store) EnqueueBiniLinkForCacheKey(ctx context.Context, videoID, cacheKey string) error {
+	if !biniLinkVideoID.MatchString(videoID) {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO binilink_links (video_id, apple_track_id)
+		SELECT $1, apple_track_id FROM song_metadata
+		WHERE cache_key = $2 AND apple_track_id ~ $3
+		ON CONFLICT DO NOTHING`,
+		videoID, cacheKey, biniLinkAppleTrackIDPattern)
+	return err
+}
+
 func (s *Store) ClaimBiniLinkPending(ctx context.Context, limit int) ([]BiniLinkPending, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT video_id, apple_track_id, attempts FROM binilink_links
+		SELECT video_id, apple_track_id, attempts, unresolved_retried FROM binilink_links
 		WHERE status = 'pending' AND next_attempt <= now()
 		ORDER BY next_attempt
 		LIMIT $1`, limit)
@@ -35,7 +62,7 @@ func (s *Store) ClaimBiniLinkPending(ctx context.Context, limit int) ([]BiniLink
 	var out []BiniLinkPending
 	for rows.Next() {
 		var p BiniLinkPending
-		if err := rows.Scan(&p.VideoID, &p.AppleTrackID, &p.Attempts); err != nil {
+		if err := rows.Scan(&p.VideoID, &p.AppleTrackID, &p.Attempts, &p.UnresolvedRetried); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -52,8 +79,17 @@ func (s *Store) SetBiniLinkResult(ctx context.Context, videoID, status string, a
 	return err
 }
 
+func (s *Store) MarkBiniLinkUnresolvedRetry(ctx context.Context, videoID string, attempts int, nextAttempt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE binilink_links
+		SET status = 'pending', unresolved_retried = TRUE, attempts = $2, next_attempt = $3, updated_at = now()
+		WHERE video_id = $1`,
+		videoID, attempts, nextAttempt)
+	return err
+}
+
 // SeedBiniLinkBackfill enqueues one page of historical videos, keeping only those whose
-// every cache key has metadata, an Apple track ID and the same non-empty ISRC.
+// every cache key has metadata, a valid Apple track ID and the same non-empty ISRC.
 func (s *Store) SeedBiniLinkBackfill(ctx context.Context, after string, pageSize int) (seeded int, next string, err error) {
 	var last *string
 	var scanned, inserted int
@@ -69,9 +105,10 @@ func (s *Store) SeedBiniLinkBackfill(ctx context.Context, after string, pageSize
 			FROM page p
 			JOIN video_map v ON v.video_id = p.video_id
 			LEFT JOIN song_metadata m ON m.cache_key = v.cache_key
+			WHERE p.video_id ~ $3
 			GROUP BY p.video_id
 			HAVING bool_and(m.cache_key IS NOT NULL)
-			   AND bool_and(m.apple_track_id <> '')
+			   AND bool_and(m.apple_track_id ~ $4)
 			   AND bool_and(m.isrc <> '')
 			   AND count(DISTINCT m.isrc) = 1
 		),
@@ -82,7 +119,7 @@ func (s *Store) SeedBiniLinkBackfill(ctx context.Context, after string, pageSize
 			RETURNING 1
 		)
 		SELECT (SELECT max(video_id) FROM page), (SELECT count(*) FROM page), (SELECT count(*) FROM ins)`,
-		after, pageSize).Scan(&last, &scanned, &inserted)
+		after, pageSize, biniLinkVideoIDPattern, biniLinkAppleTrackIDPattern).Scan(&last, &scanned, &inserted)
 	if err != nil {
 		return 0, "", err
 	}

@@ -17,6 +17,7 @@ const (
 	maxAttempts     = 10
 	idleSleep       = 30 * time.Second
 	unresolvedRetry = 7 * 24 * time.Hour
+	statusFailed    = "failed"
 )
 
 var backoffSchedule = []time.Duration{
@@ -50,7 +51,7 @@ func Start(ctx context.Context, st *store.Store, s Settings) bool {
 	}
 	u := &uploader{
 		store:     st,
-		client:    &http.Client{Timeout: 15 * time.Second},
+		client:    newHTTPClient(),
 		baseURL:   s.BaseURL,
 		key:       s.Key,
 		userAgent: s.UserAgent,
@@ -128,13 +129,13 @@ func (u *uploader) record(ctx context.Context, row store.BiniLinkPending, outcom
 	switch outcome {
 	case OutcomeRetry:
 		if attempts >= maxAttempts {
-			status = string(OutcomeUnresolved)
+			status = statusFailed
 		} else {
 			status, next = "pending", now.Add(backoff(attempts, retryAfter))
 		}
 	case OutcomeUnresolved:
-		if row.Attempts == 0 {
-			status, next = "pending", now.Add(unresolvedRetry)
+		if !row.UnresolvedRetried {
+			return u.store.MarkBiniLinkUnresolvedRetry(ctx, row.VideoID, attempts, now.Add(unresolvedRetry))
 		}
 	case OutcomeConflict:
 		log.Warnf("%s BiniLink conflict: videoId %s already linked elsewhere (Apple ID %s)",

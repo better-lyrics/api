@@ -115,7 +115,9 @@ func TestConformanceNewBiniLinkQueue(t *testing.T) {
 		{Song: "Bare Song", Artist: "Link Tester", TTML: "<tt>BARE</tt>"},
 		{Song: "No Apple", Artist: "Link Tester", TTML: "<tt>NO APPLE</tt>"},
 	}, seedLyricsData...)
-	base := newServerBase(t, stubEnv(stub.URL), seed, seedNegativeData)
+	env := stubEnv(stub.URL)
+	env["FF_BINILINK_INGRESS"] = "true"
+	base := newServerBase(t, env, seed, seedNegativeData)
 	resetBiniLinkQueue(t)
 
 	_, st := ensurePostgres(t)
@@ -153,6 +155,15 @@ func TestConformanceNewBiniLinkQueue(t *testing.T) {
 	t.Run("exact hit on metadata without an Apple ID queues nothing", func(t *testing.T) {
 		requestLyrics(t, base, lyricsQuery("No Apple", "Link Tester", "", "JGwWNGJdvx8"), "HIT")
 		waitVideoMapped(t, "JGwWNGJdvx8")
+	})
+
+	t.Run("malformed videoIds queue nothing", func(t *testing.T) {
+		q := lyricsQuery("Linked Song", "Link Tester", "200", "dQw4w9WgXcQ")
+		q.Set("v", "dQw4w9WgXcQ")
+		requestLyrics(t, base, q, "HIT")
+		waitVideoMapped(t, "dQw4w9WgXcQdQw4w9WgXcQ")
+		requestLyrics(t, base, lyricsQuery("Linked Song", "Link Tester", "200", "bad id!"), "HIT")
+		waitVideoMapped(t, "bad id!")
 	})
 
 	t.Run("requests without a videoId queue nothing", func(t *testing.T) {
@@ -268,5 +279,30 @@ func TestConformanceNewBiniLinkBackfill(t *testing.T) {
 
 	if seeded, _, done := backfillPage(t, base, "", 10000); seeded != 0 || !done {
 		t.Fatalf("second full pass seeded %d done=%v, want 0 true", seeded, done)
+	}
+}
+
+func TestConformanceNewBiniLinkQueueOffByDefault(t *testing.T) {
+	stub := upstreamStub(t)
+	seed := append([]SeedLyrics{
+		{Song: "Flag Off", Artist: "Link Tester", Duration: "200", TTML: "<tt>OFF</tt>"},
+	}, seedLyricsData...)
+	base := newServerBase(t, stubEnv(stub.URL), seed, seedNegativeData)
+	resetBiniLinkQueue(t)
+
+	_, st := ensurePostgres(t)
+	if err := st.SetSongMetadata(context.Background(), &store.SongMetadata{
+		CacheKey: normalizedCacheKey("Flag Off", "Link Tester", "", "200"), AppleTrackID: "1700000001", ISRC: "USFLAG000001",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	requestLyrics(t, base, lyricsQuery("Flag Off", "Link Tester", "200", "flagOff0001"), "HIT")
+	requestLyrics(t, base, lyricsQuery("Fresh Hit", "Fresh Artist", "", "flagOff0002"), "MISS")
+	waitVideoMapped(t, "flagOff0001")
+	waitVideoMapped(t, "flagOff0002")
+	time.Sleep(200 * time.Millisecond)
+	if got := queuedLinks(t); len(got) != 0 {
+		t.Fatalf("flag off must queue nothing, got %+v", got)
 	}
 }
