@@ -53,6 +53,7 @@ type PersistedStats struct {
 	LRCRedFlagErrors        int64 `json:"lrcred_flag_errors"`
 	BiniLinkSent            int64 `json:"binilink_sent"`
 	BiniLinkLinked          int64 `json:"binilink_linked"`
+	BiniLinkQueued          int64 `json:"binilink_queued"`
 	BiniLinkExists          int64 `json:"binilink_exists"`
 	BiniLinkConflict        int64 `json:"binilink_conflict"`
 	BiniLinkUnresolved      int64 `json:"binilink_unresolved"`

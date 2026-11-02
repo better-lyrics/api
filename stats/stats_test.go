@@ -45,29 +45,29 @@ func TestLRCRedCounters_PersistRoundTrip(t *testing.T) {
 
 func TestRecordBiniLink(t *testing.T) {
 	s := newStats()
-	for _, outcome := range []string{"linked", "linked", "exists", "conflict", "unresolved", "no_isrc", "invalid", "retry"} {
+	for _, outcome := range []string{"linked", "linked", "queued", "exists", "conflict", "unresolved", "no_isrc", "invalid", "retry"} {
 		s.RecordBiniLink(outcome)
 	}
 	got := []int64{
-		s.BiniLinkSent.Load(), s.BiniLinkLinked.Load(), s.BiniLinkExists.Load(),
+		s.BiniLinkSent.Load(), s.BiniLinkLinked.Load(), s.BiniLinkQueued.Load(), s.BiniLinkExists.Load(),
 		s.BiniLinkConflict.Load(), s.BiniLinkUnresolved.Load(), s.BiniLinkErrors.Load(),
 	}
-	want := []int64{8, 2, 1, 1, 2, 2}
+	want := []int64{9, 2, 1, 1, 1, 2, 2}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("sent/linked/exists/conflict/unresolved/errors = %v, want %v", got, want)
+			t.Fatalf("sent/linked/queued/exists/conflict/unresolved/errors = %v, want %v", got, want)
 		}
 	}
 }
 
 func TestBiniLinkCounters_PersistRoundTrip(t *testing.T) {
 	s := newStats()
-	for _, outcome := range []string{"linked", "exists", "conflict", "unresolved", "retry"} {
+	for _, outcome := range []string{"linked", "queued", "exists", "conflict", "unresolved", "retry"} {
 		s.RecordBiniLink(outcome)
 	}
 	restored := newStats()
 	restored.Restore(s.Serialize())
-	if restored.BiniLinkSent.Load() != 5 || restored.BiniLinkLinked.Load() != 1 || restored.BiniLinkExists.Load() != 1 ||
+	if restored.BiniLinkSent.Load() != 6 || restored.BiniLinkLinked.Load() != 1 || restored.BiniLinkQueued.Load() != 1 || restored.BiniLinkExists.Load() != 1 ||
 		restored.BiniLinkConflict.Load() != 1 || restored.BiniLinkUnresolved.Load() != 1 || restored.BiniLinkErrors.Load() != 1 {
 		t.Fatal("round-trip lost binilink counters")
 	}

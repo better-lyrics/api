@@ -38,6 +38,7 @@ type Stats struct {
 	// BiniLink YouTube ingress
 	BiniLinkSent       atomic.Int64
 	BiniLinkLinked     atomic.Int64
+	BiniLinkQueued     atomic.Int64
 	BiniLinkExists     atomic.Int64
 	BiniLinkConflict   atomic.Int64
 	BiniLinkUnresolved atomic.Int64
@@ -296,6 +297,8 @@ func (s *Stats) RecordBiniLink(outcome string) {
 	switch outcome {
 	case "linked":
 		s.BiniLinkLinked.Add(1)
+	case "queued":
+		s.BiniLinkQueued.Add(1)
 	case "exists":
 		s.BiniLinkExists.Add(1)
 	case "conflict":
@@ -499,6 +502,7 @@ func (s *Stats) Snapshot() map[string]interface{} {
 		"binilink": map[string]interface{}{
 			"sent":       s.BiniLinkSent.Load(),
 			"linked":     s.BiniLinkLinked.Load(),
+			"queued":     s.BiniLinkQueued.Load(),
 			"exists":     s.BiniLinkExists.Load(),
 			"conflict":   s.BiniLinkConflict.Load(),
 			"unresolved": s.BiniLinkUnresolved.Load(),

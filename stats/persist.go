@@ -29,6 +29,7 @@ func (s *Stats) Serialize() PersistedStats {
 		LRCRedFlagErrors:        s.LRCRedFlagErrors.Load(),
 		BiniLinkSent:            s.BiniLinkSent.Load(),
 		BiniLinkLinked:          s.BiniLinkLinked.Load(),
+		BiniLinkQueued:          s.BiniLinkQueued.Load(),
 		BiniLinkExists:          s.BiniLinkExists.Load(),
 		BiniLinkConflict:        s.BiniLinkConflict.Load(),
 		BiniLinkUnresolved:      s.BiniLinkUnresolved.Load(),
@@ -77,6 +78,7 @@ func (s *Stats) Restore(p PersistedStats) {
 	s.LRCRedFlagErrors.Store(p.LRCRedFlagErrors)
 	s.BiniLinkSent.Store(p.BiniLinkSent)
 	s.BiniLinkLinked.Store(p.BiniLinkLinked)
+	s.BiniLinkQueued.Store(p.BiniLinkQueued)
 	s.BiniLinkExists.Store(p.BiniLinkExists)
 	s.BiniLinkConflict.Store(p.BiniLinkConflict)
 	s.BiniLinkUnresolved.Store(p.BiniLinkUnresolved)
