@@ -59,7 +59,7 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 			log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
 		}
 		if videoID != "" {
-			go s.linkCachedVideo(context.Background(), foundKey, videoID, foundKey == cacheKey)
+			go s.linkCachedVideo(context.Background(), foundKey, videoID, isExactCacheKey(foundKey, songName, artistName, albumName, durationStr))
 		}
 		s.checkLRCRedCopy(foundKey, cached)
 		respond(w, r).SetCacheStatus("HIT").JSON(map[string]interface{}{

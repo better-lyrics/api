@@ -127,6 +127,13 @@ func TestConformanceNewBiniLinkQueue(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	legacyKey := "ttml_lyrics:Legacy Song Link Tester  200s"
+	if err := st.SetLyrics(ctx, legacyKey, store.DeriveKey(legacyKey), store.CachedLyrics{TTML: "<tt>LEGACY</tt>"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSongMetadata(ctx, &store.SongMetadata{CacheKey: legacyKey, AppleTrackID: "1500000004", ISRC: "USLINK000004", TrackName: "Legacy Song", ArtistName: "Link Tester"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok, err := st.GetSongMetadata(ctx, normalizedCacheKey("Bare Song", "Link Tester", "", "")); err != nil || ok {
 		t.Fatalf("Bare Song must have no metadata: ok=%v err=%v", ok, err)
 	}
@@ -156,6 +163,11 @@ func TestConformanceNewBiniLinkQueue(t *testing.T) {
 		waitQueued(t, queuedLink{"dQw4w9WgXcQ", "1500000001"})
 	})
 
+	t.Run("legacy key hit is exact and queues the cached Apple track", func(t *testing.T) {
+		requestLyrics(t, base, lyricsQuery("Legacy Song", "Link Tester", "200", "hT_nvWreIhg"), "HIT")
+		waitQueued(t, queuedLink{"hT_nvWreIhg", "1500000004"})
+	})
+
 	t.Run("fresh fetch queues the matched Apple track", func(t *testing.T) {
 		requestLyrics(t, base, lyricsQuery("Fresh Hit", "Fresh Artist", "", "OPf0YbXqDm0"), "MISS")
 		waitQueued(t, queuedLink{"OPf0YbXqDm0", "1000001"})
@@ -164,9 +176,9 @@ func TestConformanceNewBiniLinkQueue(t *testing.T) {
 	t.Run("invariants", func(t *testing.T) {
 		requestLyrics(t, base, lyricsQuery("Linked Song", "Link Tester", "200", "dQw4w9WgXcQ"), "HIT")
 		time.Sleep(200 * time.Millisecond)
-		want := []queuedLink{{"OPf0YbXqDm0", "1000001"}, {"dQw4w9WgXcQ", "1500000001"}}
+		want := []queuedLink{{"OPf0YbXqDm0", "1000001"}, {"dQw4w9WgXcQ", "1500000001"}, {"hT_nvWreIhg", "1500000004"}}
 		got := queuedLinks(t)
-		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 			t.Fatalf("queue = %+v, want exactly %+v", got, want)
 		}
 	})

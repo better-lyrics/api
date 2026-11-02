@@ -167,3 +167,23 @@ func TestShouldNegativeCache(t *testing.T) {
 		})
 	}
 }
+
+func TestIsExactCacheKey(t *testing.T) {
+	cases := []struct {
+		name     string
+		foundKey string
+		want     bool
+	}{
+		{"normalized key", "ttml_lyrics:song artist 200s", true},
+		{"legacy key", "ttml_lyrics:Song Artist  200s", true},
+		{"nearby duration", "ttml_lyrics:song artist 202s", false},
+		{"no duration", "ttml_lyrics:song artist", false},
+		{"other song", "ttml_lyrics:other artist 200s", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		if got := isExactCacheKey(c.foundKey, "Song", "Artist", "", "200"); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
