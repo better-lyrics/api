@@ -15,6 +15,7 @@ type Outcome string
 
 const (
 	OutcomeLinked       Outcome = "linked"
+	OutcomeQueued       Outcome = "queued"
 	OutcomeExists       Outcome = "exists"
 	OutcomeConflict     Outcome = "conflict"
 	OutcomeUnresolved   Outcome = "unresolved"
@@ -67,6 +68,8 @@ func Post(client *http.Client, baseURL, key, userAgent, videoID, appleTrackID st
 	switch resp.StatusCode {
 	case http.StatusCreated:
 		return OutcomeLinked, 0, ""
+	case http.StatusAccepted:
+		return OutcomeQueued, 0, ""
 	case http.StatusOK:
 		return OutcomeExists, 0, ""
 	case http.StatusConflict:

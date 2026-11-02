@@ -16,6 +16,7 @@ func TestPostClassifiesStatus(t *testing.T) {
 		want Outcome
 	}{
 		{http.StatusCreated, OutcomeLinked},
+		{http.StatusAccepted, OutcomeQueued},
 		{http.StatusOK, OutcomeExists},
 		{http.StatusConflict, OutcomeConflict},
 		{http.StatusNotFound, OutcomeUnresolved},
