@@ -98,11 +98,15 @@ func TestKeySongCacheTag(t *testing.T) {
 		"ttml_lyrics:blinding lights the weeknd 200s",
 		"ttml_lyrics:Blinding Lights The Weeknd ",
 	} {
-		if got := KeySongCacheTag(key); got != want {
-			t.Errorf("KeySongCacheTag(%q) = %q, want the song tag %q", key, got, want)
+		t.Run(key, func(t *testing.T) {
+			if got := KeySongCacheTag(key); got != want {
+				t.Errorf("KeySongCacheTag(%q) = %q, want the song tag %q", key, got, want)
+			}
+		})
+	}
+	t.Run("album key", func(t *testing.T) {
+		if KeySongCacheTag("ttml_lyrics:blinding lights the weeknd after hours") == want {
+			t.Error("a key with an album must not map to the song tag of the song alone")
 		}
-	}
-	if KeySongCacheTag("ttml_lyrics:blinding lights the weeknd after hours") == want {
-		t.Error("a key with an album must not map to the song tag of the song alone")
-	}
+	})
 }
