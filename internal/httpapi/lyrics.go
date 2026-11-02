@@ -59,7 +59,7 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 			log.Infof("%s Found cached TTML", logcolors.LogCacheLyrics)
 		}
 		if videoID != "" {
-			go s.addVideoID(context.Background(), foundKey, videoID)
+			go s.linkCachedVideo(context.Background(), foundKey, videoID, foundKey == cacheKey)
 		}
 		s.checkLRCRedCopy(foundKey, cached)
 		respond(w, r).SetCacheStatus("HIT").JSON(map[string]interface{}{
@@ -252,6 +252,9 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 				meta.VideoIDs = []string{videoID}
 			}
 			s.setSongMetadata(bg, meta)
+			if videoID != "" {
+				s.enqueueBiniLink(bg, videoID, trackMeta.TrackID)
+			}
 			proxy.RevalidateAllForSong(trackMeta.Name, trackMeta.ArtistName, trackMeta.AlbumName, trackDurationMs/1000, s.videoIDsFunc(bg))
 		}()
 	} else if videoID != "" {
