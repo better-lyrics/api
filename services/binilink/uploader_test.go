@@ -464,7 +464,7 @@ func TestRunWaitsForWorkerLock(t *testing.T) {
 
 	held.Release()
 	released = true
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for srv.calls.Load() == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("worker never started after the lock was released")
@@ -591,10 +591,10 @@ const (
 
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
-			t.Fatal("condition not met within 5s")
+			t.Fatal("condition not met within 20s")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -643,12 +643,10 @@ func TestDrainChecksLockBeforeEachPost(t *testing.T) {
 }
 
 func TestLockSettleOutlastsAnyRequest(t *testing.T) {
-	u := newTestUploader("http://127.0.0.1:1", 0)
-	if got := u.lockSettle(); got <= u.client.Timeout {
-		t.Fatalf("lockSettle = %v, must exceed the client timeout %v", got, u.client.Timeout)
-	}
-	if got := newHTTPClient().Timeout; (&uploader{client: newHTTPClient()}).lockSettle() <= got {
-		t.Fatal("production settle must exceed the production client timeout")
+	for _, u := range []*uploader{newTestUploader("http://127.0.0.1:1", 0), {client: newHTTPClient()}} {
+		if got, floor := u.lockSettle(), u.client.Timeout+store.BiniLinkLockQueryTimeout; got <= floor {
+			t.Fatalf("lockSettle = %v, must exceed the lock check bound plus the client timeout (%v)", got, floor)
+		}
 	}
 }
 
@@ -673,5 +671,23 @@ func TestRunWaitsBeforeFirstPostAfterTakingTheLock(t *testing.T) {
 	waitFor(t, func() bool { return srv.calls.Load() == 1 })
 	if elapsed := time.Since(start); elapsed < u.lockSettle() {
 		t.Fatalf("first post after %v, want at least the settle wait %v", elapsed, u.lockSettle())
+	}
+}
+
+func TestDrainRecordsOutcomeWhenCancelledMidRequest(t *testing.T) {
+	resetBiniLink(t)
+	enqueue(t, "midCancel__", "1")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := newIngressServer(t, func(w http.ResponseWriter, _ string) {
+		cancel()
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	if _, _, err := newTestUploader(srv.URL, 0).drain(ctx); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if got := statusOf(t, "midCancel__"); got != "linked" {
+		t.Fatalf("status = %q, want linked: a finished request must be recorded even during shutdown", got)
 	}
 }

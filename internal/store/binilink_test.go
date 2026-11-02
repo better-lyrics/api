@@ -443,7 +443,26 @@ func TestTryBiniLinkWorkerLockIsBounded(t *testing.T) {
 	if _, ok, err := silent.TryBiniLinkWorkerLock(context.Background()); ok || err == nil {
 		t.Fatalf("a silent server must fail the lock: ok=%v err=%v", ok, err)
 	}
-	if elapsed := time.Since(start); elapsed > biniLinkLockQueryTimeout+2*time.Second {
-		t.Fatalf("lock attempt took %v, want about %v", elapsed, biniLinkLockQueryTimeout)
+	if elapsed := time.Since(start); elapsed > BiniLinkLockQueryTimeout+2*time.Second {
+		t.Fatalf("lock attempt took %v, want about %v", elapsed, BiniLinkLockQueryTimeout)
+	}
+}
+
+func TestBiniLinkWorkerLockSetsKeepalives(t *testing.T) {
+	ctx := context.Background()
+	lock, ok, err := testStore.TryBiniLinkWorkerLock(ctx)
+	if err != nil || !ok {
+		t.Fatalf("lock: ok=%v err=%v", ok, err)
+	}
+	defer lock.Release()
+
+	for setting, want := range map[string]string{"tcp_keepalives_idle": "30", "tcp_keepalives_interval": "10", "tcp_keepalives_count": "3"} {
+		var got string
+		if err := lock.conn.QueryRow(ctx, "SELECT current_setting($1)", setting).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%s = %q, want %q", setting, got, want)
+		}
 	}
 }

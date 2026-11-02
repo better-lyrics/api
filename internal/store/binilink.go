@@ -140,7 +140,7 @@ func (s *Store) SeedBiniLinkBackfill(ctx context.Context, after string, pageSize
 // Session advisory lock: keeps one uploader running while an old and a new deploy overlap.
 const (
 	biniLinkWorkerLockID     int64 = 0x62696e696c696e6b
-	biniLinkLockQueryTimeout       = 5 * time.Second
+	BiniLinkLockQueryTimeout       = 5 * time.Second
 )
 
 // BiniLinkWorkerLock holds the lock on its own connection, so it uses no pool slot and its loss shows in Held.
@@ -149,9 +149,13 @@ type BiniLinkWorkerLock struct {
 }
 
 func (s *Store) TryBiniLinkWorkerLock(ctx context.Context) (*BiniLinkWorkerLock, bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, biniLinkLockQueryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, BiniLinkLockQueryTimeout)
 	defer cancel()
-	conn, err := pgx.ConnectConfig(ctx, s.pool.Config().ConnConfig.Copy())
+	cfg := s.pool.Config().ConnConfig.Copy()
+	cfg.RuntimeParams["tcp_keepalives_idle"] = "30"
+	cfg.RuntimeParams["tcp_keepalives_interval"] = "10"
+	cfg.RuntimeParams["tcp_keepalives_count"] = "3"
+	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, false, err
 	}
@@ -165,7 +169,7 @@ func (s *Store) TryBiniLinkWorkerLock(ctx context.Context) (*BiniLinkWorkerLock,
 }
 
 func (l *BiniLinkWorkerLock) Held(ctx context.Context) bool {
-	ctx, cancel := context.WithTimeout(ctx, biniLinkLockQueryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, BiniLinkLockQueryTimeout)
 	defer cancel()
 	var held bool
 	err := l.conn.QueryRow(ctx, `
@@ -180,7 +184,7 @@ func (l *BiniLinkWorkerLock) Held(ctx context.Context) bool {
 
 // Release ends the session, which frees the lock even if the unlock round trip would fail.
 func (l *BiniLinkWorkerLock) Release() {
-	ctx, cancel := context.WithTimeout(context.Background(), biniLinkLockQueryTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), BiniLinkLockQueryTimeout)
 	defer cancel()
 	l.conn.Close(ctx)
 }

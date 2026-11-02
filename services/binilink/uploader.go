@@ -19,6 +19,7 @@ import (
 const (
 	batchSize       = 50
 	maxAttempts     = 10
+	recordTimeout   = 5 * time.Second
 	unresolvedRetry = 7 * 24 * time.Hour
 	statusFailed    = "failed"
 )
@@ -161,10 +162,10 @@ func (u *uploader) waitForLock(ctx context.Context) (*store.BiniLinkWorkerLock, 
 	}
 }
 
-// lockSettle is how long a new lock holder waits before its first post: longer than any request a
-// previous holder could still have in flight, since that holder checks the lock before every post.
+// lockSettle outlasts a previous holder's last post: its passing Held reply can arrive up to the
+// lock query bound after the lock was lost, and the post then runs for up to the client timeout.
 func (u *uploader) lockSettle() time.Duration {
-	return u.client.Timeout + u.client.Timeout/3
+	return store.BiniLinkLockQueryTimeout + u.client.Timeout + time.Second
 }
 
 func runWait(pause time.Duration) time.Duration {
@@ -198,7 +199,10 @@ func (u *uploader) drain(ctx context.Context) (stop bool, pause time.Duration, e
 				stats.Get().RecordBiniLink(string(outcome))
 				return true, 0, nil
 			}
-			if err := u.record(ctx, row, outcome, retryAfter); err != nil {
+			recordCtx, cancelRecord := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+			err := u.record(recordCtx, row, outcome, retryAfter)
+			cancelRecord()
+			if err != nil {
 				return false, 0, err
 			}
 			if outcome == OutcomeRetry {
