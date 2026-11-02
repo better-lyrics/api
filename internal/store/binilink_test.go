@@ -232,7 +232,7 @@ func TestEnqueueBiniLinkRejectsMalformedIDs(t *testing.T) {
 	}
 }
 
-func TestEnqueueBiniLinkForCacheKey(t *testing.T) {
+func TestAddVideoIDAndEnqueueBiniLink(t *testing.T) {
 	resetTables(t)
 	ctx := context.Background()
 
@@ -252,14 +252,12 @@ func TestEnqueueBiniLinkForCacheKey(t *testing.T) {
 		{"ccccccccccc", "k-bad-apple"},
 		{"ddddddddddd", "k-missing"},
 		{"not-a-video-id", "k-apple"},
+		{"aaaaaaaaaaa", "k-apple"},
 	}
 	for _, c := range cases {
-		if err := testStore.EnqueueBiniLinkForCacheKey(ctx, c.video, c.key); err != nil {
+		if err := testStore.AddVideoIDAndEnqueueBiniLink(ctx, c.key, c.video); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := testStore.EnqueueBiniLinkForCacheKey(ctx, "aaaaaaaaaaa", "k-apple"); err != nil {
-		t.Fatal(err)
 	}
 
 	rows, err := testStore.ClaimBiniLinkPending(ctx, 10)
@@ -268,6 +266,30 @@ func TestEnqueueBiniLinkForCacheKey(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].VideoID != "aaaaaaaaaaa" || rows[0].AppleTrackID != "1440815557" {
 		t.Fatalf("want only the pair with a valid Apple ID, got %+v", rows)
+	}
+
+	for _, c := range cases {
+		keys, err := testStore.GetCacheKeysByVideoID(ctx, c.video)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(keys) != 1 || keys[0] != c.key {
+			t.Fatalf("video_map for %s = %v, want [%s]: recording must not depend on queueing", c.video, keys, c.key)
+		}
+	}
+}
+
+func TestAddVideoIDAndEnqueueBiniLinkSkipsEmpty(t *testing.T) {
+	resetTables(t)
+	ctx := context.Background()
+	if err := testStore.AddVideoIDAndEnqueueBiniLink(ctx, "", "aaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+	if err := testStore.AddVideoIDAndEnqueueBiniLink(ctx, "k", ""); err != nil {
+		t.Fatal(err)
+	}
+	if keys, _ := testStore.GetCacheKeysByVideoID(ctx, "aaaaaaaaaaa"); len(keys) != 0 {
+		t.Fatalf("empty cache key must not be recorded, got %v", keys)
 	}
 }
 
@@ -314,4 +336,31 @@ func TestMarkBiniLinkUnresolvedRetry(t *testing.T) {
 	if len(rows) != 1 || !rows[0].UnresolvedRetried || rows[0].Attempts != 2 {
 		t.Fatalf("want pending, marked, attempts 2, got %+v", rows)
 	}
+}
+
+func TestTryBiniLinkWorkerLock(t *testing.T) {
+	ctx := context.Background()
+
+	release, ok, err := testStore.TryBiniLinkWorkerLock(ctx)
+	if err != nil || !ok {
+		t.Fatalf("first lock: ok=%v err=%v", ok, err)
+	}
+
+	other, err := New(ctx, testDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+
+	if _, ok, err := other.TryBiniLinkWorkerLock(ctx); err != nil || ok {
+		t.Fatalf("second worker must not get the lock: ok=%v err=%v", ok, err)
+	}
+
+	release()
+
+	releaseOther, ok, err := other.TryBiniLinkWorkerLock(ctx)
+	if err != nil || !ok {
+		t.Fatalf("lock after release: ok=%v err=%v", ok, err)
+	}
+	releaseOther()
 }

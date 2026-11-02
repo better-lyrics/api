@@ -2,7 +2,10 @@ package binilink
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"lyrics-api-go/internal/store"
@@ -49,10 +52,15 @@ func Start(ctx context.Context, st *store.Store, s Settings) bool {
 	if !s.Enabled || s.Key == "" {
 		return false
 	}
+	baseURL, err := normalizeBaseURL(s.BaseURL)
+	if err != nil {
+		log.Errorf("%s BiniLink uploader not started: %v", logcolors.LogBini, err)
+		return false
+	}
 	u := &uploader{
 		store:     st,
 		client:    newHTTPClient(),
-		baseURL:   s.BaseURL,
+		baseURL:   baseURL,
 		key:       s.Key,
 		userAgent: s.UserAgent,
 		interval:  s.Interval,
@@ -61,9 +69,28 @@ func Start(ctx context.Context, st *store.Store, s Settings) bool {
 	return true
 }
 
+func normalizeBaseURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid BINILINK_BASE_URL: %w", err)
+	}
+	if (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("BINILINK_BASE_URL must be an http(s) origin with an optional path, got %q", raw)
+	}
+	return strings.TrimRight(raw, "/"), nil
+}
+
+var lockRetryInterval = idleSleep
+
 func (u *uploader) run(ctx context.Context) {
+	release, ok := u.waitForLock(ctx)
+	if !ok {
+		return
+	}
+	defer release()
+
 	for {
-		stop, err := u.drain(ctx)
+		stop, pause, err := u.drain(ctx)
 		if stop {
 			log.Errorf("%s BiniLink ingress key rejected; uploader stopped", logcolors.LogBini)
 			return
@@ -74,35 +101,60 @@ func (u *uploader) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(idleSleep):
+		case <-time.After(runWait(pause)):
 		}
 	}
 }
 
-func (u *uploader) drain(ctx context.Context) (stop bool, err error) {
+func (u *uploader) waitForLock(ctx context.Context) (release func(), ok bool) {
+	for {
+		release, ok, err := u.store.TryBiniLinkWorkerLock(ctx)
+		if err != nil {
+			log.Warnf("%s BiniLink worker lock failed: %v", logcolors.LogBini, err)
+		} else if ok {
+			return release, true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(lockRetryInterval):
+		}
+	}
+}
+
+func runWait(pause time.Duration) time.Duration {
+	return max(pause, idleSleep)
+}
+
+// A retryable reply ends the pass so a busy server gets no more requests; pause is its Retry-After.
+func (u *uploader) drain(ctx context.Context) (stop bool, pause time.Duration, err error) {
 	posted := false
 	for {
 		if ctx.Err() != nil {
-			return false, nil
+			return false, 0, nil
 		}
 		rows, err := u.store.ClaimBiniLinkPending(ctx, batchSize)
 		if err != nil {
-			return false, err
+			return false, 0, err
 		}
 		if len(rows) == 0 {
-			return false, nil
+			return false, 0, nil
 		}
 		for _, row := range rows {
 			if ctx.Err() != nil || (posted && !u.pause(ctx)) {
-				return false, nil
+				return false, 0, nil
 			}
 			outcome, retryAfter := Post(u.client, u.baseURL, u.key, u.userAgent, row.VideoID, row.AppleTrackID)
 			posted = true
 			if outcome == OutcomeUnauthorized {
-				return true, nil
+				return true, 0, nil
 			}
 			if err := u.record(ctx, row, outcome, retryAfter); err != nil {
-				return false, err
+				return false, 0, err
+			}
+			if outcome == OutcomeRetry {
+				log.Warnf("%s BiniLink busy or unreachable; pausing for %v", logcolors.LogBini, runWait(retryAfter))
+				return false, retryAfter, nil
 			}
 		}
 	}

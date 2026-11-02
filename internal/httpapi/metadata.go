@@ -35,17 +35,17 @@ func (s *Server) enqueueBiniLink(ctx context.Context, videoID, appleTrackID stri
 		return
 	}
 	if err := s.store.EnqueueBiniLink(ctx, videoID, appleTrackID); err != nil {
-		log.Errorf("%s Error enqueueing BiniLink pair: %v", logcolors.LogCache, err)
+		log.Errorf("%s Error enqueueing BiniLink pair: %v", logcolors.LogBini, err)
 	}
 }
 
 func (s *Server) linkCachedVideo(ctx context.Context, cacheKey, videoID string, trusted bool) {
-	s.addVideoID(ctx, cacheKey, videoID)
 	if !trusted || !s.cfg.FeatureFlags.BiniLinkIngress {
+		s.addVideoID(ctx, cacheKey, videoID)
 		return
 	}
-	if err := s.store.EnqueueBiniLinkForCacheKey(ctx, videoID, cacheKey); err != nil {
-		log.Errorf("%s Error enqueueing BiniLink pair: %v", logcolors.LogCache, err)
+	if err := s.store.AddVideoIDAndEnqueueBiniLink(ctx, cacheKey, videoID); err != nil {
+		log.Errorf("%s Error recording videoId and BiniLink pair: %v", logcolors.LogBini, err)
 	}
 }
 

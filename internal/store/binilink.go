@@ -34,12 +34,18 @@ func (s *Store) EnqueueBiniLink(ctx context.Context, videoID, appleTrackID strin
 	return err
 }
 
-// EnqueueBiniLinkForCacheKey queues the video against the Apple track stored for cacheKey, in one statement.
-func (s *Store) EnqueueBiniLinkForCacheKey(ctx context.Context, videoID, cacheKey string) error {
+// AddVideoIDAndEnqueueBiniLink records the video like AddVideoID and queues its Apple track in the same round trip.
+func (s *Store) AddVideoIDAndEnqueueBiniLink(ctx context.Context, cacheKey, videoID string) error {
 	if !biniLinkVideoID.MatchString(videoID) {
+		return s.AddVideoID(ctx, cacheKey, videoID)
+	}
+	if cacheKey == "" {
 		return nil
 	}
 	_, err := s.pool.Exec(ctx, `
+		WITH mapped AS (
+			INSERT INTO video_map (video_id, cache_key) VALUES ($1, $2) ON CONFLICT DO NOTHING
+		)
 		INSERT INTO binilink_links (video_id, apple_track_id)
 		SELECT $1, apple_track_id FROM song_metadata
 		WHERE cache_key = $2 AND apple_track_id ~ $3
@@ -127,4 +133,28 @@ func (s *Store) SeedBiniLinkBackfill(ctx context.Context, after string, pageSize
 		return inserted, "", nil
 	}
 	return inserted, *last, nil
+}
+
+// Session advisory lock: keeps one uploader running while an old and a new deploy overlap.
+const biniLinkWorkerLockID int64 = 0x62696e696c696e6b
+
+func (s *Store) TryBiniLinkWorkerLock(ctx context.Context) (release func(), ok bool, err error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, biniLinkWorkerLockID).Scan(&ok); err != nil {
+		conn.Release()
+		return nil, false, err
+	}
+	if !ok {
+		conn.Release()
+		return nil, false, nil
+	}
+	return func() {
+		if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, biniLinkWorkerLockID); err != nil {
+			conn.Conn().Close(context.Background())
+		}
+		conn.Release()
+	}, true, nil
 }

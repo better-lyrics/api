@@ -94,7 +94,7 @@ func TestDrainEmptyQueue(t *testing.T) {
 	resetBiniLink(t)
 	srv := newIngressServer(t, statusResponder(http.StatusCreated))
 
-	stop, err := newTestUploader(srv.URL, 0).drain(context.Background())
+	stop, _, err := newTestUploader(srv.URL, 0).drain(context.Background())
 	if stop || err != nil {
 		t.Fatalf("drain = (%v, %v), want (false, nil)", stop, err)
 	}
@@ -107,21 +107,19 @@ func TestDrainRecordsOutcomes(t *testing.T) {
 	resetBiniLink(t)
 	enqueue(t, "vidLinked__", "1")
 	enqueue(t, "vidConflict", "2")
-	enqueue(t, "vidRetry___", "3")
 	codes := map[string]int{
 		"vidLinked__": http.StatusCreated,
 		"vidConflict": http.StatusConflict,
-		"vidRetry___": http.StatusServiceUnavailable,
 	}
 	srv := newIngressServer(t, func(w http.ResponseWriter, videoID string) {
 		w.WriteHeader(codes[videoID])
 	})
 
-	stop, err := newTestUploader(srv.URL, 0).drain(context.Background())
+	stop, _, err := newTestUploader(srv.URL, 0).drain(context.Background())
 	if stop || err != nil {
 		t.Fatalf("drain = (%v, %v), want (false, nil)", stop, err)
 	}
-	want := map[string]string{"vidLinked__": "linked", "vidConflict": "conflict", "vidRetry___": "pending"}
+	want := map[string]string{"vidLinked__": "linked", "vidConflict": "conflict"}
 	for videoID, status := range want {
 		if got := statusOf(t, videoID); got != status {
 			t.Errorf("status of %s = %q, want %q", videoID, got, status)
@@ -130,8 +128,8 @@ func TestDrainRecordsOutcomes(t *testing.T) {
 			t.Errorf("attempts of %s = %d, want 1", videoID, got)
 		}
 	}
-	if n := srv.calls.Load(); n != 3 {
-		t.Errorf("http calls = %d, want 3", n)
+	if n := srv.calls.Load(); n != 2 {
+		t.Errorf("http calls = %d, want 2", n)
 	}
 	due, err := testStore.ClaimBiniLinkPending(context.Background(), 50)
 	if err != nil {
@@ -148,7 +146,7 @@ func TestDrainStopsOnUnauthorized(t *testing.T) {
 	enqueue(t, "vidB_______", "2")
 	srv := newIngressServer(t, statusResponder(http.StatusUnauthorized))
 
-	stop, err := newTestUploader(srv.URL, 0).drain(context.Background())
+	stop, _, err := newTestUploader(srv.URL, 0).drain(context.Background())
 	if !stop || err != nil {
 		t.Fatalf("drain = (%v, %v), want (true, nil)", stop, err)
 	}
@@ -171,7 +169,7 @@ func TestDrainUnresolvedRetriesOnce(t *testing.T) {
 	srv := newIngressServer(t, statusResponder(http.StatusNotFound))
 	u := newTestUploader(srv.URL, 0)
 
-	if _, err := u.drain(context.Background()); err != nil {
+	if _, _, err := u.drain(context.Background()); err != nil {
 		t.Fatalf("first drain: %v", err)
 	}
 	if got := statusOf(t, "vid404_____"); got != "pending" {
@@ -180,7 +178,7 @@ func TestDrainUnresolvedRetriesOnce(t *testing.T) {
 	assertNear(t, nextAttemptOf(t, "vid404_____"), time.Now().Add(7*24*time.Hour), time.Minute)
 
 	makeDue(t, "vid404_____", 1)
-	if _, err := u.drain(context.Background()); err != nil {
+	if _, _, err := u.drain(context.Background()); err != nil {
 		t.Fatalf("second drain: %v", err)
 	}
 	if got := statusOf(t, "vid404_____"); got != "unresolved" {
@@ -197,7 +195,7 @@ func TestDrainRetryGivesUpAfterMaxAttempts(t *testing.T) {
 	makeDue(t, "vidTired___", 9)
 	srv := newIngressServer(t, statusResponder(http.StatusServiceUnavailable))
 
-	if _, err := newTestUploader(srv.URL, 0).drain(context.Background()); err != nil {
+	if _, _, err := newTestUploader(srv.URL, 0).drain(context.Background()); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	if got := statusOf(t, "vidTired___"); got != "failed" {
@@ -216,7 +214,7 @@ func TestDrainHonoursRetryAfter(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 
-	if _, err := newTestUploader(srv.URL, 0).drain(context.Background()); err != nil {
+	if _, _, err := newTestUploader(srv.URL, 0).drain(context.Background()); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	if got := statusOf(t, "vidBusy____"); got != "pending" {
@@ -239,7 +237,7 @@ func TestDrainStopsOnContextCancel(t *testing.T) {
 	})
 
 	start := time.Now()
-	if _, err := newTestUploader(srv.URL, time.Hour).drain(ctx); err != nil && ctx.Err() == nil {
+	if _, _, err := newTestUploader(srv.URL, time.Hour).drain(ctx); err != nil && ctx.Err() == nil {
 		t.Fatalf("drain: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
@@ -278,12 +276,12 @@ func TestDrainUnresolvedRetriesOnceAfterTransientErrors(t *testing.T) {
 	srv := newIngressServer(t, func(w http.ResponseWriter, _ string) { w.WriteHeader(code) })
 	u := newTestUploader(srv.URL, 0)
 
-	if _, err := u.drain(context.Background()); err != nil {
+	if _, _, err := u.drain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	makeDue(t, "vidFlaky___", 1)
 	code = http.StatusNotFound
-	if _, err := u.drain(context.Background()); err != nil {
+	if _, _, err := u.drain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := statusOf(t, "vidFlaky___"); got != "pending" {
@@ -292,7 +290,7 @@ func TestDrainUnresolvedRetriesOnceAfterTransientErrors(t *testing.T) {
 	assertNear(t, nextAttemptOf(t, "vidFlaky___"), time.Now().Add(7*24*time.Hour), time.Minute)
 
 	makeDue(t, "vidFlaky___", 2)
-	if _, err := u.drain(context.Background()); err != nil {
+	if _, _, err := u.drain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := statusOf(t, "vidFlaky___"); got != "unresolved" {
@@ -306,10 +304,183 @@ func TestDrainUnresolvedRetryDoesNotOutliveMaxAttempts(t *testing.T) {
 	makeDue(t, "vidLate404_", 9)
 	srv := newIngressServer(t, statusResponder(http.StatusNotFound))
 
-	if _, err := newTestUploader(srv.URL, 0).drain(context.Background()); err != nil {
+	if _, _, err := newTestUploader(srv.URL, 0).drain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := statusOf(t, "vidLate404_"); got != "pending" {
 		t.Fatalf("status %q, want pending: a first 404 still earns its 7-day retry", got)
+	}
+}
+
+func TestDrainPausesOnRetryableReply(t *testing.T) {
+	cases := []struct {
+		name      string
+		respond   func(http.ResponseWriter, string)
+		wantPause time.Duration
+	}{
+		{"503 with Retry-After", func(w http.ResponseWriter, _ string) {
+			w.Header().Set("Retry-After", "600")
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}, 600 * time.Second},
+		{"503 without Retry-After", statusResponder(http.StatusServiceUnavailable), 0},
+		{"500", statusResponder(http.StatusInternalServerError), 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			resetBiniLink(t)
+			for _, v := range []string{"busy1______", "busy2______", "busy3______"} {
+				enqueue(t, v, "1")
+			}
+			srv := newIngressServer(t, c.respond)
+
+			stop, pause, err := newTestUploader(srv.URL, 0).drain(context.Background())
+			if stop || err != nil {
+				t.Fatalf("drain = (%v, %v), want (false, nil)", stop, err)
+			}
+			if pause != c.wantPause {
+				t.Fatalf("pause = %v, want %v", pause, c.wantPause)
+			}
+			if n := srv.calls.Load(); n != 1 {
+				t.Fatalf("http calls = %d, want 1: a busy server must not get more requests", n)
+			}
+			tried := 0
+			for _, v := range []string{"busy1______", "busy2______", "busy3______"} {
+				if statusOf(t, v) != "pending" {
+					t.Fatalf("%s left pending state", v)
+				}
+				tried += attemptsOf(t, v)
+			}
+			if tried != 1 {
+				t.Fatalf("attempts spent = %d, want 1: untried rows must keep their attempts", tried)
+			}
+		})
+	}
+}
+
+func TestDrainNetworkFailurePauses(t *testing.T) {
+	resetBiniLink(t)
+	enqueue(t, "down1______", "1")
+	enqueue(t, "down2______", "1")
+	srv := newIngressServer(t, statusResponder(http.StatusCreated))
+	url := srv.URL
+	srv.Close()
+
+	stop, _, err := newTestUploader(url, 0).drain(context.Background())
+	if stop || err != nil {
+		t.Fatalf("drain = (%v, %v)", stop, err)
+	}
+	if attemptsOf(t, "down1______")+attemptsOf(t, "down2______") != 1 {
+		t.Fatal("an unreachable server must cost one attempt, not one per row")
+	}
+}
+
+func TestRunWait(t *testing.T) {
+	cases := []struct{ pause, want time.Duration }{
+		{0, idleSleep},
+		{time.Second, idleSleep},
+		{10 * time.Minute, 10 * time.Minute},
+	}
+	for _, c := range cases {
+		if got := runWait(c.pause); got != c.want {
+			t.Errorf("runWait(%v) = %v, want %v", c.pause, got, c.want)
+		}
+	}
+}
+
+func TestNormalizeBaseURL(t *testing.T) {
+	ok := map[string]string{
+		"https://link.binimum.org":   "https://link.binimum.org",
+		"https://link.binimum.org/":  "https://link.binimum.org",
+		"https://link.binimum.org//": "https://link.binimum.org",
+		"http://127.0.0.1:8080":      "http://127.0.0.1:8080",
+		"https://example.com/proxy/": "https://example.com/proxy",
+	}
+	for in, want := range ok {
+		got, err := normalizeBaseURL(in)
+		if err != nil || got != want {
+			t.Errorf("normalizeBaseURL(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "link.binimum.org", "ftp://link.binimum.org", "https://", "://bad", "https://link.binimum.org?x=1", "https://link.binimum.org#frag"} {
+		if got, err := normalizeBaseURL(in); err == nil {
+			t.Errorf("normalizeBaseURL(%q) = %q, want error", in, got)
+		}
+	}
+}
+
+func TestStartRefusesBadBaseURL(t *testing.T) {
+	if Start(context.Background(), testStore, Settings{Enabled: true, Key: "k", BaseURL: "link.binimum.org"}) {
+		t.Fatal("must not start with a base URL that has no scheme")
+	}
+}
+
+func TestRunWaitsForWorkerLock(t *testing.T) {
+	resetBiniLink(t)
+	enqueue(t, "lockWait___", "1")
+	srv := newIngressServer(t, statusResponder(http.StatusCreated))
+
+	held, ok, err := testStore.TryBiniLinkWorkerLock(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("hold lock: ok=%v err=%v", ok, err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			held()
+		}
+	}()
+
+	previous := lockRetryInterval
+	lockRetryInterval = 20 * time.Millisecond
+	defer func() { lockRetryInterval = previous }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		newTestUploader(srv.URL, 0).run(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	if n := srv.calls.Load(); n != 0 {
+		t.Fatalf("http calls while another worker holds the lock = %d, want 0", n)
+	}
+
+	held()
+	released = true
+	deadline := time.Now().Add(3 * time.Second)
+	for srv.calls.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("worker never started after the lock was released")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := statusOf(t, "lockWait___"); got != "linked" {
+		t.Fatalf("status = %q, want linked", got)
+	}
+}
+
+func TestRunStopsWhileWaitingForLock(t *testing.T) {
+	held, ok, err := testStore.TryBiniLinkWorkerLock(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("hold lock: ok=%v err=%v", ok, err)
+	}
+	defer held()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		newTestUploader("http://127.0.0.1:1", 0).run(ctx)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not return after cancel while waiting for the lock")
 	}
 }
