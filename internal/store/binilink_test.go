@@ -2,9 +2,12 @@ package store
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestEnqueueBiniLinkKeepsFirstPair(t *testing.T) {
@@ -403,4 +406,44 @@ func TestBiniLinkWorkerLockDetectsLostSession(t *testing.T) {
 		t.Fatalf("lock must be free once its session is gone: ok=%v err=%v", ok, err)
 	}
 	other.Release()
+}
+
+func TestTryBiniLinkWorkerLockIsBounded(t *testing.T) {
+	cfg := testStore.pool.Config().ConnConfig
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+
+	silent := *testStore
+	poolCfg := testStore.pool.Config()
+	poolCfg.ConnConfig = cfg.Copy()
+	poolCfg.ConnConfig.Host = "127.0.0.1"
+	poolCfg.ConnConfig.Port = uint16(ln.Addr().(*net.TCPAddr).Port)
+	poolCfg.ConnConfig.ConnectTimeout = 0
+	poolCfg.ConnConfig.Fallbacks = nil
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	silent.pool = pool
+
+	start := time.Now()
+	if _, ok, err := silent.TryBiniLinkWorkerLock(context.Background()); ok || err == nil {
+		t.Fatalf("a silent server must fail the lock: ok=%v err=%v", ok, err)
+	}
+	if elapsed := time.Since(start); elapsed > biniLinkLockQueryTimeout+2*time.Second {
+		t.Fatalf("lock attempt took %v, want about %v", elapsed, biniLinkLockQueryTimeout)
+	}
 }

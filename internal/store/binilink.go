@@ -149,16 +149,19 @@ type BiniLinkWorkerLock struct {
 }
 
 func (s *Store) TryBiniLinkWorkerLock(ctx context.Context) (*BiniLinkWorkerLock, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, biniLinkLockQueryTimeout)
+	defer cancel()
 	conn, err := pgx.ConnectConfig(ctx, s.pool.Config().ConnConfig.Copy())
 	if err != nil {
 		return nil, false, err
 	}
+	lock := &BiniLinkWorkerLock{conn: conn}
 	var ok bool
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, biniLinkWorkerLockID).Scan(&ok); err != nil || !ok {
-		conn.Close(context.Background())
+		lock.Release()
 		return nil, false, err
 	}
-	return &BiniLinkWorkerLock{conn: conn}, true, nil
+	return lock, true, nil
 }
 
 func (l *BiniLinkWorkerLock) Held(ctx context.Context) bool {
