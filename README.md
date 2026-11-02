@@ -67,6 +67,8 @@ Deploys to [Railway](https://railway.com) from the `Dockerfile` (a distroless bu
 
 Configuration is all environment variables. Copy `.env.example` and fill it in. `DATABASE_URL` and the upstream API settings are required. Setting `LRC_RED_INGRESS_KEY` turns on contributing lyrics back to lrc.red; leave it unset and the contribution path stays off.
 
+YouTube links go to [BiniLink](https://link.binimum.org) when `FF_BINILINK_INGRESS=true` and `BINILINK_INGRESS_KEY` is set. Each pair is a YouTube video ID and the Apple Music track ID it resolved to, taken from fresh fetches and exact cache hits only, never from fuzzy duration matches. Pairs queue in the `binilink_links` table and one worker sends them one at a time, waiting `BINILINK_INGRESS_INTERVAL_MS` (default 200) between requests. `BINILINK_BASE_URL` defaults to `https://link.binimum.org`. Older video mappings are queued by calling `POST /binilink/backfill` with the admin token until `done` is true; only videos whose cache keys all agree on one ISRC are queued. The `binilink` block in `/stats` counts outcomes.
+
 ## Abuse prevention
 
 Fetching from upstream is an expensive path, so the API is built to serve the cache cheaply and make abuse of the fetch path uncomfortable.
