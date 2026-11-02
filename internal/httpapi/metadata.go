@@ -39,9 +39,9 @@ func (s *Server) enqueueBiniLink(ctx context.Context, videoID, appleTrackID stri
 	}
 }
 
-func (s *Server) linkCachedVideo(ctx context.Context, cacheKey, videoID string, exact bool) {
+func (s *Server) linkCachedVideo(ctx context.Context, cacheKey, videoID string, trusted bool) {
 	s.addVideoID(ctx, cacheKey, videoID)
-	if !exact || !s.cfg.FeatureFlags.BiniLinkIngress {
+	if !trusted || !s.cfg.FeatureFlags.BiniLinkIngress {
 		return
 	}
 	if err := s.store.EnqueueBiniLinkForCacheKey(ctx, videoID, cacheKey); err != nil {

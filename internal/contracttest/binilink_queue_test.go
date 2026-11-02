@@ -83,7 +83,19 @@ func waitVideoMapped(t *testing.T, videoID string) {
 
 func requestLyrics(t *testing.T, base string, query url.Values, wantCache string) {
 	t.Helper()
-	resp, err := http.Get(base + "/getLyrics?" + query.Encode())
+	requestLyricsWithKey(t, base, query, wantCache, "test-api-key")
+}
+
+func requestLyricsWithKey(t *testing.T, base string, query url.Values, wantCache, apiKey string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, base+"/getLyrics?"+query.Encode(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +129,7 @@ func TestConformanceNewBiniLinkQueue(t *testing.T) {
 	}, seedLyricsData...)
 	env := stubEnv(stub.URL)
 	env["FF_BINILINK_INGRESS"] = "true"
+	env["API_KEY_REQUIRED"] = "true"
 	base := newServerBase(t, env, seed, seedNegativeData)
 	resetBiniLinkQueue(t)
 
@@ -155,6 +168,13 @@ func TestConformanceNewBiniLinkQueue(t *testing.T) {
 	t.Run("exact hit on metadata without an Apple ID queues nothing", func(t *testing.T) {
 		requestLyrics(t, base, lyricsQuery("No Apple", "Link Tester", "", "JGwWNGJdvx8"), "HIT")
 		waitVideoMapped(t, "JGwWNGJdvx8")
+	})
+
+	t.Run("exact hits without a valid API key queue nothing", func(t *testing.T) {
+		requestLyricsWithKey(t, base, lyricsQuery("Linked Song", "Link Tester", "200", "noKey000001"), "HIT", "")
+		waitVideoMapped(t, "noKey000001")
+		requestLyricsWithKey(t, base, lyricsQuery("Linked Song", "Link Tester", "200", "badKey00001"), "HIT", "wrong-key")
+		waitVideoMapped(t, "badKey00001")
 	})
 
 	t.Run("malformed videoIds queue nothing", func(t *testing.T) {
@@ -287,7 +307,9 @@ func TestConformanceNewBiniLinkQueueOffByDefault(t *testing.T) {
 	seed := append([]SeedLyrics{
 		{Song: "Flag Off", Artist: "Link Tester", Duration: "200", TTML: "<tt>OFF</tt>"},
 	}, seedLyricsData...)
-	base := newServerBase(t, stubEnv(stub.URL), seed, seedNegativeData)
+	env := stubEnv(stub.URL)
+	env["API_KEY_REQUIRED"] = "true"
+	base := newServerBase(t, env, seed, seedNegativeData)
 	resetBiniLinkQueue(t)
 
 	_, st := ensurePostgres(t)
