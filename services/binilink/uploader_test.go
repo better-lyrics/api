@@ -3,8 +3,11 @@ package binilink
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -408,7 +411,7 @@ func TestNormalizeBaseURL(t *testing.T) {
 			t.Errorf("normalizeBaseURL(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"", "link.binimum.org", "ftp://link.binimum.org", "https://", "://bad", "https://link.binimum.org?x=1", "https://link.binimum.org#frag"} {
+	for _, in := range []string{"", "link.binimum.org", "ftp://link.binimum.org", "https://", "://bad", "https://link.binimum.org?x=1", "https://link.binimum.org#frag", "https://link.binimum.org?", "https://link.binimum.org#", "https://user:pass@link.binimum.org"} {
 		if got, err := normalizeBaseURL(in); err == nil {
 			t.Errorf("normalizeBaseURL(%q) = %q, want error", in, got)
 		}
@@ -592,5 +595,47 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not met within 5s")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestNormalizeBaseURLErrorOmitsURL(t *testing.T) {
+	if _, err := normalizeBaseURL("https://user:secret@link.binimum.org"); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("error must not echo the URL, got %v", err)
+	}
+}
+
+func TestDrainChecksLockBeforeEachBatch(t *testing.T) {
+	resetBiniLink(t)
+	for i := 0; i < batchSize+5; i++ {
+		enqueue(t, fmt.Sprintf("batch%06d", i), "1")
+	}
+
+	lock, ok, err := testStore.TryBiniLinkWorkerLock(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("lock: ok=%v err=%v", ok, err)
+	}
+	defer lock.Release()
+
+	var srv *ingressServer
+	srv = newIngressServer(t, func(w http.ResponseWriter, _ string) {
+		if srv.calls.Load() == batchSize {
+			if _, err := testStore.Pool().Exec(context.Background(), `
+				SELECT pg_terminate_backend(pid) FROM pg_locks
+				WHERE locktype = 'advisory' AND classid::bigint = $1 AND objid::bigint = $2`,
+				workerLockClassID, workerLockObjID); err != nil {
+				t.Error(err)
+			}
+		}
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	u := newTestUploader(srv.URL, 0)
+	u.lock = lock
+	_, _, err = u.drain(context.Background())
+	if !errors.Is(err, errLockLost) {
+		t.Fatalf("drain err = %v, want errLockLost", err)
+	}
+	if n := srv.calls.Load(); n != batchSize {
+		t.Fatalf("http calls = %d, want %d: no batch may start without the lock", n, batchSize)
 	}
 }

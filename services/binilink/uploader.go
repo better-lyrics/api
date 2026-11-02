@@ -2,7 +2,7 @@ package binilink
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -45,10 +45,17 @@ type uploader struct {
 	key       string
 	userAgent string
 	interval  time.Duration
+	lock      *store.BiniLinkWorkerLock
 }
 
+var errLockLost = errors.New("worker lock lost")
+
 func Start(ctx context.Context, st *store.Store, s Settings) bool {
-	if !s.Enabled || s.Key == "" {
+	if !s.Enabled {
+		return false
+	}
+	if s.Key == "" {
+		log.Warnf("%s FF_BINILINK_INGRESS is on but BINILINK_INGRESS_KEY is empty; links queue but nothing sends them", logcolors.LogBini)
 		return false
 	}
 	baseURL, err := normalizeBaseURL(s.BaseURL)
@@ -70,11 +77,9 @@ func Start(ctx context.Context, st *store.Store, s Settings) bool {
 
 func normalizeBaseURL(raw string) (string, error) {
 	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("invalid BINILINK_BASE_URL: %w", err)
-	}
-	if (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", fmt.Errorf("BINILINK_BASE_URL must be an http(s) origin with an optional path, got %q", raw)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" ||
+		parsed.User != nil || strings.ContainsAny(raw, "?#") {
+		return "", errors.New("BINILINK_BASE_URL must be an http(s) origin with an optional path, without credentials, query or fragment")
 	}
 	return strings.TrimRight(raw, "/"), nil
 }
@@ -100,18 +105,20 @@ func (u *uploader) run(ctx context.Context) {
 
 // runLocked drains while the lock is held. It returns false when the lock was lost and must be retaken.
 func (u *uploader) runLocked(ctx context.Context, lock *store.BiniLinkWorkerLock) (finished bool) {
+	u.lock = lock
+	defer func() { u.lock = nil }()
 	for {
-		if !lock.Held(ctx) {
+		stop, pause, err := u.drain(ctx)
+		if stop {
+			log.Errorf("%s BiniLink ingress key rejected; uploader stopped", logcolors.LogBini)
+			return true
+		}
+		if errors.Is(err, errLockLost) {
 			if ctx.Err() != nil {
 				return true
 			}
 			log.Warnf("%s BiniLink worker lock lost; waiting to retake it", logcolors.LogBini)
 			return false
-		}
-		stop, pause, err := u.drain(ctx)
-		if stop {
-			log.Errorf("%s BiniLink ingress key rejected; uploader stopped", logcolors.LogBini)
-			return true
 		}
 		if err != nil {
 			log.Warnf("%s BiniLink drain failed: %v", logcolors.LogBini, err)
@@ -150,6 +157,9 @@ func (u *uploader) drain(ctx context.Context) (stop bool, pause time.Duration, e
 	for {
 		if ctx.Err() != nil {
 			return false, 0, nil
+		}
+		if u.lock != nil && !u.lock.Held(ctx) {
+			return false, 0, errLockLost
 		}
 		rows, err := u.store.ClaimBiniLinkPending(ctx, batchSize)
 		if err != nil {
