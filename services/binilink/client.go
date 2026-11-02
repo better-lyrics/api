@@ -3,6 +3,7 @@ package binilink
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -26,6 +27,7 @@ const (
 const (
 	ingressPath   = "/api/v1/ingress/youtube"
 	maxRetryAfter = 24 * time.Hour
+	maxReasonBody = 200
 )
 
 // newHTTPClient never follows redirects, because Go forwards custom headers such as
@@ -40,15 +42,15 @@ func newHTTPClient() *http.Client {
 }
 
 // Post submits one video to Apple track association. The returned duration is the
-// server's Retry-After, only meaningful with OutcomeRetry.
-func Post(client *http.Client, baseURL, key, userAgent, videoID, appleTrackID string) (Outcome, time.Duration) {
+// server's Retry-After and the string says why, both only meaningful with OutcomeRetry.
+func Post(client *http.Client, baseURL, key, userAgent, videoID, appleTrackID string) (Outcome, time.Duration, string) {
 	body, err := json.Marshal(map[string]string{"youtube_id": videoID, "apple_music_id": appleTrackID})
 	if err != nil {
-		return OutcomeInvalid, 0
+		return OutcomeInvalid, 0, ""
 	}
 	req, err := http.NewRequest(http.MethodPost, baseURL+ingressPath, bytes.NewReader(body))
 	if err != nil {
-		return OutcomeInvalid, 0
+		return OutcomeInvalid, 0, ""
 	}
 	req.Header.Set("X-Ingress-Key", key)
 	req.Header.Set("Content-Type", "application/json")
@@ -56,28 +58,30 @@ func Post(client *http.Client, baseURL, key, userAgent, videoID, appleTrackID st
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return OutcomeRetry, 0
+		return OutcomeRetry, 0, err.Error()
 	}
 	defer resp.Body.Close()
+	reply, _ := io.ReadAll(io.LimitReader(resp.Body, maxReasonBody))
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 
 	switch resp.StatusCode {
 	case http.StatusCreated:
-		return OutcomeLinked, 0
+		return OutcomeLinked, 0, ""
 	case http.StatusOK:
-		return OutcomeExists, 0
+		return OutcomeExists, 0, ""
 	case http.StatusConflict:
-		return OutcomeConflict, 0
+		return OutcomeConflict, 0, ""
 	case http.StatusNotFound:
-		return OutcomeUnresolved, 0
+		return OutcomeUnresolved, 0, ""
 	case http.StatusUnprocessableEntity:
-		return OutcomeNoISRC, 0
+		return OutcomeNoISRC, 0, ""
 	case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
-		return OutcomeInvalid, 0
+		return OutcomeInvalid, 0, ""
 	case http.StatusUnauthorized:
-		return OutcomeUnauthorized, 0
+		return OutcomeUnauthorized, 0, ""
 	}
-	return OutcomeRetry, retryAfter(resp.Header.Get("Retry-After"))
+	reason := fmt.Sprintf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(reply))
+	return OutcomeRetry, retryAfter(resp.Header.Get("Retry-After")), reason
 }
 
 func retryAfter(header string) time.Duration {

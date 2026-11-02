@@ -194,7 +194,7 @@ func FuzzPostBody(f *testing.F) {
 		last = nil
 		mu.Unlock()
 
-		outcome, _ := Post(client, srv.URL, key, "ua", videoID, appleTrackID)
+		outcome, _, _ := Post(client, srv.URL, key, "ua", videoID, appleTrackID)
 
 		mu.Lock()
 		got := last
