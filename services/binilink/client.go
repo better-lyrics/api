@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -80,11 +81,11 @@ func Post(client *http.Client, baseURL, key, userAgent, videoID, appleTrackID st
 }
 
 func retryAfter(header string) time.Duration {
-	secs, err := strconv.ParseInt(header, 10, 64)
-	if err != nil || secs <= 0 {
+	if header == "" || strings.Trim(header, "0123456789") != "" {
 		return 0
 	}
-	if secs >= int64(maxRetryAfter/time.Second) {
+	secs, err := strconv.ParseInt(header, 10, 64)
+	if err != nil || secs >= int64(maxRetryAfter/time.Second) {
 		return maxRetryAfter
 	}
 	return time.Duration(secs) * time.Second

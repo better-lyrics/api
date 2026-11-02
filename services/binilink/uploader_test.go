@@ -20,7 +20,7 @@ import (
 func newTestUploader(baseURL string, interval time.Duration) *uploader {
 	return &uploader{
 		store:     testStore,
-		client:    &http.Client{Timeout: 5 * time.Second},
+		client:    &http.Client{Timeout: time.Second},
 		baseURL:   baseURL,
 		key:       "test-key",
 		userAgent: "test-agent",
@@ -604,7 +604,7 @@ func TestNormalizeBaseURLErrorOmitsURL(t *testing.T) {
 	}
 }
 
-func TestDrainChecksLockBeforeEachBatch(t *testing.T) {
+func TestDrainChecksLockBeforeEachPost(t *testing.T) {
 	resetBiniLink(t)
 	for i := 0; i < batchSize+5; i++ {
 		enqueue(t, fmt.Sprintf("batch%06d", i), "1")
@@ -618,7 +618,7 @@ func TestDrainChecksLockBeforeEachBatch(t *testing.T) {
 
 	var srv *ingressServer
 	srv = newIngressServer(t, func(w http.ResponseWriter, _ string) {
-		if srv.calls.Load() == batchSize {
+		if srv.calls.Load() == 7 {
 			if _, err := testStore.Pool().Exec(context.Background(), `
 				SELECT pg_terminate_backend(pid) FROM pg_locks
 				WHERE locktype = 'advisory' AND classid::bigint = $1 AND objid::bigint = $2`,
@@ -635,7 +635,41 @@ func TestDrainChecksLockBeforeEachBatch(t *testing.T) {
 	if !errors.Is(err, errLockLost) {
 		t.Fatalf("drain err = %v, want errLockLost", err)
 	}
-	if n := srv.calls.Load(); n != batchSize {
-		t.Fatalf("http calls = %d, want %d: no batch may start without the lock", n, batchSize)
+	if n := srv.calls.Load(); n != 7 {
+		t.Fatalf("http calls = %d, want 7: no request may start without the lock", n)
+	}
+}
+
+func TestLockSettleOutlastsAnyRequest(t *testing.T) {
+	u := newTestUploader("http://127.0.0.1:1", 0)
+	if got := u.lockSettle(); got <= u.client.Timeout {
+		t.Fatalf("lockSettle = %v, must exceed the client timeout %v", got, u.client.Timeout)
+	}
+	if got := newHTTPClient().Timeout; (&uploader{client: newHTTPClient()}).lockSettle() <= got {
+		t.Fatal("production settle must exceed the production client timeout")
+	}
+}
+
+func TestRunWaitsBeforeFirstPostAfterTakingTheLock(t *testing.T) {
+	resetBiniLink(t)
+	enqueue(t, "settleWait_", "1")
+	srv := newIngressServer(t, statusResponder(http.StatusCreated))
+	u := newTestUploader(srv.URL, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		u.run(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitFor(t, func() bool { return srv.calls.Load() == 1 })
+	if elapsed := time.Since(start); elapsed < u.client.Timeout {
+		t.Fatalf("first post after %v, want at least the client timeout %v", elapsed, u.client.Timeout)
 	}
 }

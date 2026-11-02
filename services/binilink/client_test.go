@@ -75,6 +75,11 @@ func TestPostRetryAfter(t *testing.T) {
 		{"86400", 24 * time.Hour},
 		{"604800", 24 * time.Hour},
 		{"99999999999999999", 24 * time.Hour},
+		{"99999999999999999999999", 24 * time.Hour},
+		{"+5", 0},
+		{"5.0", 0},
+		{"0", 0},
+		{"007", 7 * time.Second},
 	}
 	for _, c := range cases {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

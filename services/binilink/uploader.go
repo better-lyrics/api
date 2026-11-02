@@ -107,6 +107,11 @@ func (u *uploader) run(ctx context.Context) {
 func (u *uploader) runLocked(ctx context.Context, lock *store.BiniLinkWorkerLock) (finished bool) {
 	u.lock = lock
 	defer func() { u.lock = nil }()
+	select {
+	case <-ctx.Done():
+		return true
+	case <-time.After(u.lockSettle()):
+	}
 	for {
 		stop, pause, err := u.drain(ctx)
 		if stop {
@@ -147,6 +152,12 @@ func (u *uploader) waitForLock(ctx context.Context) (*store.BiniLinkWorkerLock, 
 	}
 }
 
+// lockSettle is how long a new lock holder waits before its first post: longer than any request a
+// previous holder could still have in flight, since that holder checks the lock before every post.
+func (u *uploader) lockSettle() time.Duration {
+	return u.client.Timeout + u.client.Timeout/3
+}
+
 func runWait(pause time.Duration) time.Duration {
 	return max(pause, idleSleep)
 }
@@ -158,9 +169,6 @@ func (u *uploader) drain(ctx context.Context) (stop bool, pause time.Duration, e
 		if ctx.Err() != nil {
 			return false, 0, nil
 		}
-		if u.lock != nil && !u.lock.Held(ctx) {
-			return false, 0, errLockLost
-		}
 		rows, err := u.store.ClaimBiniLinkPending(ctx, batchSize)
 		if err != nil {
 			return false, 0, err
@@ -171,6 +179,9 @@ func (u *uploader) drain(ctx context.Context) (stop bool, pause time.Duration, e
 		for _, row := range rows {
 			if ctx.Err() != nil || (posted && !u.pause(ctx)) {
 				return false, 0, nil
+			}
+			if u.lock != nil && !u.lock.Held(ctx) {
+				return false, 0, errLockLost
 			}
 			outcome, retryAfter := Post(u.client, u.baseURL, u.key, u.userAgent, row.VideoID, row.AppleTrackID)
 			posted = true
