@@ -1,13 +1,18 @@
 package ttml
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"lyrics-api-go/config"
 	"lyrics-api-go/logcolors"
+	"lyrics-api-go/services/bini"
 	"lyrics-api-go/stats"
 	"lyrics-api-go/utils"
 
@@ -17,6 +22,17 @@ import (
 // lrcRedReadBase is the lrc.red read origin, from LRC_RED_BASE_URL (empty
 // disables the lrc.red lookup). A package var so tests can point it at a stub.
 var lrcRedReadBase = config.Get().Configuration.LRCRedBaseURL
+
+var lrcRedSkipAISynced = config.Get().FeatureFlags.LRCRedSkipAISynced
+
+// errLRCRedFlagCheck marks a failed byModel lookup, the only lrc.red error that leaves an Apple miss unconfirmed.
+var errLRCRedFlagCheck = errors.New("lrc.red byModel check failed")
+
+var errLRCRedModelSynced = errors.New("lrc.red file is model-synced")
+
+func lrcRedHasUnservedFile(err error) bool {
+	return errors.Is(err, errLRCRedModelSynced) || errors.Is(err, errLRCRedFlagCheck)
+}
 
 var lrcRedClient = &http.Client{Timeout: 10 * time.Second}
 
@@ -36,23 +52,74 @@ func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 		return "", false, nil
 	}
 
-	defer func() { stats.Get().RecordLRCRedFetch(ok, err) }()
+	defer func() {
+		if lrcRedHasUnservedFile(err) {
+			stats.Get().RecordLRCRedFetch(false, nil)
+			return
+		}
+		stats.Get().RecordLRCRedFetch(ok, err)
+	}()
 
 	lrcRedSem <- struct{}{}
 	defer func() { <-lrcRedSem }()
 
-	url := lrcRedReadBase + "/s/" + isrc + ".ttml"
+	if !lrcRedSkipAISynced {
+		return fetchLRCRedTTML(context.Background(), isrc)
+	}
 
-	req, err := http.NewRequest("GET", url, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancel()
+
+	type flagResult struct {
+		byModel bool
+		err     error
+	}
+	// A parallel byModel read takes a second slot only while the semaphore is under half full, so bursts of lookups keep most slots.
+	var flag chan flagResult
+	if len(lrcRedSem) <= cap(lrcRedSem)/2 {
+		select {
+		case lrcRedSem <- struct{}{}:
+			flag = make(chan flagResult, 1)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-lrcRedSem }()
+				byModel, err := lrcRedByModel(ctx, isrc)
+				flag <- flagResult{byModel, err}
+			}()
+		default:
+		}
+	}
+
+	ttml, ok, err = fetchLRCRedTTML(ctx, isrc)
+	if err != nil || !ok {
+		return ttml, ok, err
+	}
+
+	var f flagResult
+	if flag != nil {
+		f = <-flag
+	} else {
+		f.byModel, f.err = lrcRedByModel(ctx, isrc)
+	}
+	if f.err != nil {
+		stats.Get().RecordLRCRedFlagError()
+		return "", false, fmt.Errorf("%w: %w", errLRCRedFlagCheck, f.err)
+	}
+	if f.byModel {
+		stats.Get().RecordLRCRedSkippedByModel()
+		log.Infof("%s lrc.red file for ISRC %s is model-synced, skipping", logcolors.LogLyrics, isrc)
+		return "", false, errLRCRedModelSynced
+	}
+	return ttml, true, nil
+}
+
+func fetchLRCRedTTML(ctx context.Context, isrc string) (string, bool, error) {
+	resp, err := lrcRedGet(ctx, isrc+".ttml", "application/ttml+xml")
 	if err != nil {
 		return "", false, err
-	}
-	req.Header.Set("User-Agent", config.Get().Configuration.LRCRedUserAgent)
-	req.Header.Set("Accept", "application/ttml+xml")
-
-	resp, err := lrcRedClient.Do(req)
-	if err != nil {
-		return "", false, fmt.Errorf("lrc.red request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -72,4 +139,132 @@ func fetchLRCRedByISRC(isrc string) (ttml string, ok bool, err error) {
 	default:
 		return "", false, fmt.Errorf("lrc.red returned status %d", resp.StatusCode)
 	}
+}
+
+var (
+	errAISyncFlagOff = errors.New("FF_LRC_RED_SKIP_AI_SYNCED is off; the sweep only runs while model-synced lrc.red files are skipped")
+	errAISyncNoBase  = errors.New("LRC_RED_BASE_URL is not set; the sweep has nothing to check against")
+)
+
+func AISyncCheckReady() error {
+	if !lrcRedSkipAISynced {
+		return errAISyncFlagOff
+	}
+	if lrcRedReadBase == "" {
+		return errAISyncNoBase
+	}
+	return nil
+}
+
+func LRCRedByModel(ctx context.Context, isrc string) (bool, error) {
+	release, err := acquireLRCRedSlot(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	return lrcRedByModel(ctx, isrc)
+}
+
+func LRCRedTTML(ctx context.Context, isrc string) (string, bool, error) {
+	release, err := acquireLRCRedSlot(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer release()
+	return fetchLRCRedTTML(ctx, isrc)
+}
+
+var errLRCRedNoSongFile = errors.New("lrc.red song.json returned status 404")
+
+var lrcRedContribute = bini.Contribute
+
+// ContributeApple is the contribution path for Apple results when the lookup did not read lrc.red: it never posts over a model-synced or unverified lrc.red file.
+func ContributeApple(name, artist, isrc, rawAttributes, ttmlRaw string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if lrcRedBlocksContribution(ctx, isrc) {
+		stats.Get().RecordLRCRedContribute(false)
+		log.Infof("%s Not contributing ISRC %s: lrc.red file is model-synced or unverified", logcolors.LogLyrics, isrc)
+		return
+	}
+	lrcRedContribute(name, artist, isrc, SourceApple, rawAttributes, ttmlRaw)
+}
+
+// lrcRedBlocksContribution reports whether contributing an Apple result for isrc could replace a model-synced lrc.red file; an unverified file blocks it.
+func lrcRedBlocksContribution(ctx context.Context, isrc string) bool {
+	isrc = utils.NormalizeISRC(isrc)
+	if AISyncCheckReady() != nil || isrc == "" {
+		return false
+	}
+	byModel, err := LRCRedByModel(ctx, isrc)
+	if errors.Is(err, errLRCRedNoSongFile) {
+		return false
+	}
+	return err != nil || byModel
+}
+
+// acquireLRCRedSlot waits until the semaphore is under half full, so background reads never take the slots lookups need.
+func acquireLRCRedSlot(ctx context.Context) (release func(), err error) {
+	if lrcRedReadBase == "" {
+		return nil, errors.New("LRC_RED_BASE_URL is not set")
+	}
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if len(lrcRedSem) < cap(lrcRedSem)/2 {
+			select {
+			case lrcRedSem <- struct{}{}:
+				return func() { <-lrcRedSem }, nil
+			default:
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
+// lrcRedSongJSONMaxBytes bounds the decode; .song.json carries the full lyrics, so a runaway body must not exhaust memory.
+const lrcRedSongJSONMaxBytes = 4 << 20
+
+func lrcRedByModel(ctx context.Context, isrc string) (bool, error) {
+	resp, err := lrcRedGet(ctx, isrc+".song.json", "application/json")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, errLRCRedNoSongFile
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("lrc.red song.json returned status %d", resp.StatusCode)
+	}
+	body := io.LimitReader(resp.Body, lrcRedSongJSONMaxBytes)
+	var song *struct {
+		ByModel bool `json:"byModel"`
+	}
+	if err := json.NewDecoder(body).Decode(&song); err != nil {
+		return false, fmt.Errorf("decode lrc.red song.json: %w", err)
+	}
+	if song == nil {
+		return false, errors.New("lrc.red song.json is null")
+	}
+	_, _ = io.Copy(io.Discard, body)
+	return song.ByModel, nil
+}
+
+func lrcRedGet(ctx context.Context, file, accept string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", lrcRedReadBase+"/s/"+file, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", config.Get().Configuration.LRCRedUserAgent)
+	req.Header.Set("Accept", accept)
+	resp, err := lrcRedClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("lrc.red request failed: %w", err)
+	}
+	return resp, nil
 }

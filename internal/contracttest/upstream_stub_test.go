@@ -3,6 +3,7 @@
 package contracttest
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // stubJWT builds a token whose header base64url-encodes to the ES256 prefix the
@@ -65,15 +68,32 @@ func upstreamStub(t *testing.T) *httptest.Server {
 			case strings.Contains(term, "Cached Song"):
 				// ISRC that lrc.red DOES have -> resolved from lrc.red, Apple untouched.
 				fmt.Fprint(w, `{"results":{"songs":{"data":[{"id":"1000002","attributes":{"name":"Cached Song","artistName":"Cached Artist","albumName":"Cached Album","durationInMillis":210000,"isrc":"USLRCRED0001","releaseDate":"2019-01-01","hasTimeSyncedLyrics":true}}]}}}`)
+			case strings.Contains(term, "AI Synced"):
+				fmt.Fprint(w, `{"results":{"songs":{"data":[{"id":"1000003","attributes":{"name":"AI Synced","artistName":"AI Artist","albumName":"AI Album","durationInMillis":220000,"isrc":"USAISYNC0001","releaseDate":"2019-01-01","hasTimeSyncedLyrics":true}}]}}}`)
+			case strings.Contains(term, "Flaky Flag"):
+				fmt.Fprint(w, `{"results":{"songs":{"data":[{"id":"1000004","attributes":{"name":"Flaky Flag","artistName":"Flaky Artist","albumName":"Flaky Album","durationInMillis":230000,"isrc":"USFLAKY00001","releaseDate":"2019-01-01","hasTimeSyncedLyrics":false}}]}}}`)
 			default:
 				fmt.Fprint(w, `{"results":{"songs":{"data":[]}}}`)
 			}
 
 		case strings.HasPrefix(path, "/s/") && strings.HasSuffix(path, ".ttml"):
-			if path == "/s/USLRCRED0001.ttml" {
+			switch path {
+			case "/s/USLRCRED0001.ttml", "/s/USAISYNC0001.ttml", "/s/USFLAKY00001.ttml":
 				w.Header().Set("Content-Type", "application/ttml+xml")
 				fmt.Fprint(w, `<tt>LRCRED</tt>`)
-			} else {
+			default:
+				http.NotFound(w, r)
+			}
+
+		case strings.HasPrefix(path, "/s/") && strings.HasSuffix(path, ".song.json"):
+			switch path {
+			case "/s/USLRCRED0001.song.json":
+				fmt.Fprint(w, `{"name":"Cached Song"}`)
+			case "/s/USAISYNC0001.song.json":
+				fmt.Fprint(w, `{"name":"AI Synced","byModel":true}`)
+			case "/s/USFLAKY00001.song.json":
+				http.Error(w, "lrc.red exploded", http.StatusInternalServerError)
+			default:
 				http.NotFound(w, r)
 			}
 
@@ -140,6 +160,71 @@ func missScenarios() []Scenario {
 				"ttml":  "<tt>LRCRED</tt>",
 			}),
 		},
+		{
+			Name:       "getlyrics_miss_skips_model_synced_lrcred",
+			Path:       "/getLyrics?s=AI%20Synced&a=AI%20Artist",
+			WantStatus: http.StatusOK,
+			WantHeaders: map[string]string{
+				"Content-Type":   "application/json",
+				"X-Cache-Status": "MISS",
+			},
+			WantBody: jbody(map[string]interface{}{
+				"score": 0.875,
+				"ttml":  "<tt>FRESH</tt>",
+			}),
+		},
+	}
+}
+
+func TestConformanceNewUnconfirmedMissIsTransient(t *testing.T) {
+	stub := upstreamStub(t)
+	base := newServerBase(t, stubEnv(stub.URL), seedLyricsData, seedNegativeData)
+	RunSpec(t, base, []Scenario{
+		{
+			Name:        "getlyrics_unconfirmed_miss_returns_404",
+			Path:        "/getLyrics?s=Flaky%20Flag&a=Flaky%20Artist",
+			WantStatus:  http.StatusNotFound,
+			WantHeaders: map[string]string{"X-Cache-Status": "MISS"},
+			WantBody: jbody(map[string]interface{}{
+				"error": "no lyrics data found (hasTimeSyncedLyrics=false)",
+			}),
+		},
+		{
+			Name:          "provider_unconfirmed_miss_returns_404",
+			Path:          "/ttml/getLyrics?s=Flaky%20Flag&a=Flaky%20Artist&al=Flaky%20Album",
+			WantStatus:    http.StatusNotFound,
+			WantHeaders:   map[string]string{"X-Cache-Status": "MISS"},
+			WantBodyRegex: regexp.MustCompile(`no lyrics data found`),
+		},
+	})
+
+	dsn, _ := ensurePostgres(t)
+	conn, err := pgx.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	rows, err := conn.Query(context.Background(), `SELECT cache_key, expires_at FROM negative_cache WHERE base_key LIKE '%flaky flag%'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for rows.Next() {
+		var key string
+		var expires time.Time
+		if err := rows.Scan(&key, &expires); err != nil {
+			t.Fatal(err)
+		}
+		n++
+		if ttl := time.Until(expires); ttl > 6*time.Hour+time.Minute {
+			t.Errorf("%s cached as a miss for %v, want a transient TTL", key, ttl.Round(time.Hour))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("found %d negative entries for the unconfirmed miss, want 2", n)
 	}
 }
 

@@ -711,3 +711,25 @@ func TestRecordOutboundThrottle(t *testing.T) {
 		}
 	})
 }
+
+func TestRecordLRCRedAISyncCounters(t *testing.T) {
+	s := newStats()
+	s.RecordLRCRedSkippedByModel()
+	s.RecordLRCRedSkippedByModel()
+	s.RecordLRCRedFlagError()
+	if s.LRCRedSkippedByModel.Load() != 2 || s.LRCRedFlagErrors.Load() != 1 {
+		t.Fatalf("skipped/flag errors = %d/%d, want 2/1", s.LRCRedSkippedByModel.Load(), s.LRCRedFlagErrors.Load())
+	}
+
+	restored := newStats()
+	restored.Restore(s.Serialize())
+	if restored.LRCRedSkippedByModel.Load() != 2 || restored.LRCRedFlagErrors.Load() != 1 {
+		t.Fatalf("round-trip lost AI-sync counters: skipped=%d flag errors=%d",
+			restored.LRCRedSkippedByModel.Load(), restored.LRCRedFlagErrors.Load())
+	}
+
+	lrcred := s.Snapshot()["lrcred"].(map[string]interface{})
+	if lrcred["skipped_by_model"] != int64(2) || lrcred["flag_errors"] != int64(1) {
+		t.Fatalf("snapshot lrcred = %v, want skipped_by_model=2 flag_errors=1", lrcred)
+	}
+}

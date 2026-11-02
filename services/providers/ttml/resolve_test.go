@@ -189,3 +189,97 @@ func TestLRCRedConcurrencyBounded(t *testing.T) {
 		t.Errorf("max concurrent lrc.red requests = %d, want <= 8", maxSeen)
 	}
 }
+
+func TestResolveLyricsMissUnconfirmed(t *testing.T) {
+	lrcErr := func(string) (string, bool, error) {
+		return "", false, fmt.Errorf("%w: lrc.red song.json returned status 500", errLRCRedFlagCheck)
+	}
+	ttmlErr := func(string) (string, bool, error) { return "", false, errors.New("lrc.red returned status 500") }
+	lrcMiss := func(string) (string, bool, error) { return "", false, nil }
+	appleMiss := func() (string, error) { return "", errors.New("TTML content is empty") }
+	appleHit := func() (string, error) { return "APPLE", nil }
+
+	tests := []struct {
+		name       string
+		appleFirst bool
+		hts        *bool
+		lrc        func(string) (string, bool, error)
+		apple      func() (string, error)
+		wantErr    string
+		wantMarked bool
+	}{
+		{name: "lrc.red error then hasTimeSyncedLyrics=false", hts: htsPtr(false), lrc: lrcErr, apple: appleHit, wantErr: "no lyrics data found (hasTimeSyncedLyrics=false)", wantMarked: true},
+		{name: "lrc.red error then Apple miss", hts: htsPtr(true), lrc: lrcErr, apple: appleMiss, wantErr: "TTML content is empty", wantMarked: true},
+		{name: "appleFirst Apple miss then lrc.red error", appleFirst: true, hts: htsPtr(true), lrc: lrcErr, apple: appleMiss, wantErr: "TTML content is empty", wantMarked: true},
+		{name: "appleFirst hasTimeSyncedLyrics=false then lrc.red error", appleFirst: true, hts: htsPtr(false), lrc: lrcErr, apple: appleHit, wantErr: "no lyrics data found (hasTimeSyncedLyrics=false)", wantMarked: true},
+		{name: "lrc.red clean miss then Apple miss stays permanent", hts: htsPtr(true), lrc: lrcMiss, apple: appleMiss, wantErr: "TTML content is empty"},
+		{name: "regression: lrc.red .ttml error then Apple miss stays permanent as on master", hts: htsPtr(true), lrc: ttmlErr, apple: appleMiss, wantErr: "TTML content is empty"},
+		{name: "regression: appleFirst Apple miss then lrc.red .ttml error stays permanent", appleFirst: true, hts: htsPtr(false), lrc: ttmlErr, apple: appleHit, wantErr: "no lyrics data found (hasTimeSyncedLyrics=false)"},
+		{name: "appleFirst both clean misses stay permanent", appleFirst: true, hts: htsPtr(false), lrc: lrcMiss, apple: appleHit, wantErr: "no lyrics data found (hasTimeSyncedLyrics=false)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, source, err := resolveLyrics(trackWithISRC("USFRESH00001", tt.hts), tt.appleFirst, tt.lrc, tt.apple)
+			if err == nil || err.Error() != tt.wantErr {
+				t.Fatalf("err = %v, want %q (message must not change)", err, tt.wantErr)
+			}
+			if source != SourceApple {
+				t.Errorf("source = %q, want apple", source)
+			}
+			if got := MissUnconfirmed(err); got != tt.wantMarked {
+				t.Errorf("MissUnconfirmed = %v, want %v", got, tt.wantMarked)
+			}
+		})
+	}
+
+	t.Run("lrc.red error then Apple hit is not an error", func(t *testing.T) {
+		ttml, _, err := resolveLyrics(trackWithISRC("USFRESH00001", htsPtr(true)), false, lrcErr, appleHit)
+		if err != nil || ttml != "APPLE" {
+			t.Fatalf("got (%q, %v), want APPLE", ttml, err)
+		}
+	})
+
+	t.Run("nil and unrelated errors are not marked", func(t *testing.T) {
+		if MissUnconfirmed(nil) || MissUnconfirmed(errors.New("no lyrics data found")) {
+			t.Fatal("only resolveLyrics marks a miss unconfirmed")
+		}
+	})
+}
+
+func TestResolveLyricsModelSyncedSkip(t *testing.T) {
+	skipped := func(string) (string, bool, error) { return "", false, errLRCRedModelSynced }
+
+	t.Run("falls through to Apple", func(t *testing.T) {
+		ttml, source, err := resolveLyrics(trackWithISRC("QZES72218029", htsPtr(true)), false, skipped, func() (string, error) { return "APPLE", nil })
+		if err != nil || ttml != "APPLE" || source != SourceApple {
+			t.Fatalf("got (%q, %q, %v), want (APPLE, apple, nil)", ttml, source, err)
+		}
+	})
+
+	t.Run("an Apple miss after it is a confirmed miss", func(t *testing.T) {
+		_, _, err := resolveLyrics(trackWithISRC("QZES72218029", htsPtr(false)), false, skipped, func() (string, error) { return "APPLE", nil })
+		if err == nil || MissUnconfirmed(err) {
+			t.Fatalf("err = %v, want a permanent miss", err)
+		}
+	})
+}
+
+func TestLRCRedHasUnservedFile(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"model-synced skip", errLRCRedModelSynced, true},
+		{"failed byModel check after a ttml hit", fmt.Errorf("%w: status 500", errLRCRedFlagCheck), true},
+		{"clean miss", nil, false},
+		{"ttml error as on master", errors.New("lrc.red returned status 500"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lrcRedHasUnservedFile(tt.err); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -49,6 +49,8 @@ type PersistedStats struct {
 	LRCRedFetchErrors       int64 `json:"lrcred_fetch_errors"`
 	LRCRedContributeSent    int64 `json:"lrcred_contribute_sent"`
 	LRCRedContributeSkipped int64 `json:"lrcred_contribute_skipped"`
+	LRCRedSkippedByModel    int64 `json:"lrcred_skipped_by_model"`
+	LRCRedFlagErrors        int64 `json:"lrcred_flag_errors"`
 	RateLimitNormal         int64 `json:"rate_limit_normal"`
 	RateLimitCached         int64 `json:"rate_limit_cached"`
 	RateLimitExceeded       int64 `json:"rate_limit_exceeded"`

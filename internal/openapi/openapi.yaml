@@ -540,6 +540,108 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /cache/lrcred-sweep:
+    post:
+      tags: [Cache]
+      operationId: lrcRedSweep
+      summary: Delete cached lyrics that lrc.red synced with a model
+      description: >-
+        Checks the `.song.json` of each cached row sourced from lrc.red and deletes the
+        rows marked `byModel`, so the next request resolves them from Apple. Each call
+        handles up to `limit` rows after the `after` cursor, checking at most 2 rows per second
+        (up to 4 lrc.red reads, shared with the check that runs on cache hits).
+        A row is deleted only when its cached copy is byte-identical to lrc.red's current
+        model-synced file. Call again with `next_after` until `done` is true. A failed check
+        or delete stops the batch before that row, so the next call retries it; pass
+        `failed_key` as `after` to skip it. Refused while `FF_LRC_RED_SKIP_AI_SYNCED` is off
+        or `LRC_RED_BASE_URL` is empty, and in cache-only mode, where a deleted row could not be fetched again.
+      security:
+        - adminToken: []
+      parameters:
+        - name: after
+          in: query
+          description: Cache key cursor from the previous call's `next_after`. Empty starts from the beginning.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum lrc.red rows to handle in this call, counting checked rows and rows skipped for a missing ISRC.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: dry_run
+          in: query
+          description: Report model-synced ISRCs without deleting anything.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: One batch of the sweep.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [dry_run, checked, model_synced, kept_changed, failed_key, deleted, skipped_no_isrc, errors, next_after, done]
+                properties:
+                  dry_run:
+                    type: boolean
+                  checked:
+                    type: integer
+                    description: Rows whose lrc.red `.song.json` was requested.
+                  model_synced:
+                    type: array
+                    description: ISRCs whose cached copy was lrc.red's current model-synced file and was deleted, or with `dry_run` would be.
+                    items:
+                      type: string
+                  kept_changed:
+                    type: array
+                    description: ISRCs that lrc.red now flags as model-synced but whose cached copy differs from lrc.red's current file, so it predates the AI sync and is kept.
+                    items:
+                      type: string
+                  failed_key:
+                    type: string
+                    description: Cache key of the row the batch stopped at, or empty. Pass it as `after` to skip that row.
+                  deleted:
+                    type: integer
+                  skipped_no_isrc:
+                    type: array
+                    description: Cache keys of lrc.red rows with no valid ISRC in their song metadata, which cannot be checked. Rows cached through `/ttml/getLyrics` with an album or duration never have metadata.
+                    items:
+                      type: string
+                  errors:
+                    type: array
+                    description: "At most one entry, for why the batch stopped early: `ISRC (cache key): reason` for a failed row (also in `failed_key`), `scan after \"<cursor>\" failed: reason`, or `stopped before <cache key>: reason` when the time budget or client ran out."
+                    items:
+                      type: string
+                  next_after:
+                    type: string
+                    description: Cursor for the next call. Empty when `done` is true.
+                  done:
+                    type: boolean
+        '400':
+          description: Invalid limit or dry_run.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: FF_LRC_RED_SKIP_AI_SYNCED is off, LRC_RED_BASE_URL is empty, or FF_CACHE_ONLY_MODE is on.
+          headers: *cacheHeaders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
   /cache/clear:
     get:
       tags: [Cache]

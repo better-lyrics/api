@@ -61,6 +61,7 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 		if videoID != "" {
 			go s.addVideoID(context.Background(), foundKey, videoID)
 		}
+		s.checkLRCRedCopy(foundKey, cached)
 		respond(w, r).SetCacheStatus("HIT").JSON(map[string]interface{}{
 			"ttml": cached.TTML,
 		})
@@ -182,7 +183,11 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 				releaseDate = trackMeta.ReleaseDate
 				hasTimeSyncedLyricsKnown = trackMeta.HasTimeSyncedLyrics != nil
 			}
-			s.setNegativeCache(ctx, cacheKey, err.Error(), releaseDate, hasTimeSyncedLyricsKnown)
+			if ttml.MissUnconfirmed(err) {
+				s.setTransientNegativeCache(ctx, cacheKey, err.Error())
+			} else {
+				s.setNegativeCache(ctx, cacheKey, err.Error(), releaseDate, hasTimeSyncedLyricsKnown)
+			}
 		}
 
 		stats.Get().RecordCacheMiss()
@@ -223,7 +228,9 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setCachedLyrics(ctx, cacheKey, ttmlString, trackDurationMs, score, language, isRTL, source)
 
-	if trackMeta != nil {
+	if trackMeta != nil && trackMeta.LRCRedHasFile {
+		stats.Get().RecordLRCRedContribute(false)
+	} else if trackMeta != nil {
 		go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.Source, trackMeta.RawAttributes, ttmlString)
 	}
 
@@ -305,6 +312,7 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 			} else {
 				log.Infof("%s [%s] Found cached lyrics", logcolors.LogCacheLyrics, providerName)
 			}
+			s.checkLRCRedCopy(foundKey, cached)
 			respond(w, r).SetProvider(providerName).SetCacheStatus("HIT").JSON(map[string]interface{}{
 				"lyrics":   cached.TTML,
 				"provider": providerName,
@@ -413,7 +421,9 @@ func (s *Server) getLyricsWithProvider(providerName string) http.HandlerFunc {
 
 			isPermanentError := shouldNegativeCache(err)
 			if isPermanentError {
-				if s.isTransientEmptySearch(ctx, err, cacheKey, provider.CacheKeyPrefix(), songName, artistName) {
+				if ttml.MissUnconfirmed(err) {
+					s.setTransientNegativeCache(ctx, cacheKey, err.Error())
+				} else if s.isTransientEmptySearch(ctx, err, cacheKey, provider.CacheKeyPrefix(), songName, artistName) {
 					log.Warnf("%s [%s] Search returned no songs but lyrics are cached for this song, caching the miss briefly: %s", logcolors.LogCacheNegative, providerName, query)
 					s.setTransientNegativeCache(ctx, cacheKey, err.Error())
 				} else {

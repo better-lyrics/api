@@ -9,7 +9,6 @@ import (
 	"lyrics-api-go/config"
 	"lyrics-api-go/internal/store"
 	"lyrics-api-go/logcolors"
-	"lyrics-api-go/services/bini"
 	"lyrics-api-go/services/cdn"
 	ttml "lyrics-api-go/services/providers/ttml"
 	"lyrics-api-go/services/proxy"
@@ -157,7 +156,7 @@ func persistSyncUpgrade(ctx context.Context, st *store.Store, cand store.SyncUpg
 	cdn.Purge(store.KeyCacheTag(cand.CacheKey))
 	log.Infof("%s Sync-upgrade applied for %s: %s to %s", logcolors.LogSuccess, cand.CacheKey, cand.TimingType, act.NewTiming)
 
-	go bini.Contribute(cand.Name, cand.Artist, cand.ISRC, ttml.SourceApple, "", act.NewTTML)
+	go ttml.ContributeApple(cand.Name, cand.Artist, cand.ISRC, "", act.NewTTML)
 	videoIDs := func(song, artist string) []string {
 		v, _ := st.GetAllVideoIDsForSong(ctx, song, artist)
 		return v

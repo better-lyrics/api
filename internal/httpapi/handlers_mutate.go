@@ -12,7 +12,6 @@ import (
 
 	"lyrics-api-go/internal/store"
 	"lyrics-api-go/logcolors"
-	"lyrics-api-go/services/bini"
 	"lyrics-api-go/services/cdn"
 	"lyrics-api-go/services/providers"
 	"lyrics-api-go/services/proxy"
@@ -171,8 +170,8 @@ func (s *Server) revalidateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		s.setCachedLyrics(ctx, usedKey, ttmlString, trackDurationMs, score, language, isRTL, source)
 		cdn.Purge(store.SongCacheTag(songName, artistName))
-		if trackMeta != nil {
-			go bini.Contribute(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.Source, trackMeta.RawAttributes, ttmlString)
+		if trackMeta != nil && trackMeta.Source == ttml.SourceApple {
+			go ttml.ContributeApple(trackMeta.Name, trackMeta.ArtistName, trackMeta.ISRC, trackMeta.RawAttributes, ttmlString)
 		}
 		go func() {
 			bg := context.Background()
@@ -338,7 +337,7 @@ func (s *Server) overrideHandler(w http.ResponseWriter, r *http.Request) {
 			log.Warnf("%s Skipping lrc.red backfill for track %s: %v", logcolors.LogOverride, trackID, err)
 			return
 		}
-		bini.Contribute(meta.Name, meta.ArtistName, meta.ISRC, ttml.SourceApple, meta.RawAttributes, ttmlString)
+		ttml.ContributeApple(meta.Name, meta.ArtistName, meta.ISRC, meta.RawAttributes, ttmlString)
 	}()
 
 	var updatedKeys []string

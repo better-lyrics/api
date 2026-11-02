@@ -14,11 +14,19 @@ func SongCacheTag(song, artist string) string {
 // KeyCacheTag derives the per-album tag from a stored cache key, for writers that
 // only know the key.
 func KeyCacheTag(cacheKey string) string {
+	return cacheTag("k-", keyText(cacheKey))
+}
+
+func KeySongCacheTag(cacheKey string) string {
+	return cacheTag("s-", keyText(cacheKey))
+}
+
+func keyText(cacheKey string) string {
 	base := DeriveKey(cacheKey).BaseKey
 	if idx := strings.Index(base, ":"); idx >= 0 {
 		base = base[idx+1:]
 	}
-	return cacheTag("k-", base)
+	return base
 }
 
 // SongCacheTags is the Cloudflare Cache-Tag set for a lyrics response; purging either tag clears it.
