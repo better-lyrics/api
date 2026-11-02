@@ -20,6 +20,7 @@ var undocumentedRoutes = map[string]bool{
 	"/metadata":                         true,
 	"/metadata/stats":                   true,
 	"/metadata/sample":                  true,
+	"/binilink/backfill":                true,
 	"/health/mut":                       true,
 	"/stats":                            true,
 	"/circuit-breaker":                  true,

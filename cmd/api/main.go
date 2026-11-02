@@ -12,6 +12,7 @@ import (
 	"lyrics-api-go/internal/store"
 	"lyrics-api-go/internal/syncupgrade"
 	"lyrics-api-go/logcolors"
+	"lyrics-api-go/services/binilink"
 	"lyrics-api-go/services/cdn"
 	"lyrics-api-go/services/notifier"
 
@@ -95,6 +96,15 @@ func main() {
 	cdn.Start(ctx, cfg)
 	startNegativePurge(ctx, st)
 	go syncupgrade.StartSyncUpgradeDetector(st, cfg)
+	if binilink.Start(ctx, st, binilink.Settings{
+		Enabled:   cfg.FeatureFlags.BiniLinkIngress,
+		Key:       cfg.Configuration.BiniLinkIngressKey,
+		BaseURL:   cfg.Configuration.BiniLinkBaseURL,
+		UserAgent: cfg.Configuration.LRCRedUserAgent,
+		Interval:  time.Duration(cfg.Configuration.BiniLinkIngressIntervalMs) * time.Millisecond,
+	}) {
+		log.Infof("%s BiniLink ingress uploader started", logcolors.LogBini)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {

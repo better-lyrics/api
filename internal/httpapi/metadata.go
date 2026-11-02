@@ -30,6 +30,25 @@ func (s *Server) addVideoID(ctx context.Context, cacheKey, videoID string) {
 	}
 }
 
+func (s *Server) enqueueBiniLink(ctx context.Context, videoID, appleTrackID string) {
+	if !s.cfg.FeatureFlags.BiniLinkIngress {
+		return
+	}
+	if err := s.store.EnqueueBiniLink(ctx, videoID, appleTrackID); err != nil {
+		log.Errorf("%s Error enqueueing BiniLink pair: %v", logcolors.LogBini, err)
+	}
+}
+
+func (s *Server) linkCachedVideo(ctx context.Context, cacheKey, videoID string, trusted bool) {
+	if !trusted || !s.cfg.FeatureFlags.BiniLinkIngress {
+		s.addVideoID(ctx, cacheKey, videoID)
+		return
+	}
+	if err := s.store.AddVideoIDAndEnqueueBiniLink(ctx, cacheKey, videoID); err != nil {
+		log.Errorf("%s Error recording videoId and BiniLink pair: %v", logcolors.LogBini, err)
+	}
+}
+
 func (s *Server) getAllVideoIDsForSong(ctx context.Context, songName, artistName string) []string {
 	vids, err := s.store.GetAllVideoIDsForSong(ctx, songName, artistName)
 	if err != nil {

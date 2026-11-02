@@ -38,6 +38,11 @@ func buildLegacyCacheKey(songName, artistName, albumName, durationStr string) st
 	return fmt.Sprintf("ttml_lyrics:%s", query)
 }
 
+func isExactCacheKey(foundKey, songName, artistName, albumName, durationStr string) bool {
+	return foundKey == buildNormalizedCacheKey(songName, artistName, albumName, durationStr) ||
+		foundKey == buildLegacyCacheKey(songName, artistName, albumName, durationStr)
+}
+
 func buildProviderSongArtistKey(prefix, song, artist string) string {
 	return prefix + ":" + strings.ToLower(strings.TrimSpace(song)) + " " + strings.ToLower(strings.TrimSpace(artist))
 }

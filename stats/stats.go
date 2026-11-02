@@ -35,6 +35,14 @@ type Stats struct {
 	LRCRedSkippedByModel    atomic.Int64
 	LRCRedFlagErrors        atomic.Int64
 
+	// BiniLink YouTube ingress
+	BiniLinkSent       atomic.Int64
+	BiniLinkLinked     atomic.Int64
+	BiniLinkExists     atomic.Int64
+	BiniLinkConflict   atomic.Int64
+	BiniLinkUnresolved atomic.Int64
+	BiniLinkErrors     atomic.Int64
+
 	// Rate limiting
 	RateLimitNormal   atomic.Int64 // Requests served under normal rate limit
 	RateLimitCached   atomic.Int64 // Requests served under cached-only tier
@@ -283,6 +291,22 @@ func (s *Stats) RecordLRCRedFlagError() {
 	s.LRCRedFlagErrors.Add(1)
 }
 
+func (s *Stats) RecordBiniLink(outcome string) {
+	s.BiniLinkSent.Add(1)
+	switch outcome {
+	case "linked":
+		s.BiniLinkLinked.Add(1)
+	case "exists":
+		s.BiniLinkExists.Add(1)
+	case "conflict":
+		s.BiniLinkConflict.Add(1)
+	case "unresolved", "no_isrc":
+		s.BiniLinkUnresolved.Add(1)
+	default:
+		s.BiniLinkErrors.Add(1)
+	}
+}
+
 func (s *Stats) RecordLRCRedContribute(sent bool) {
 	if sent {
 		s.LRCRedContributeSent.Add(1)
@@ -471,6 +495,14 @@ func (s *Stats) Snapshot() map[string]interface{} {
 			"contribute_skipped": s.LRCRedContributeSkipped.Load(),
 			"skipped_by_model":   s.LRCRedSkippedByModel.Load(),
 			"flag_errors":        s.LRCRedFlagErrors.Load(),
+		},
+		"binilink": map[string]interface{}{
+			"sent":       s.BiniLinkSent.Load(),
+			"linked":     s.BiniLinkLinked.Load(),
+			"exists":     s.BiniLinkExists.Load(),
+			"conflict":   s.BiniLinkConflict.Load(),
+			"unresolved": s.BiniLinkUnresolved.Load(),
+			"errors":     s.BiniLinkErrors.Load(),
 		},
 		"rate_limiting": map[string]interface{}{
 			"normal_tier": s.RateLimitNormal.Load(),

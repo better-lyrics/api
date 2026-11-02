@@ -34,6 +34,7 @@ func (s *Server) setupRoutes(router *mux.Router) {
 	router.HandleFunc("/metadata", s.metadataLookupHandler).Methods("GET")
 	router.HandleFunc("/metadata/stats", s.metadataStatsHandler).Methods("GET")
 	router.HandleFunc("/metadata/sample", s.metadataSampleHandler).Methods("GET")
+	router.HandleFunc("/binilink/backfill", s.biniLinkBackfill).Methods("POST")
 
 	router.HandleFunc("/cache", s.getCacheDump)
 	router.HandleFunc("/cache/help", s.cacheHelp)

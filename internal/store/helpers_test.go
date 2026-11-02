@@ -8,7 +8,7 @@ import (
 func resetTables(t *testing.T) {
 	t.Helper()
 	_, err := testStore.pool.Exec(context.Background(),
-		`TRUNCATE lyrics, negative_cache, song_metadata, video_map, counters, storefront_cache, stats`)
+		`TRUNCATE lyrics, negative_cache, song_metadata, video_map, counters, storefront_cache, stats, binilink_links`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
