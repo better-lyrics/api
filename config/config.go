@@ -42,6 +42,9 @@ type Config struct {
 		LRCRedIngressKey                   string `envconfig:"LRC_RED_INGRESS_KEY" default:""`
 		LRCRedUserAgent                    string `envconfig:"LRC_RED_USER_AGENT" default:"better-lyrics-api (+https://betterlyrics.org)"`
 		LRCRedBaseURL                      string `envconfig:"LRC_RED_BASE_URL" default:""`
+		BiniLinkIngressKey                 string `envconfig:"BINILINK_INGRESS_KEY" default:""`
+		BiniLinkBaseURL                    string `envconfig:"BINILINK_BASE_URL" default:"https://link.binimum.org"`
+		BiniLinkIngressIntervalMs          int    `envconfig:"BINILINK_INGRESS_INTERVAL_MS" default:"200"`
 		TTMLMintURL                        string `envconfig:"TTML_MINT_URL" default:""`
 		ProxyRevalidateURL                 string `envconfig:"PROXY_REVALIDATE_URL" default:""`
 		ProxyAPIKey                        string `envconfig:"PROXY_API_KEY" default:""`
@@ -94,6 +97,7 @@ type Config struct {
 		CacheOnlyMode      bool `envconfig:"FF_CACHE_ONLY_MODE" default:"false"`
 		PrettyLogs         bool `envconfig:"FF_PRETTY_LOGS" default:"false"`
 		LRCRedSkipAISynced bool `envconfig:"FF_LRC_RED_SKIP_AI_SYNCED" default:"true"`
+		BiniLinkIngress    bool `envconfig:"FF_BINILINK_INGRESS" default:"false"`
 	}
 }
 
