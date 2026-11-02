@@ -193,7 +193,7 @@ func (u *uploader) drain(ctx context.Context) (stop bool, pause time.Duration, e
 			if u.lock != nil && !u.lock.Held(ctx) {
 				return false, 0, errLockLost
 			}
-			outcome, retryAfter := Post(u.client, u.baseURL, u.key, u.userAgent, row.VideoID, row.AppleTrackID)
+			outcome, retryAfter, reason := Post(u.client, u.baseURL, u.key, u.userAgent, row.VideoID, row.AppleTrackID)
 			posted = true
 			if outcome == OutcomeUnauthorized {
 				stats.Get().RecordBiniLink(string(outcome))
@@ -206,7 +206,7 @@ func (u *uploader) drain(ctx context.Context) (stop bool, pause time.Duration, e
 				return false, 0, err
 			}
 			if outcome == OutcomeRetry {
-				log.Warnf("%s BiniLink busy or unreachable; pausing for %v", logcolors.LogBini, runWait(retryAfter))
+				log.Warnf("%s BiniLink busy or unreachable for %s: %q; pausing for %v", logcolors.LogBini, row.VideoID, reason, runWait(retryAfter))
 				return false, retryAfter, nil
 			}
 		}

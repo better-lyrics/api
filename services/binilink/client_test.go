@@ -1,6 +1,7 @@
 package binilink
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -30,7 +31,7 @@ func TestPostClassifiesStatus(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(c.code)
 		}))
-		got, _ := Post(srv.Client(), srv.URL, "k", "ua", "qrO4YZeyl0I", "1440815557")
+		got, _, _ := Post(srv.Client(), srv.URL, "k", "ua", "qrO4YZeyl0I", "1440815557")
 		srv.Close()
 		if got != c.want {
 			t.Errorf("HTTP %d: got %v want %v", c.code, got, c.want)
@@ -88,7 +89,7 @@ func TestPostRetryAfter(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}))
-		got, after := Post(srv.Client(), srv.URL, "k", "ua", "qrO4YZeyl0I", "1")
+		got, after, _ := Post(srv.Client(), srv.URL, "k", "ua", "qrO4YZeyl0I", "1")
 		srv.Close()
 		if got != OutcomeRetry || after != c.want {
 			t.Errorf("Retry-After %q: got %v %v, want retry %v", c.header, got, after, c.want)
@@ -101,7 +102,7 @@ func TestPostNetworkErrorRetries(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 
-	got, _ := Post(http.DefaultClient, url, "k", "ua", "qrO4YZeyl0I", "1")
+	got, _, _ := Post(http.DefaultClient, url, "k", "ua", "qrO4YZeyl0I", "1")
 	if got != OutcomeRetry {
 		t.Fatalf("got %v", got)
 	}
@@ -116,7 +117,7 @@ func TestPostTimeoutRetries(t *testing.T) {
 	defer close(release)
 
 	client := &http.Client{Timeout: 50 * time.Millisecond}
-	got, _ := Post(client, srv.URL, "k", "ua", "qrO4YZeyl0I", "1")
+	got, _, _ := Post(client, srv.URL, "k", "ua", "qrO4YZeyl0I", "1")
 	if got != OutcomeRetry {
 		t.Fatalf("got %v", got)
 	}
@@ -134,7 +135,7 @@ func TestNewHTTPClientDoesNotFollowRedirects(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	got, _ := Post(newHTTPClient(), origin.URL, "secret", "ua", "qrO4YZeyl0I", "1")
+	got, _, _ := Post(newHTTPClient(), origin.URL, "secret", "ua", "qrO4YZeyl0I", "1")
 	if got != OutcomeRetry {
 		t.Fatalf("redirect must not count as success, got %v", got)
 	}
@@ -148,5 +149,42 @@ func TestNewHTTPClientDoesNotFollowRedirects(t *testing.T) {
 func TestNewHTTPClientHasTimeout(t *testing.T) {
 	if newHTTPClient().Timeout <= 0 {
 		t.Fatal("client must time out")
+	}
+}
+
+func TestPostRetryReasonCarriesStatusAndBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("error code: 1020"))
+	}))
+	defer srv.Close()
+
+	got, _, reason := Post(srv.Client(), srv.URL, "k", "ua", "qrO4YZeyl0I", "1")
+	if got != OutcomeRetry || reason != "HTTP 403: error code: 1020" {
+		t.Fatalf("got %v %q", got, reason)
+	}
+}
+
+func TestPostRetryReasonTruncatesBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 5000))
+	}))
+	defer srv.Close()
+
+	_, _, reason := Post(srv.Client(), srv.URL, "k", "ua", "qrO4YZeyl0I", "1")
+	if len(reason) != len("HTTP 503: ")+200 {
+		t.Fatalf("reason length %d", len(reason))
+	}
+}
+
+func TestPostRetryReasonOnNetworkError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+
+	_, _, reason := Post(http.DefaultClient, url, "k", "ua", "qrO4YZeyl0I", "1")
+	if reason == "" {
+		t.Fatal("network error must give a reason")
 	}
 }
