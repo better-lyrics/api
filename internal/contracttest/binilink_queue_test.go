@@ -4,9 +4,11 @@ package contracttest
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -182,4 +184,89 @@ func TestConformanceNewBiniLinkQueue(t *testing.T) {
 			t.Fatalf("queue = %+v, want exactly %+v", got, want)
 		}
 	})
+}
+
+func backfillPage(t *testing.T, base, after string, limit int) (seeded int, next string, done bool) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, base+"/binilink/backfill?"+url.Values{"after": {after}, "limit": {strconv.Itoa(limit)}}.Encode(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "test-admin-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("backfill status %d", resp.StatusCode)
+	}
+	var body struct {
+		Seeded    int    `json:"seeded"`
+		NextAfter string `json:"next_after"`
+		Done      bool   `json:"done"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.Seeded, body.NextAfter, body.Done
+}
+
+func TestConformanceNewBiniLinkBackfill(t *testing.T) {
+	base := newServerBase(t, generalProfileEnv(), seedLyricsData, seedNegativeData)
+	resetBiniLinkQueue(t)
+
+	_, st := ensurePostgres(t)
+	ctx := context.Background()
+	for _, m := range []store.SongMetadata{
+		{CacheKey: "ttml_lyrics:backfill one", AppleTrackID: "1600000001", ISRC: "USBACK000001", VideoIDs: []string{"bf000000001"}},
+		{CacheKey: "ttml_lyrics:backfill two", AppleTrackID: "1600000002", ISRC: "USBACK000002", VideoIDs: []string{"bf000000002"}},
+		{CacheKey: "ttml_lyrics:backfill split a", AppleTrackID: "1600000003", ISRC: "USBACK000003", VideoIDs: []string{"bf000000003"}},
+		{CacheKey: "ttml_lyrics:backfill split b", AppleTrackID: "1600000004", ISRC: "USBACK000004", VideoIDs: []string{"bf000000003"}},
+		{CacheKey: "ttml_lyrics:backfill no apple", ISRC: "USBACK000005", VideoIDs: []string{"bf000000005"}},
+	} {
+		if err := st.SetSongMetadata(ctx, &m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	total, cursor, pages := 0, "", 0
+	for {
+		seeded, next, done := backfillPage(t, base, cursor, 1)
+		total += seeded
+		pages++
+		if done != (next == "") {
+			t.Fatalf("done=%v but next_after=%q", done, next)
+		}
+		if done {
+			break
+		}
+		if next <= cursor {
+			t.Fatalf("cursor did not advance: %q after %q", next, cursor)
+		}
+		cursor = next
+		if pages > 1000 {
+			t.Fatal("backfill never finished")
+		}
+	}
+
+	got := map[string]string{}
+	for _, l := range queuedLinks(t) {
+		got[l.videoID] = l.appleTrackID
+	}
+	if got["bf000000001"] != "1600000001" || got["bf000000002"] != "1600000002" {
+		t.Fatalf("unambiguous videos missing: %+v", got)
+	}
+	for _, skipped := range []string{"bf000000003", "bf000000005"} {
+		if _, ok := got[skipped]; ok {
+			t.Fatalf("%s must be skipped", skipped)
+		}
+	}
+	if total != len(got) {
+		t.Fatalf("seeded %d but queue holds %d", total, len(got))
+	}
+
+	if seeded, _, done := backfillPage(t, base, "", 10000); seeded != 0 || !done {
+		t.Fatalf("second full pass seeded %d done=%v, want 0 true", seeded, done)
+	}
 }
