@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -133,20 +134,36 @@ func TestSeedBiniLinkBackfill(t *testing.T) {
 	put("k5", "500", "USAAA0000005", "sameisrc001")
 	put("k6", "501", "USAAA0000005", "sameisrc001")
 	put("k7", "700", "", "noisrc00001")
-	put("k8", "800", "USAAA0000008", "orphankey01")
-	if err := testStore.AddVideoID(ctx, "k-without-metadata", "orphankey01"); err != nil {
-		t.Fatal(err)
+	put("ttml_lyrics:quiet harbor mira vale 180s", "", "", "stubkey0001")
+	for _, m := range []SongMetadata{
+		{CacheKey: "ttml_lyrics:paper lanterns the fold 0s", AppleTrackID: "800", ISRC: "USAAA0000008", DurationMs: 200600, TrackName: "Paper Lanterns", ArtistName: "The Fold", VideoIDs: []string{"orphankey01"}},
+		{CacheKey: "ttml_lyrics:north wind arlo 150s", AppleTrackID: "1300", ISRC: "USAAA0000013", DurationMs: 150000, TrackName: "North Wind", ArtistName: "Arlo", VideoIDs: []string{"othersong01"}},
+		{CacheKey: "ttml_lyrics:quiet harbor mira vale harbor 0s", AppleTrackID: "1000", ISRC: "USAAA0000010", DurationMs: 180400, TrackName: "Quiet Harbor", ArtistName: "Mira Vale", VideoIDs: []string{"stubkey0001"}},
+	} {
+		if err := testStore.SetSongMetadata(ctx, &m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("k11", "1100", "", "halfisrc001")
+	put("k12", "1200", "USAAA0000012", "halfisrc001")
+	for key, vid := range map[string]string{
+		"ttml_lyrics:paper lanterns the fold 201s": "orphankey01",
+		"ttml_lyrics:south road arlo 150s":         "othersong01",
+	} {
+		if err := testStore.AddVideoID(ctx, key, vid); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	seeded, next, err := testStore.SeedBiniLinkBackfill(ctx, "", 1000)
+	seeded, next, err := testStore.SeedBiniLinkBackfill(ctx, "", 1000, 2000)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if next != "" {
 		t.Fatalf("want end of scan, got cursor %q", next)
 	}
-	if seeded != 2 {
-		t.Fatalf("want 2 seeded, got %d", seeded)
+	if seeded != 4 {
+		t.Fatalf("want 4 seeded, got %d", seeded)
 	}
 
 	rows, err := testStore.ClaimBiniLinkPending(ctx, 10)
@@ -163,10 +180,131 @@ func TestSeedBiniLinkBackfill(t *testing.T) {
 	if _, ok := got["sameisrc001"]; !ok {
 		t.Fatalf("same-ISRC video missing: %+v", got)
 	}
-	for _, skipped := range []string{"split000001", "noapple0001", "noisrc00001", "orphankey01"} {
+	if got["orphankey01"] != "800" || got["stubkey0001"] != "1000" {
+		t.Fatalf("keys without an Apple track must not block the video: %+v", got)
+	}
+	for _, skipped := range []string{"split000001", "noapple0001", "noisrc00001", "halfisrc001", "othersong01"} {
 		if _, ok := got[skipped]; ok {
 			t.Fatalf("%s must be skipped", skipped)
 		}
+	}
+}
+
+func TestBiniLinkBackfillTrack(t *testing.T) {
+	resolved := biniLinkKey{
+		CacheKey: "ttml_lyrics:glass meadow orla finch u 0s", AppleTrackID: "1878382599",
+		ISRC: "USAAA2600025", DurationMs: 294857,
+		TrackName: "Glass Meadow", ArtistName: "Orla Finch", AlbumName: "The Long Field",
+	}
+	cases := []struct {
+		name    string
+		ignored biniLinkKey
+		want    string
+	}{
+		{"alternate key of the same recording links", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow orla finch u 295s"}, "1878382599"},
+		{"album words from the Apple track link", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow orla finch y the long field 295s"}, "1878382599"},
+		{"legacy casing links", biniLinkKey{CacheKey: "ttml_lyrics:Glass Meadow Orla Finch 295s"}, "1878382599"},
+		{"a key without a duration blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow orla finch"}, ""},
+		{"the same key at another length blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow orla finch u 341s"}, ""},
+		{"a different song with the same opening blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow road orla finch 295s"}, ""},
+		{"a shorter title blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:glass orla finch 295s"}, ""},
+		{"the album title track blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:the long field orla finch 295s"}, ""},
+		{"the title words in another order block the video", biniLinkKey{CacheKey: "ttml_lyrics:meadow glass orla finch 295s"}, ""},
+		{"a cover by another artist blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow wren hale 295s"}, ""},
+		{"a re-recording blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow (re-recorded) orla finch 295s"}, ""},
+		{"a remix blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow (remix) orla finch 295s"}, ""},
+		{"another ISRC blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow orla finch 295s", ISRC: "USAAA2600099"}, ""},
+		{"a malformed track ID blocks the video", biniLinkKey{CacheKey: "ttml_lyrics:glass meadow orla finch 295s", AppleTrackID: "x12"}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := biniLinkBackfillTrack([]biniLinkKey{resolved, c.ignored}, 2000)
+			if got != c.want || ok != (c.want != "") {
+				t.Fatalf("got %q, %v; want %q", got, ok, c.want)
+			}
+		})
+	}
+}
+
+func TestBiniLinkBackfillTrackAlbumTitleTrack(t *testing.T) {
+	resolved := biniLinkKey{
+		CacheKey: "ttml_lyrics:blue wren hale 0s", AppleTrackID: "42", ISRC: "USAAA2600042",
+		DurationMs: 241000, TrackName: "Blue", ArtistName: "Wren Hale", AlbumName: "Blue Hour",
+	}
+	if got, ok := biniLinkBackfillTrack([]biniLinkKey{resolved, {CacheKey: "ttml_lyrics:blue hour wren hale 241s"}}, 2000); ok {
+		t.Fatalf("the album's title track must not stand in for %q, got %q", resolved.TrackName, got)
+	}
+	if _, ok := biniLinkBackfillTrack([]biniLinkKey{resolved, {CacheKey: "ttml_lyrics:blue wren hale blue hour 241s"}}, 2000); !ok {
+		t.Fatal("a key naming the track and its album must link")
+	}
+	for _, album := range []string{"Blue Hour (Deluxe)", "Blue Hour - Deluxe Edition", "Blue Hour: The Remixes", "Blue Hour, Vol. 1"} {
+		edition := resolved
+		edition.AlbumName = album
+		if _, ok := biniLinkBackfillTrack([]biniLinkKey{edition, {CacheKey: "ttml_lyrics:blue hour wren hale 241s"}}, 2000); ok {
+			t.Fatalf("album %q must not hide its title track", album)
+		}
+	}
+	single := resolved
+	single.AlbumName = "Blue - Single"
+	if _, ok := biniLinkBackfillTrack([]biniLinkKey{single, {CacheKey: "ttml_lyrics:blue wren hale 241s"}}, 2000); !ok {
+		t.Fatal("a self-titled single must link")
+	}
+}
+
+func TestBiniLinkBackfillTrackBracketedTitle(t *testing.T) {
+	variant := biniLinkKey{
+		CacheKey: "ttml_lyrics:glass meadow (orla's version) orla finch 0s", AppleTrackID: "77", ISRC: "USAAA2600077",
+		DurationMs: 295000, TrackName: "Glass Meadow (Orla's Version)", ArtistName: "Orla Finch",
+	}
+	plain := biniLinkKey{CacheKey: "ttml_lyrics:glass meadow orla finch 295s"}
+	if got, ok := biniLinkBackfillTrack([]biniLinkKey{variant, plain}, 2000); ok {
+		t.Fatalf("a plain key must not link to the variant, got %q", got)
+	}
+	for _, title := range []string{"Glass Meadow (Part 2)", "Glass Meadow (with The Harbor Orchestra)"} {
+		other := variant
+		other.TrackName = title
+		if got, ok := biniLinkBackfillTrack([]biniLinkKey{other, plain}, 2000); ok {
+			t.Fatalf("a plain key must not link to %q, got %q", title, got)
+		}
+	}
+	featured := variant
+	featured.CacheKey = "ttml_lyrics:glass meadow (feat. wren hale) orla finch 0s"
+	featured.TrackName = "Glass Meadow (feat. Wren Hale)"
+	if _, ok := biniLinkBackfillTrack([]biniLinkKey{featured, plain}, 2000); !ok {
+		t.Fatal("a featured artist bracket must not be required")
+	}
+}
+
+func TestBiniLinkBackfillTrackTitleRun(t *testing.T) {
+	glass := biniLinkKey{
+		CacheKey: "ttml_lyrics:glass orla finch 0s", AppleTrackID: "51", ISRC: "USAAA2600051",
+		DurationMs: 241000, TrackName: "Glass", ArtistName: "Orla Finch", AlbumName: "Meadow Songs",
+	}
+	if got, ok := biniLinkBackfillTrack([]biniLinkKey{glass, {CacheKey: "ttml_lyrics:glass meadow orla finch 241s"}}, 2000); ok {
+		t.Fatalf("title plus an album word must not spell another song, got %q", got)
+	}
+	for _, c := range []struct{ album, key string }{
+		{"Meadow", "ttml_lyrics:glass meadow orla finch 241s"},
+		{"Midnight Sessions", "ttml_lyrics:midnight glass orla finch 241s"},
+		{"Glass, Part II", "ttml_lyrics:glass part ii orla finch 241s"},
+		{"Glass and Ash", "ttml_lyrics:glass and ash orla finch 241s"},
+		{"Glass with Strings", "ttml_lyrics:glass with strings orla finch 241s"},
+		{"Meadow Songs", "ttml_lyrics:glass 241s"},
+	} {
+		other := glass
+		other.AlbumName = c.album
+		if got, ok := biniLinkBackfillTrack([]biniLinkKey{other, {CacheKey: c.key}}, 2000); ok {
+			t.Fatalf("%q on album %q must not link, got %q", c.key, c.album, got)
+		}
+	}
+	if _, ok := biniLinkBackfillTrack([]biniLinkKey{glass, {CacheKey: "ttml_lyrics:glass orla finch meadow songs 241s"}}, 2000); !ok {
+		t.Fatal("title, artist and album in key order must link")
+	}
+}
+
+func TestKeyWordsKeepsCombiningMarks(t *testing.T) {
+	if got := keyWords("ttml_lyrics:दिल से 300s"); !slices.Equal(got, []string{"ttml", "lyrics", "दिल", "से", "300s"}) {
+		t.Fatalf("got %q", got)
 	}
 }
 
@@ -185,7 +323,7 @@ func TestSeedBiniLinkBackfillPagesAndIsIdempotent(t *testing.T) {
 	seedAll := func() int {
 		total, cursor := 0, ""
 		for {
-			seeded, next, err := testStore.SeedBiniLinkBackfill(ctx, cursor, 2)
+			seeded, next, err := testStore.SeedBiniLinkBackfill(ctx, cursor, 2, 2000)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -310,7 +448,7 @@ func TestSeedBiniLinkBackfillSkipsMalformedIDs(t *testing.T) {
 		}
 	}
 
-	seeded, _, err := testStore.SeedBiniLinkBackfill(ctx, "", 100)
+	seeded, _, err := testStore.SeedBiniLinkBackfill(ctx, "", 100, 2000)
 	if err != nil {
 		t.Fatal(err)
 	}

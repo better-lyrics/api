@@ -34,7 +34,7 @@ func (s *Server) biniLinkBackfill(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 
-	seeded, next, err := s.store.SeedBiniLinkBackfill(r.Context(), q.Get("after"), limit)
+	seeded, next, err := s.store.SeedBiniLinkBackfill(r.Context(), q.Get("after"), limit, s.cfg.Configuration.DurationMatchDeltaMs)
 	if err != nil {
 		log.Errorf("%s BiniLink backfill after %q failed: %v", logcolors.LogBini, q.Get("after"), err)
 		respond(w, r).Error(http.StatusInternalServerError, map[string]interface{}{
