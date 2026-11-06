@@ -3,7 +3,10 @@ package store
 import (
 	"context"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -96,45 +99,151 @@ func (s *Store) MarkBiniLinkUnresolvedRetry(ctx context.Context, videoID string,
 	return err
 }
 
-// SeedBiniLinkBackfill enqueues one page of historical videos, keeping only those whose
-// every cache key has metadata, a valid Apple track ID and the same non-empty ISRC.
-func (s *Store) SeedBiniLinkBackfill(ctx context.Context, after string, pageSize int) (seeded int, next string, err error) {
-	var last *string
-	var scanned, inserted int
-	err = s.pool.QueryRow(ctx, `
+// SeedBiniLinkBackfill enqueues one page of historical videos that biniLinkBackfillTrack resolves.
+func (s *Store) SeedBiniLinkBackfill(ctx context.Context, after string, pageSize, durationDeltaMs int) (seeded int, next string, err error) {
+	rows, err := s.pool.Query(ctx, `
 		WITH page AS (
 			SELECT DISTINCT video_id FROM video_map
 			WHERE video_id > $1
 			ORDER BY video_id
 			LIMIT $2
-		),
-		candidates AS (
-			SELECT p.video_id, min(m.apple_track_id) AS apple_track_id
-			FROM page p
-			JOIN video_map v ON v.video_id = p.video_id
-			LEFT JOIN song_metadata m ON m.cache_key = v.cache_key
-			WHERE p.video_id ~ $3
-			GROUP BY p.video_id
-			HAVING bool_and(m.cache_key IS NOT NULL)
-			   AND bool_and(m.apple_track_id ~ $4)
-			   AND bool_and(m.isrc <> '')
-			   AND count(DISTINCT m.isrc) = 1
-		),
-		ins AS (
-			INSERT INTO binilink_links (video_id, apple_track_id)
-			SELECT video_id, apple_track_id FROM candidates
-			ON CONFLICT DO NOTHING
-			RETURNING 1
 		)
-		SELECT (SELECT max(video_id) FROM page), (SELECT count(*) FROM page), (SELECT count(*) FROM ins)`,
-		after, pageSize, biniLinkVideoIDPattern, biniLinkAppleTrackIDPattern).Scan(&last, &scanned, &inserted)
+		SELECT p.video_id, coalesce(v.cache_key, ''), coalesce(m.apple_track_id, ''), coalesce(m.isrc, ''), coalesce(m.duration_ms, 0),
+			coalesce(m.track_name, ''), coalesce(m.artist_name, ''), coalesce(m.album_name, '')
+		FROM page p
+		LEFT JOIN video_map v ON v.video_id = p.video_id AND p.video_id ~ $3
+		LEFT JOIN song_metadata m ON m.cache_key = v.cache_key
+		ORDER BY p.video_id`,
+		after, pageSize, biniLinkVideoIDPattern)
 	if err != nil {
 		return 0, "", err
 	}
-	if last == nil || scanned < pageSize {
-		return inserted, "", nil
+	keysByVideo := map[string][]biniLinkKey{}
+	var order []string
+	for rows.Next() {
+		var videoID string
+		var k biniLinkKey
+		if err := rows.Scan(&videoID, &k.CacheKey, &k.AppleTrackID, &k.ISRC, &k.DurationMs, &k.TrackName, &k.ArtistName, &k.AlbumName); err != nil {
+			rows.Close()
+			return 0, "", err
+		}
+		if _, seen := keysByVideo[videoID]; !seen {
+			order = append(order, videoID)
+		}
+		keysByVideo[videoID] = append(keysByVideo[videoID], k)
 	}
-	return inserted, *last, nil
+	if err := rows.Err(); err != nil {
+		return 0, "", err
+	}
+
+	var videoIDs, trackIDs []string
+	for _, v := range order {
+		if track, ok := biniLinkBackfillTrack(keysByVideo[v], durationDeltaMs); ok {
+			videoIDs = append(videoIDs, v)
+			trackIDs = append(trackIDs, track)
+		}
+	}
+	if len(videoIDs) > 0 {
+		tag, err := s.pool.Exec(ctx, `
+			INSERT INTO binilink_links (video_id, apple_track_id)
+			SELECT * FROM unnest($1::text[], $2::text[])
+			ON CONFLICT DO NOTHING`,
+			videoIDs, trackIDs)
+		if err != nil {
+			return 0, "", err
+		}
+		seeded = int(tag.RowsAffected())
+	}
+
+	if len(order) < pageSize {
+		return seeded, "", nil
+	}
+	return seeded, order[len(order)-1], nil
+}
+
+type biniLinkKey struct {
+	CacheKey     string
+	AppleTrackID string
+	ISRC         string
+	DurationMs   int
+	TrackName    string
+	ArtistName   string
+	AlbumName    string
+}
+
+// biniLinkBackfillTrack skips a video when any key without a track ID may be another song or version.
+func biniLinkBackfillTrack(keys []biniLinkKey, durationDeltaMs int) (string, bool) {
+	var resolved, ignored []biniLinkKey
+	for _, k := range keys {
+		switch {
+		case biniLinkAppleTrackID.MatchString(k.AppleTrackID):
+			resolved = append(resolved, k)
+		case k.AppleTrackID != "":
+			return "", false
+		default:
+			ignored = append(ignored, k)
+		}
+	}
+	if len(resolved) == 0 {
+		return "", false
+	}
+	track := resolved[0].AppleTrackID
+	for _, r := range resolved {
+		if r.ISRC == "" || r.ISRC != resolved[0].ISRC {
+			return "", false
+		}
+		if r.AppleTrackID < track {
+			track = r.AppleTrackID
+		}
+	}
+	for _, i := range ignored {
+		if i.ISRC != "" && i.ISRC != resolved[0].ISRC {
+			return "", false
+		}
+		if !slices.ContainsFunc(resolved, func(r biniLinkKey) bool { return sameRecording(i, r, durationDeltaMs) }) {
+			return "", false
+		}
+	}
+	return track, true
+}
+
+// sameRecording rejects any word unknown for the track, so another artist, "remix" or "re-recorded" blocks.
+func sameRecording(ignored, resolved biniLinkKey, durationDeltaMs int) bool {
+	ik := DeriveKey(ignored.CacheKey)
+	if ik.DurationSec == nil || *ik.DurationSec == 0 || resolved.DurationMs == 0 {
+		return false
+	}
+	if diff := *ik.DurationSec*1000 - resolved.DurationMs; diff < -durationDeltaMs || diff > durationDeltaMs {
+		return false
+	}
+	_, query, _ := strings.Cut(ik.BaseKey, ":")
+	title := keyWords(biniLinkFeatBracket.ReplaceAllString(resolved.TrackName, " "))
+	if len(title) == 0 || !startsWithTitle(keyWords(query), title, keyWords(resolved.ArtistName)) {
+		return false
+	}
+	known := keyWords(DeriveKey(resolved.CacheKey).BaseKey + " " + resolved.TrackName + " " + resolved.ArtistName + " " + resolved.AlbumName)
+	return !slices.ContainsFunc(keyWords(ik.BaseKey), func(w string) bool {
+		return !slices.Contains(known, w) && !slices.Contains(biniLinkJoinerWords, w)
+	})
+}
+
+// startsWithTitle anchors the title where keys put it and needs the artist next, so "glass and ash" never stands in for "glass".
+func startsWithTitle(query, title, artist []string) bool {
+	if len(query) <= len(title) || !slices.Equal(query[:len(title)], title) {
+		return false
+	}
+	next := query[len(title)]
+	return slices.Contains(artist, next) || next == "feat" || next == "ft" || next == "featuring"
+}
+
+// Only featured-artist brackets are optional; "(Live)" or "(Taylor's Version)" names another recording.
+var biniLinkFeatBracket = regexp.MustCompile(`(?i)[(\[](feat|ft|featuring)\b[^)\]]*[)\]]`)
+
+// Words that join artist names in localized keys ("a y b", "a 和 b") and carry no recording identity.
+var biniLinkJoinerWords = []string{"and", "y", "e", "et", "und", "feat", "ft", "featuring", "con", "avec", "mit", "x", "和", "và", "ve", "cu", "și", "и", "oraz", "with", "single", "ep"}
+
+func keyWords(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.In(r, unicode.L, unicode.M, unicode.N) })
 }
 
 // Session advisory lock: keeps one uploader running while an old and a new deploy overlap.
